@@ -1,0 +1,111 @@
+name: test-partner
+
+# 我们这条线的回归基线闸（决策 0008 六）。
+#
+# 为什么必须单独有一个：上游 `tests.yml` 带路径过滤
+# （`deeptutor/**` `web/**` `tests/**` `requirements/**` …），`extensions/**` 不在其中。
+# 实证：本仓 PR#1 只动 `.github/` 与 `extensions/`，显示 `no checks reported`。
+# 不补这一个，0008 六的「不绿不合」对我们自己的代码就是一句空话。
+#
+# 硬约束：本工作流**不引用任何 secret**——CI 必须在零凭据条件下跑通。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "extensions/test-partner/**"
+      - ".github/workflows/test-partner.yml"
+  pull_request:
+    paths:
+      - "extensions/test-partner/**"
+      - ".github/workflows/test-partner.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: extensions/test-partner
+
+jobs:
+  pytest:
+    # 双平台：网关目前常驻用户的 Windows 本机，真二开后要跑进 Linux 容器。
+    # 两边都绿才说明没有平台耦合。
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    name: test-partner (${{ matrix.os }})
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: extensions/test-partner/requirements-dev.txt
+
+      - name: 装依赖
+        run: python -m pip install --upgrade pip && pip install -r requirements-dev.txt
+
+      - name: 零凭据自证——凭据文件绝不入库
+        shell: bash
+        working-directory: .
+        run: |
+          tracked=$(git ls-files 'extensions/test-partner/**' \
+            | grep -iE '(^|/)(secrets\.env|environments\.json|gateway\.json)$' \
+            | grep -v '[.]example$' || true)
+          if [ -n "$tracked" ]; then
+            echo "::error::疑似凭据文件入库：$tracked"; exit 1
+          fi
+          # HAR 原件含未脱敏凭证，只允许测试夹具那一份（内容是哨兵值，非真凭据）
+          hars=$(git ls-files 'extensions/test-partner/**' | grep -i '[.]har$' \
+            | grep -v '^extensions/test-partner/tests/fixtures/' || true)
+          if [ -n "$hars" ]; then
+            echo "::error::HAR 原件入库：$hars"; exit 1
+          fi
+          echo "OK：无凭据文件，HAR 仅测试夹具"
+
+      - name: 跑全量用例
+        run: pytest -q --junitxml=junit-${{ matrix.os }}.xml
+
+      - name: 执行层四条安全红线自证
+        if: always()
+        shell: bash
+        run: |
+          # 这四条是 execute_cases 的安全契约（server/execute.py 模块 docstring 是权威）。
+          # 光跑全量绿不够——要能指出每条红线各自有用例守着，否则日后被悄悄删掉也看不出来。
+          {
+            echo "### 执行层安全红线 (${{ matrix.os }})"
+            # 关键词对着实际用例名核过，不是照红线文案编的
+            for kw in "① 跨 host 拒发:cross_host or foreign_host or same_host" \
+                      "② 变量残留标 skipped:missing_variable or unresolved or leftover" \
+                      "③ 凭据零回显:scrub or credential or never_appear or not_leaked" \
+                      "④ 无断言不算过:without_assertions or without_request_block or invalid_method"; do
+              label="${kw%%:*}"; expr="${kw#*:}"
+              n=$(pytest --collect-only -q -k "$expr" 2>/dev/null | tail -1)
+              echo "- ${label}: ${n}"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 分层清点（单元 / 集成）
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### pytest (${{ matrix.os }})"
+            echo "- 全量：$(pytest --collect-only -q 2>/dev/null | tail -1)"
+            echo "- 端到端集成（HAR 到 Postman 全链路）：$(pytest --collect-only -q tests/test_integration_har_to_postman.py 2>/dev/null | tail -1)"
+            echo "- 其余为模块级单元用例"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 存 junit 报告
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-test-partner-${{ matrix.os }}
+          path: extensions/test-partner/junit-${{ matrix.os }}.xml
+          if-no-files-found: warn

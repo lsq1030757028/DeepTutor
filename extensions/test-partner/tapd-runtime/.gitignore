@@ -1,0 +1,6 @@
+# 真实凭据文件永不进库（.env.example 是模板，可以进库）
+.env
+# uv 下载的独立 CPython 3.13 venv，体积大且平台相关，不进库
+.venv/
+# setup_tapd.cmd 后台起服务时的输出，只用于排障，不进库
+tapd-start.log

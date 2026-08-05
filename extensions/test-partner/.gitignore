@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+# 交付产物与 HAR 原件都不进版本库（HAR 原件含未脱敏凭证）
+deliveries/
+inbox/*
+!inbox/.gitkeep
+deliveries/
+inbox/*.har
+# 网关的本机配置：凭据文件绝不进库，非敏感配置也是每台机器一份，不共享
+config/secrets.env
+config/gateway.json
+# 测试环境的变量值是真凭据，与 secrets.env 同等对待
+config/environments.json
+!config/secrets.env.example
