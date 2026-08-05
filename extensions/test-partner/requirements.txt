@@ -1,0 +1,11 @@
+# 测试伙伴 MCP 服务器依赖
+# 注意：mcp 2.0.0 起 FastMCP 更名为 MCPServer，mcp.server.fastmcp 模块已移除。
+# 若需回到 FastMCP 命名，改钉 mcp[cli]==1.29.0 并同步改 server/main.py。
+mcp[cli]==2.0.0
+# save_delivery 的 xlsx 产物（HAR 链路默认交付格式）
+openpyxl==3.1.5
+# execute_cases 的 HTTP 客户端不单独钉：mcp 2.0.0 已带 httpx2（pydantic 维护的下一代
+# httpx），server/execute.py 里 `httpx2 → httpx` 顺序做导入兼容，两种环境都能跑。
+# 配置页解析 multipart/form-data 请求体（starlette 的 request.form() 硬依赖它）。
+# 页面自己发的是 JSON，这条是给 curl 手工调试的表单分支兜底的，缺了那条路径直接 400。
+python-multipart==0.0.32
