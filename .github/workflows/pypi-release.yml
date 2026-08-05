@@ -28,6 +28,11 @@ concurrency:
 jobs:
   build-and-publish:
     name: Build and Publish PyPI Package
+    # [fork] 只在上游仓运行。本仓是 DeepTutor 的私有二开副本，
+    # 把上游的包发布到 PyPI 的 `deeptutor` 项目名下既不正确也不被授权；
+    # 而我们每建一个 Release 都会触发本工作流。加这道 repository 闸，
+    # 一行改动、merge 友好，比删文件更不容易在同步上游时出岔子。
+    if: github.repository == 'HKUDS/DeepTutor'
     runs-on: ubuntu-latest
     environment:
       name: pypi

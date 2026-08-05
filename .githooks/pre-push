@@ -1,0 +1,37 @@
+#!/bin/sh
+# 拦住直推 main —— 决策 0008 二「main 受保护，只经 PR 合入」的本地替代实现。
+#
+# 为什么是本地钩子：GitHub Free 的**私有仓**不提供服务端分支保护
+# （branch protection 与 rulesets 两个 API 均返回 403 "Upgrade to GitHub Pro or make
+# this repository public"）。仓库按 0008 一必须私有，故服务端闸不可用。
+#
+# 这道闸的定位要说清楚：它**挡得住手滑，挡不住有意绕过**（`--no-verify` 即可跳过），
+# 且只在装了钩子的机器上生效。它不等于分支保护，只是把最常见的事故挡在门外——
+# 本项目 2026-08-05 就真发生过一次直提 main。
+#
+# 启用（每台开发机一次）：
+#     git config core.hooksPath .githooks
+#
+# 若日后升级 GitHub Pro 或仓库转公开，改用服务端保护，本钩子即可退役。
+
+protected="main"
+
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+    case "$remote_ref" in
+        refs/heads/"$protected")
+            echo "" >&2
+            echo "  ✗ 拒绝直推 $protected（决策 0008 二：只经 PR 合入）" >&2
+            echo "" >&2
+            echo "  正确做法：" >&2
+            echo "    git checkout -b <类型>/<简述>" >&2
+            echo "    git push -u origin <分支名>" >&2
+            echo "    gh pr create" >&2
+            echo "" >&2
+            echo "  CI 双平台绿之后再 gh pr merge --squash --delete-branch。" >&2
+            echo "" >&2
+            exit 1
+            ;;
+    esac
+done
+
+exit 0

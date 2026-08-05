@@ -49,7 +49,11 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/hkuds/deeptutor
+          # [fork] 上游此处为 ghcr.io/hkuds/deeptutor。本仓是私有二开副本，
+          # GITHUB_TOKEN 只对本仓的 packages 有写权限，推 hkuds 命名空间必然 403。
+          # 改指本仓命名空间——决策 0008 七的回滚命令正是从这里取 digest。
+          # 同步上游时：保留本行，其余取上游。
+          images: ghcr.io/lsq1030757028/deeptutor
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=latest
