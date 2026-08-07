@@ -81,3 +81,32 @@ docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -u -i -n -- dmesg
 `ut1.5.8-base` → `44fa7a1`（上游 v1.5.8）。
 现役镜像 OCI 标签写的 `revision=5a197bd…` **在上游仓不可达**，不可用作锚点；
 锚点靠内容对账确定（容器内 `deeptutor/**/*.py` 排序哈希 `0a24bf09c346b951…` 唯一命中 v1.5.8）。
+
+---
+
+## P3 骨架端到端验证（2026-08-07）
+
+脚本：`extensions/test-partner/scripts/verify_p3_skeleton.sh`。**14/14 PASS。**
+同样用副本卷 `deeptutor-data-verify` + 独立端口 3784，第 0 步先自证现役实例未被触碰。
+
+覆盖面比 P1 多的三处，都是踩过或差点踩的坑：
+
+| 查什么 | 为什么要查 | 结果 |
+|---|---|---|
+| `extensions/test-partner/server/` 里有几个 `.py` | P1 挖出来的坑：镜像构建成功、健康检查也过，但 extensions 整个不在里面 | 15 个 |
+| `skills/` 下 `SKILL.md` 在不在 | `.dockerignore` 有 `*.md` 规则。Docker 的 `*` 不跨 `/`，理论上只排根目录——**但这条不靠推理，直接查** | 2 份，没被误伤 |
+| `tests/` `docs/` `tapd-runtime/` 有没有混进去 | COPY 范围过宽会让镜像带上不该带的东西 | 三个都不在 |
+
+其余：前端产物含 `(utility)/test-workbench/page.js`（说明 `next build` 真编了这个路由）、
+容器 healthy、`/api/v1/test-workbench/health` 返回 `extension_loaded:true`
+（**sys.path 引导在容器里也成立**，不只是本机）、`/test-workbench` 返回 200 且 HTML 里有工作台标识。
+
+### 一处必须说清的验证边界
+
+第 6 步只看到 `/app/data/test-workbench`——那是 **admin 兜底路径**，
+因为该实例 `AUTH_ENABLED=false`、没有当前用户。
+
+**所以「两个真实用户互相看不见」这件事，容器里没有被端到端验过。**
+它由单元测试覆盖（`tests/test_api_router.py::test_two_users_get_different_delivery_roots`，
+且已反向验证：故意让两用户共用 root 立刻转红）。
+开启鉴权后的多用户实测，留到有真实多账号环境时补。
