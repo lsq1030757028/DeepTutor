@@ -36,6 +36,10 @@ tw = pytest.importorskip(
     reason="只在 fork 仓（有 deeptutor/ 包）里跑；归档仓里跳过",
 )
 
+# 目录函数与当前用户的读取都下沉到了 paths 模块（为断开只读面与生成面的循环导入）。
+# 打桩必须跟着搬——打在 tw 上不会生效，隔离断言会变成恒真。
+twp = pytest.importorskip("deeptutor.api.routers.test_workbench_paths")
+
 
 def test_extension_is_loaded():
     """扩展装上了。装不上时 health 要说清是哪条路径没找到，而不是只报 503。"""
@@ -58,10 +62,10 @@ def test_two_users_get_different_delivery_roots(tmp_path, monkeypatch):
     """
     a_root, b_root = tmp_path / "users" / "alice", tmp_path / "users" / "bob"
 
-    monkeypatch.setattr(tw, "get_current_user_or_none", lambda: _fake_user("alice", a_root))
+    monkeypatch.setattr(twp, "get_current_user_or_none", lambda: _fake_user("alice", a_root))
     got_a = tw._deliveries_root()
 
-    monkeypatch.setattr(tw, "get_current_user_or_none", lambda: _fake_user("bob", b_root))
+    monkeypatch.setattr(twp, "get_current_user_or_none", lambda: _fake_user("bob", b_root))
     got_b = tw._deliveries_root()
 
     assert got_a != got_b
@@ -77,8 +81,8 @@ def test_no_user_falls_back_to_admin_root_not_to_a_shared_dir(tmp_path, monkeypa
     注意这**不是**兜底掩盖：router 在 main.py 里带 dependencies=_auth 注册，
     正常请求一定有 user。这条只保证"没有 user 时不会落到某个所有人共享的路径"。
     """
-    monkeypatch.setattr(tw, "get_current_user_or_none", lambda: None)
-    monkeypatch.setattr(tw, "ADMIN_WORKSPACE_ROOT", tmp_path / "data")
+    monkeypatch.setattr(twp, "get_current_user_or_none", lambda: None)
+    monkeypatch.setattr(twp, "ADMIN_WORKSPACE_ROOT", tmp_path / "data")
     root = tw._deliveries_root()
     assert Path(root).is_relative_to(tmp_path / "data")
 
@@ -88,7 +92,7 @@ def test_delivery_id_traversal_is_rejected(bad, tmp_path, monkeypatch):
     """批次 id 非法直接 400，不做「清洗后继续」——那是路径穿越的常见入口。"""
     from fastapi import HTTPException
 
-    monkeypatch.setattr(tw, "get_current_user_or_none", lambda: _fake_user("alice", tmp_path))
+    monkeypatch.setattr(twp, "get_current_user_or_none", lambda: _fake_user("alice", tmp_path))
     with pytest.raises(HTTPException) as exc:
         tw.get_delivery(bad)
     assert exc.value.status_code == 400
@@ -96,7 +100,7 @@ def test_delivery_id_traversal_is_rejected(bad, tmp_path, monkeypatch):
 
 def test_listing_an_empty_workspace_does_not_blow_up(tmp_path, monkeypatch):
     """新用户第一次进来，目录是空的，列表要正常返回空而不是报错。"""
-    monkeypatch.setattr(tw, "get_current_user_or_none", lambda: _fake_user("newbie", tmp_path))
+    monkeypatch.setattr(twp, "get_current_user_or_none", lambda: _fake_user("newbie", tmp_path))
     out = tw.list_deliveries()
     assert isinstance(out, dict)
     assert out.get("deliveries") == []
@@ -146,9 +150,9 @@ def test_capped_read_returns_full_content_when_within_limit():
 def test_drafts_root_is_per_user(tmp_path, monkeypatch):
     """草稿目录也按用户隔离——HAR 体检报告里带着对方系统的端点与实例值。"""
     a, b = tmp_path / "ua", tmp_path / "ub"
-    monkeypatch.setattr(tw, "get_current_user_or_none", lambda: _fake_user("a", a))
+    monkeypatch.setattr(twp, "get_current_user_or_none", lambda: _fake_user("a", a))
     ra = tw._drafts_root()
-    monkeypatch.setattr(tw, "get_current_user_or_none", lambda: _fake_user("b", b))
+    monkeypatch.setattr(twp, "get_current_user_or_none", lambda: _fake_user("b", b))
     rb = tw._drafts_root()
     assert ra != rb
     assert str(ra).startswith(str(a)) and str(rb).startswith(str(b))
@@ -156,7 +160,7 @@ def test_drafts_root_is_per_user(tmp_path, monkeypatch):
 
 def test_draft_id_rejects_path_traversal(tmp_path, monkeypatch):
     """草稿 id 走与批次同一套校验。这条是路径穿越的入口，必须拒而不是清洗。"""
-    monkeypatch.setattr(tw, "get_current_user_or_none", lambda: _fake_user("a", tmp_path))
+    monkeypatch.setattr(twp, "get_current_user_or_none", lambda: _fake_user("a", tmp_path))
     for bad in ["../../etc/passwd", "a/b", "..", "/abs"]:
         with pytest.raises(tw.HTTPException) as ei:
             tw.get_har_draft(bad)
@@ -169,7 +173,7 @@ def test_inspect_har_never_writes_the_original(tmp_path, monkeypatch):
     喂一份带真凭证的 HAR，跑完体检后遍历用户目录下所有文件，
     断言那串凭证一个字节都没出现过。原件落了盘，后续任何一次打包导出都会带出去。
     """
-    monkeypatch.setattr(tw, "get_current_user_or_none", lambda: _fake_user("a", tmp_path))
+    monkeypatch.setattr(twp, "get_current_user_or_none", lambda: _fake_user("a", tmp_path))
     secret = "SUPERSECRETTOKENVALUE0123456789"
     har = json.dumps({"log": {"entries": [{
         "request": {"method": "POST", "url": "https://api.example.com/api/login",

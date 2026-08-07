@@ -43,48 +43,21 @@ from deeptutor.multi_user.paths import ADMIN_WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
 
-# ── extensions 接线：把 test-partner 目录塞进 sys.path，见模块 docstring ──────
-_EXT_ROOT = Path(__file__).resolve().parents[3] / "extensions" / "test-partner"
-if _EXT_ROOT.is_dir() and str(_EXT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_EXT_ROOT))
-
-try:
-    from server.gateway import workbench as _wb  # type: ignore[import-not-found]
-except ImportError as exc:  # pragma: no cover - 只在扩展没打进镜像时触发
-    _wb = None
-    _IMPORT_ERROR = exc
-    logger.warning(
-        "测试工作台扩展未加载：%s（找过 %s）。"
-        "镜像里没有 extensions/ 时会走到这里——Dockerfile 的 COPY 漏了。",
-        exc, _EXT_ROOT,
-    )
-else:
-    _IMPORT_ERROR = None
+# 扩展接线与用户目录都下沉到 test_workbench_paths（共用，且断开与生成面的循环）。
+from deeptutor.api.routers.test_workbench_paths import (  # noqa: E402
+    EXT_ROOT as _EXT_ROOT,
+    IMPORT_ERROR as _IMPORT_ERROR,
+    _wb,
+    deliveries_root as _deliveries_root,
+    drafts_root as _drafts_root,
+    require_extension as _require_extension,
+)
 
 router = APIRouter()
 
 
-def _deliveries_root() -> str:
-    """当前用户的交付批次目录。
-
-    admin 的 scope 根是 `data/`，普通用户是 `data/users/<uid>/`——两者都由
-    DeepTutor 给出，这里只在其下再开一层 `test-workbench/deliveries`，
-    不自己拼用户 id，免得和平台的迁移逻辑各说各话。
-    """
-    user = get_current_user_or_none()
-    base = Path(user.scope.root) if user is not None else ADMIN_WORKSPACE_ROOT
-    root = base / "test-workbench" / "deliveries"
-    root.mkdir(parents=True, exist_ok=True)
-    return str(root)
 
 
-def _require_extension() -> Any:
-    if _wb is None:
-        raise HTTPException(
-            status_code=503,
-            detail=f"测试工作台扩展未加载：{_IMPORT_ERROR}",
-        )
-    return _wb
 
 
 @router.get("/health")
@@ -144,13 +117,6 @@ MAX_HAR_BYTES = 40 * 1024 * 1024
 """
 
 
-def _drafts_root() -> Path:
-    """当前用户的体检草稿目录。与交付批次同层，都在用户 scope 之下。"""
-    user = get_current_user_or_none()
-    base = Path(user.scope.root) if user is not None else ADMIN_WORKSPACE_ROOT
-    root = base / "test-workbench" / "drafts"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
 
 
 async def _read_upload_capped(file: UploadFile) -> bytes:
@@ -245,3 +211,18 @@ def get_har_draft(draft_id: str) -> dict[str, Any]:
     if not path.is_file():
         raise HTTPException(status_code=404, detail=f"草稿 {safe} 不存在。")
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+# ── 生成面 ────────────────────────────────────────────────────────────────
+# 会花钱的接口单独成文件（`test_workbench_generate.py`），挂在这里。
+# 分开的理由是审查面：想知道"哪些接口会调模型"，读那一个文件就够。
+#
+# 放在文件末尾而不是顶部 import：那个模块反过来要 import 本模块的
+# `_drafts_root` / `_require_extension`，顶部导入会成环。
+def _include_generate_routes() -> None:
+    from deeptutor.api.routers import test_workbench_generate
+
+    router.include_router(test_workbench_generate.router)
+
+
+_include_generate_routes()
