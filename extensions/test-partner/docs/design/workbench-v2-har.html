@@ -1,0 +1,347 @@
+<meta charset="utf-8">
+<title>测试工作台 v2 · HAR 导入与用例生成</title>
+<style>
+:root{--background:#fdfcf9;--foreground:#1c1816;--card:#fff;--primary:#b0501e;--primary-fg:#fff;
+  --secondary:#f5f2ea;--muted:#f1ede2;--muted-fg:#6d645a;--accent:#ece7d8;--destructive:#c53a2c;
+  --border:#e6decc;--input:#e6decc;color-scheme:light;}
+.dark{--background:#1a1918;--foreground:#e8e4de;--card:#242220;--primary:#d4734b;--primary-fg:#1a1918;
+  --secondary:#2a2725;--muted:#2a2725;--muted-fg:#9b9590;--accent:#302d2a;--destructive:#d44a3c;
+  --border:#3a3634;--input:#3a3634;color-scheme:dark;}
+.theme-snow{--background:#fff;--foreground:#0d0d0d;--card:#fff;--primary:#2563eb;--primary-fg:#fff;
+  --secondary:#f7f7f7;--muted:#f2f2f2;--muted-fg:#6e6e6e;--accent:#ececec;--destructive:#d92d20;
+  --border:#e5e5e5;--input:#e5e5e5;color-scheme:light;}
+.theme-glass{--background:#0e0d1a;--foreground:#fff;--card:rgba(255,255,255,.06);--primary:#a855f7;
+  --primary-fg:#fff;--secondary:rgba(255,255,255,.04);--muted:rgba(255,255,255,.06);
+  --muted-fg:#b5b5c7;--accent:rgba(255,255,255,.12);--destructive:#d44a3c;
+  --border:rgba(255,255,255,.12);--input:rgba(255,255,255,.06);color-scheme:dark;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--background);color:var(--foreground);font-size:14px;line-height:1.5;
+  font-family:Geist,ui-sans-serif,system-ui,"Segoe UI",sans-serif}
+.serif{font-family:Lora,Georgia,serif}
+.meta{border-bottom:1px solid var(--border);padding:12px 20px;display:flex;gap:10px;align-items:center;
+  flex-wrap:wrap;background:var(--card)}
+.meta h1{font-size:15px;margin:0 10px 0 0;font-weight:600}
+.meta small{color:var(--muted-fg);font-size:12px}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:9px;overflow:hidden}
+.seg button{border:0;background:transparent;color:var(--muted-fg);font:inherit;font-size:12px;
+  padding:5px 11px;cursor:pointer}
+.seg button[data-on]{background:var(--primary);color:var(--primary-fg)}
+.wrap{max-width:1180px;margin:0 auto;padding:22px 24px 60px}
+header.sec{margin-bottom:18px;display:flex;gap:16px;align-items:flex-end;justify-content:space-between;
+  border-bottom:1px solid var(--border);padding-bottom:16px;flex-wrap:wrap}
+.hl{display:flex;gap:14px;align-items:flex-start}
+.tile{margin-top:2px;width:36px;height:36px;flex:none;display:flex;align-items:center;justify-content:center;
+  border-radius:12px;border:1px solid var(--border);background:var(--card);box-shadow:0 1px 2px rgba(0,0,0,.05)}
+.h1{font-size:19px;font-weight:600;margin:0;letter-spacing:-.01em}
+.sub{margin:4px 0 0;font-size:13px;color:var(--muted-fg)}
+.ic{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.6}
+/* 阶段轨 */
+.rail{display:flex;gap:0;margin-bottom:18px;border:1px solid var(--border);border-radius:12px;
+  overflow:hidden;background:var(--card)}
+.rail div{flex:1;padding:9px 12px;font-size:12.5px;color:var(--muted-fg);border-right:1px solid var(--border);
+  display:flex;gap:7px;align-items:center;min-width:0}
+.rail div:last-child{border-right:0}
+.rail div.on{background:color-mix(in srgb,var(--primary) 9%,transparent);color:var(--foreground);font-weight:500}
+.rail div.done{color:var(--foreground)}
+.rail b{width:17px;height:17px;border-radius:50%;font-size:10.5px;display:flex;align-items:center;
+  justify-content:center;background:var(--muted);color:var(--muted-fg);font-weight:600;flex:none}
+.rail div.on b{background:var(--primary);color:var(--primary-fg)}
+.rail div.done b{background:rgba(16,185,129,.15);color:#059669}
+.card{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:16px 18px;margin-bottom:14px}
+.card h3{margin:0 0 4px;font-size:14px;font-weight:600}
+.card .d{font-size:12.5px;color:var(--muted-fg);margin:0 0 12px}
+.drop{border:1.5px dashed var(--border);border-radius:12px;padding:26px;text-align:center;color:var(--muted-fg);
+  font-size:13px;background:color-mix(in srgb,var(--muted) 35%,transparent)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.kpi{border:1px solid var(--border);border-radius:10px;padding:10px 12px}
+.kpi .n{font-size:19px;font-weight:600;font-variant-numeric:tabular-nums}
+.kpi .l{font-size:11.5px;color:var(--muted-fg);margin-top:1px}
+.tablewrap{overflow-x:auto;border:1px solid var(--border);border-radius:11px}
+table{border-collapse:collapse;width:100%;min-width:620px;font-size:13px}
+th{text-align:left;font-size:11.5px;font-weight:500;color:var(--muted-fg);padding:8px 11px;
+  border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:9px 11px;border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent);vertical-align:top}
+tr:last-child td{border-bottom:0}
+tr.noise{opacity:.5}
+.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.m{display:inline-block;font-size:10.5px;padding:1px 6px;border-radius:5px;font-weight:600;
+  background:var(--muted);color:var(--muted-fg)}
+.m.get{background:rgba(16,185,129,.12);color:#059669}
+.m.post{background:rgba(37,99,235,.12);color:#2563eb}
+.m.del{background:rgba(239,68,68,.12);color:#dc2626}
+.dark .m.get,.theme-glass .m.get{color:#34d399}.dark .m.post,.theme-glass .m.post{color:#60a5fa}
+.dark .m.del,.theme-glass .m.del{color:#f87171}
+.tag{font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--border);color:var(--muted-fg)}
+.ok{background:rgba(16,185,129,.1);color:#059669;border:0}.dark .ok,.theme-glass .ok{color:#34d399}
+.warn{background:rgba(245,158,11,.12);color:#d97706;border:0}.dark .warn,.theme-glass .warn{color:#fbbf24}
+.bad{background:rgba(239,68,68,.1);color:#dc2626;border:0}.dark .bad,.theme-glass .bad{color:#f87171}
+label.ck{display:flex;gap:8px;align-items:flex-start;font-size:13px;padding:6px 0;cursor:pointer}
+label.ck small{display:block;color:var(--muted-fg);font-size:11.5px;margin-top:1px}
+input[type=checkbox]{accent-color:var(--primary);width:14px;height:14px;margin-top:2px;flex:none}
+textarea,select,input[type=number]{font:inherit;font-size:13px;padding:7px 10px;border-radius:9px;
+  border:1px solid var(--input);background:var(--card);color:var(--foreground);width:100%}
+textarea{min-height:62px;resize:vertical}
+.two{display:grid;grid-template-columns:1fr 300px;gap:14px}
+@media(max-width:900px){.two{grid-template-columns:1fr}}
+details{border:1px solid var(--border);border-radius:10px;padding:9px 12px;margin-top:10px;font-size:12.5px}
+summary{cursor:pointer;color:var(--muted-fg)}
+pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:8px;padding:10px;
+  overflow-x:auto;font-size:11.5px;line-height:1.55;margin:9px 0 0}
+.bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding-top:12px;margin-top:12px;
+  border-top:1px solid var(--border)}
+.btn{font:inherit;font-size:13px;padding:7px 15px;border-radius:9px;cursor:pointer;border:1px solid var(--border);
+  background:var(--card);color:var(--foreground)}
+.btn.pri{background:var(--primary);color:var(--primary-fg);border-color:transparent;font-weight:500}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.grow{flex:1}
+.blk{font-size:12px;color:#b45309;display:flex;gap:6px;align-items:center}
+.dark .blk,.theme-glass .blk{color:#fbbf24}
+.note{border:1px dashed var(--border);border-radius:11px;padding:12px 14px;font-size:12.5px;
+  color:var(--muted-fg);background:color-mix(in srgb,var(--muted) 40%,transparent);margin-top:6px}
+.note b{color:var(--foreground)}
+.pii{border:1px solid rgba(245,158,11,.4);background:rgba(245,158,11,.08)}
+.hide{display:none!important}
+.grp td{background:color-mix(in srgb,var(--muted) 40%,transparent);font-size:12px}
+.ind{padding-left:26px}
+</style>
+
+<div class="meta">
+  <h1 class="serif">测试工作台 v2 · HAR 导入与用例生成</h1>
+  <div class="seg" id="th"><button data-t="light" data-on>Cream</button><button data-t="dark">Dark</button>
+    <button data-t="snow">Default</button><button data-t="glass">Glass</button></div>
+  <div class="seg" id="st">
+    <button data-s="1" data-on>①体检</button><button data-s="2">②配生成</button>
+    <button data-s="3">③清单确认</button><button data-s="4">④审核采纳</button></div>
+  <small>对标 MeterSphere / Apifox / Keploy 等六路后合成</small>
+</div>
+
+<div class="wrap">
+  <header class="sec">
+    <div class="hl">
+      <span class="tile"><svg class="ic" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 17v3h16v-3"/></svg></span>
+      <div><h1 class="h1 serif">从 HAR 生成接口用例</h1>
+        <p class="sub">导入抓包文件，挑要测的端点，让模型生成用例，你审核后入库。</p></div>
+    </div>
+    <button class="btn">取消</button>
+  </header>
+
+  <div class="rail">
+    <div id="r1" class="on"><b>1</b>导入与体检</div>
+    <div id="r2"><b>2</b>挑端点 · 配生成</div>
+    <div id="r3"><b>3</b>确认用例清单</div>
+    <div id="r4"><b>4</b>审核与采纳</div>
+  </div>
+
+  <!-- ① 体检 -->
+  <section id="s1">
+    <div class="card">
+      <h3>1 · 导入 HAR</h3>
+      <p class="d">浏览器 F12 → Network → 右键 → Save all as HAR。文件只在本机解析，<b>不入库</b>。</p>
+      <div class="drop">把 .har 拖到这里，或 <u>选择文件</u><br>
+        <small style="font-size:11.5px">已选：order-flow-20260807.har · 3.2 MB</small></div>
+    </div>
+    <div class="card">
+      <h3>体检结论</h3>
+      <p class="d">这一步<b>不调模型</b>，是本地解析，免费且立即出结果。</p>
+      <div class="grid">
+        <div class="kpi"><div class="n">412</div><div class="l">HAR 里的请求</div></div>
+        <div class="kpi"><div class="n">297</div><div class="l">噪声已滤掉</div></div>
+        <div class="kpi"><div class="n">23</div><div class="l">归并后的端点</div></div>
+        <div class="kpi"><div class="n">1</div><div class="l">识别到登录请求</div></div>
+      </div>
+      <div class="note pii" style="margin-top:12px">
+        <b>凭据与个人信息，说实话</b>：Authorization / Cookie / token 这类<b>凭证已替换成变量占位</b>，界面和产物里都看不到真值。
+        但<b>身份证、手机号、邮箱这类个人信息目前不在脱敏范围内</b>（缺陷 BB-424，已登记未修），
+        它们会出现在下面的样例和生成的用例里。<b>分享产物前请自行检查。</b>
+      </div>
+      <details><summary>看看滤掉了什么（297 条）</summary>
+        <pre>静态资源  .js .css .png .jpg .svg .woff2 .ico        188 条
+预检       OPTIONS                                      41 条
+埋点/监控  /api/track  /collect  sentry.io              38 条
+轮询重复  同 URL+同 method 连续调用，只留首末各一条      30 条</pre>
+        <div style="margin-top:8px;font-size:12px">规则可调，滤掉的可以单独捞回来。</div>
+      </details>
+    </div>
+  </section>
+
+  <!-- ② 配生成 -->
+  <section id="s2" class="hide">
+    <div class="two">
+      <div>
+        <div class="card">
+          <h3>2 · 挑要测的端点</h3>
+          <p class="d">按端点归并，不是按请求。<span class="mono">调用次数</span>能看出哪些是主链路。</p>
+          <div class="tablewrap"><table>
+            <thead><tr><th style="width:32px"><input type="checkbox" checked></th><th>端点</th>
+              <th style="width:74px">调用</th><th style="width:96px">状态码</th><th style="width:88px">鉴权</th></tr></thead>
+            <tbody>
+              <tr><td><input type="checkbox" checked></td>
+                <td><span class="m post">POST</span> <span class="mono">/api/order/create</span></td>
+                <td class="mono">14</td><td><span class="tag ok">200</span> <span class="tag bad">400</span></td>
+                <td><span class="tag">Bearer</span></td></tr>
+              <tr><td><input type="checkbox" checked></td>
+                <td><span class="m get">GET</span> <span class="mono">/api/order/{id}</span></td>
+                <td class="mono">31</td><td><span class="tag ok">200</span></td><td><span class="tag">Bearer</span></td></tr>
+              <tr><td><input type="checkbox" checked></td>
+                <td><span class="m post">POST</span> <span class="mono">/api/coupon/apply</span></td>
+                <td class="mono">6</td><td><span class="tag ok">200</span> <span class="tag warn">422</span></td>
+                <td><span class="tag">Bearer</span></td></tr>
+              <tr><td><input type="checkbox"></td>
+                <td><span class="m del">DELETE</span> <span class="mono">/api/cart/item/{id}</span></td>
+                <td class="mono">3</td><td><span class="tag ok">204</span></td><td><span class="tag">Bearer</span></td></tr>
+              <tr class="noise"><td><input type="checkbox"></td>
+                <td><span class="m get">GET</span> <span class="mono">/api/config/theme</span>
+                  <span class="tag" style="margin-left:6px">疑似非业务</span></td>
+                <td class="mono">52</td><td><span class="tag ok">200</span></td><td>—</td></tr>
+            </tbody></table></div>
+        </div>
+      </div>
+      <div>
+        <div class="card">
+          <h3>生成什么</h3>
+          <p class="d">勾选即规则，下面能看到会发给模型什么。</p>
+          <label class="ck"><input type="checkbox" checked>正常主流程<small>照 HAR 里成功那次的形状</small></label>
+          <label class="ck"><input type="checkbox" checked>参数边界<small>必填缺失、超长、类型不对</small></label>
+          <label class="ck"><input type="checkbox">异常与错误码<small>HAR 里出现过的 4xx 才生成</small></label>
+          <label class="ck"><input type="checkbox">幂等与重复提交<small>同一 POST 被调多次时有意义</small></label>
+          <label class="ck" style="opacity:.5"><input type="checkbox" disabled>鉴权与越权
+            <small>需要两个不同身份的样本，这份 HAR 里只有一个</small></label>
+          <div style="margin-top:10px;font-size:12.5px">每个端点生成
+            <select style="width:auto;display:inline-block"><option>2 条</option><option>3 条</option><option>5 条</option></select>
+            <span style="color:var(--muted-fg)"> · 共 3 个端点 → 约 6 条</span></div>
+          <div style="margin-top:10px"><textarea placeholder="补充要求（可选）：比如「下单必须校验库存扣减」"></textarea></div>
+          <details><summary>看看会发给模型什么</summary>
+            <pre>端点：POST /api/order/create
+字段（取自 HAR，值已占位）：
+  skuId    string   "SKU-1001"
+  qty      integer  2
+  couponId string   null
+  token    header   {{token}}
+
+规则：
+- 只针对上面已有的字段生成，<b>不额外编造字段</b>
+- 请求体原样输出，只改需要变的那个值
+- 断言重新生成，不要照抄请求体</pre>
+            <div style="margin-top:7px;font-size:11.5px">
+              骨架由端点结构渲染，模型只填值 —— 这样它编不出不存在的字段。<span class="tag">借鉴 MeterSphere</span></div>
+          </details>
+        </div>
+      </div>
+    </div>
+    <div class="bar">
+      <span class="blk"><svg class="ic" viewBox="0 0 24 24" style="width:13px;height:13px"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+        HAR 里没有字段说明，模型只能看到一次调用的实例值，生成质量比有接口文档时低——所以下一步先只出清单让你改</span>
+      <span class="grow"></span>
+      <button class="btn">上一步</button>
+      <button class="btn pri">生成用例清单（约 6 条）</button>
+    </div>
+  </section>
+
+  <!-- ③ 清单确认 -->
+  <section id="s3" class="hide">
+    <div class="card">
+      <h3>3 · 先确认清单，再生成细节</h3>
+      <p class="d">这一步只生成<b>标题和意图</b>。改标题比改整条用例便宜十倍，删掉不想要的再往下走。
+        <span class="tag">借鉴 Apifox 分步生成</span></p>
+      <div class="tablewrap"><table>
+        <thead><tr><th style="width:32px"><input type="checkbox" checked></th><th style="width:74px">编号</th>
+          <th>标题（可就地改）</th><th style="width:96px">意图</th><th style="width:150px">来源端点</th></tr></thead>
+        <tbody>
+          <tr><td><input type="checkbox" checked></td><td class="mono">TC-001</td>
+            <td>正常下单，库存充足</td><td><span class="tag ok">正常</span></td>
+            <td class="mono">POST /api/order/create</td></tr>
+          <tr><td><input type="checkbox" checked></td><td class="mono">TC-002</td>
+            <td>下单缺 skuId 应返回 400</td><td><span class="tag warn">边界</span></td>
+            <td class="mono">POST /api/order/create</td></tr>
+          <tr><td><input type="checkbox" checked></td><td class="mono">TC-003</td>
+            <td>qty 为 0 应被拒绝</td><td><span class="tag warn">边界</span></td>
+            <td class="mono">POST /api/order/create</td></tr>
+          <tr><td><input type="checkbox" checked></td><td class="mono">TC-004</td>
+            <td>查询已存在订单返回完整字段</td><td><span class="tag ok">正常</span></td>
+            <td class="mono">GET /api/order/{id}</td></tr>
+          <tr style="opacity:.55"><td><input type="checkbox"></td><td class="mono">TC-005</td>
+            <td>查询不存在的订单 <span class="tag warn">HAR 里没出现过 404，断言是猜的</span></td>
+            <td><span class="tag warn">边界</span></td><td class="mono">GET /api/order/{id}</td></tr>
+          <tr><td><input type="checkbox" checked></td><td class="mono">TC-006</td>
+            <td>使用有效优惠券应减免</td><td><span class="tag ok">正常</span></td>
+            <td class="mono">POST /api/coupon/apply</td></tr>
+        </tbody></table></div>
+      <div class="bar">
+        <span style="font-size:12.5px;color:var(--muted-fg)">已选 5 / 6 · 取消勾选的不会生成细节，不花钱</span>
+        <span class="grow"></span>
+        <button class="btn">重新出一版</button>
+        <button class="btn">上一步</button>
+        <button class="btn pri">生成这 5 条的请求与断言</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ④ 审核采纳 -->
+  <section id="s4" class="hide">
+    <div class="card">
+      <h3>4 · 审核后采纳</h3>
+      <p class="d"><b>勾选是入库的唯一闸门</b> —— 生成 ≠ 入库，不勾就不进用例库。
+        <span class="tag">借鉴 MeterSphere</span></p>
+      <div class="tablewrap"><table>
+        <thead><tr><th style="width:32px"><input type="checkbox"></th><th style="width:74px">编号</th>
+          <th>用例</th><th style="width:118px">校验</th></tr></thead>
+        <tbody>
+          <tr class="grp"><td colspan="4"><span class="m post">POST</span>
+            <span class="mono">/api/order/create</span> · HAR 里调过 14 次 · 生成 3 条
+            <span style="float:right"><a style="cursor:pointer;text-decoration:underline">只重生成这组</a></span></td></tr>
+          <tr><td class="ind"><input type="checkbox" checked></td><td class="mono">TC-001</td>
+            <td>正常下单，库存充足
+              <div style="font-size:11.5px;color:var(--muted-fg);margin-top:3px" class="mono">
+                POST /api/order/create · 断言 status==200, $.data.orderId 存在</div></td>
+            <td><span class="tag ok">可采纳</span></td></tr>
+          <tr><td class="ind"><input type="checkbox" checked></td><td class="mono">TC-002</td>
+            <td>下单缺 skuId 应返回 400
+              <div style="font-size:11.5px;color:var(--muted-fg);margin-top:3px" class="mono">
+                POST /api/order/create · 断言 status==400</div>
+              <div style="font-size:11.5px;margin-top:4px;color:#d97706">
+                只断言了 status —— 跑起来只能证明接口活着。<a style="text-decoration:underline;cursor:pointer">补一条响应体断言</a></div></td>
+            <td><span class="tag warn">1 处提醒</span></td></tr>
+          <tr><td class="ind"><input type="checkbox"></td><td class="mono">TC-003</td>
+            <td>qty 为 0 应被拒绝
+              <div style="font-size:11.5px;color:var(--muted-fg);margin-top:3px" class="mono">
+                POST /api/order/create · 断言 status==400</div>
+              <div style="font-size:11.5px;margin-top:4px;color:#dc2626">
+                E13 请求 URL 与来源端点对不上（模型写成了 <span class="mono">/api/orders/create</span>）——
+                <a style="text-decoration:underline;cursor:pointer">改成 /api/order/create</a> 或
+                <a style="text-decoration:underline;cursor:pointer">就地编辑</a></div></td>
+            <td><span class="tag bad">1 处待修</span></td></tr>
+          <tr class="grp"><td colspan="4"><span class="m get">GET</span>
+            <span class="mono">/api/order/{id}</span> · HAR 里调过 31 次 · 生成 1 条</td></tr>
+          <tr><td class="ind"><input type="checkbox" checked></td><td class="mono">TC-004</td>
+            <td>查询已存在订单返回完整字段
+              <div style="font-size:11.5px;color:var(--muted-fg);margin-top:3px" class="mono">
+                GET /api/order/{id} · 断言 status==200, $.data.items 长度&gt;0</div></td>
+            <td><span class="tag ok">可采纳</span></td></tr>
+        </tbody></table></div>
+      <div class="bar">
+        <span style="font-size:12.5px;color:var(--muted-fg)">已选 <b>3</b> 条 · 待修的 1 条不能采纳</span>
+        <span class="grow"></span>
+        <button class="btn">全部重生成</button>
+        <button class="btn pri">采纳 3 条，建批次</button>
+      </div>
+      <div class="note" style="margin-top:12px">
+        采纳后落成一个交付批次，直接接上 v1 那条线：<b>用例表就是结果表</b>，选环境、勾用例、执行、看逐条结果。
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+document.getElementById('th').onclick=e=>{const b=e.target.closest('button');if(!b)return;
+  [...e.currentTarget.children].forEach(x=>x.removeAttribute('data-on'));b.dataset.on='';
+  const r=document.documentElement;r.className='';const t=b.dataset.t;
+  if(t==='dark')r.className='dark';if(t==='snow')r.className='theme-snow';
+  if(t==='glass')r.className='dark theme-glass';};
+document.getElementById('st').onclick=e=>{const b=e.target.closest('button');if(!b)return;
+  [...e.currentTarget.children].forEach(x=>x.removeAttribute('data-on'));b.dataset.on='';
+  const n=+b.dataset.s;
+  for(let i=1;i<=4;i++){
+    document.getElementById('s'+i).classList.toggle('hide',i!==n);
+    const r=document.getElementById('r'+i);r.className=i===n?'on':(i<n?'done':'');
+  }};
+</script>

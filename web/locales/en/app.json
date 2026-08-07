@@ -2908,5 +2908,15 @@
   "Running {{app}}": "Running {{app}}",
   "Product names and logos are trademarks of their respective owners, shown for identification only.": "Product names and logos are trademarks of their respective owners, shown for identification only.",
   "Needs authorization": "Needs authorization",
-  "Reauthorize": "Reauthorize"
+  "Reauthorize": "Reauthorize",
+  "Test Workbench": "Test Workbench",
+  "Test Workbench tooltip": "Turn a HAR capture into API test cases, then run them",
+  "Generate API test cases from a HAR capture, then run them against an environment.": "Generate API test cases from a HAR capture, then run them against an environment.",
+  "New batch": "New batch",
+  "Test extension is not loaded": "Test extension is not loaded",
+  "No test batches yet": "No test batches yet",
+  "Import a HAR capture and describe what you want to test — the cases get generated for you to review.": "Import a HAR capture and describe what you want to test — the cases get generated for you to review.",
+  "No structured cases": "No structured cases",
+  "cases": "cases",
+  "Batches, environments and credentials are private to your account.": "Batches, environments and credentials are private to your account."
 }

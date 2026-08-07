@@ -167,6 +167,13 @@ COPY --from=frontend-builder /app/web/public/ ./web/public/
 COPY deeptutor/ ./deeptutor/
 COPY deeptutor_cli/ ./deeptutor_cli/
 COPY scripts/ ./scripts/
+# [fork] 二开扩展。上游没有这一行，镜像里就没有我们的代码——
+# P1 等价性验证时发现的：镜像构建成功、健康检查也过，但 extensions/ 整个不在里面。
+# 只拷运行时需要的两个子目录：server/ 是代码，skills/ 是模型要读的剧本。
+# tests/ docs/ tapd-runtime/ config/ 不进镜像（测试与文档不参与运行，
+# config/ 是每机一份且含凭据模板，运行时从数据卷取）。
+COPY extensions/test-partner/server/ ./extensions/test-partner/server/
+COPY extensions/test-partner/skills/ ./extensions/test-partner/skills/
 COPY pyproject.toml ./
 COPY requirements/ ./requirements/
 COPY requirements.txt ./

@@ -361,6 +361,7 @@ from deeptutor.api.routers import (
     space_mcp,
     subagents,
     system,
+    test_workbench,  # [fork] 二开扩展，见 extensions/UPSTREAM-TOUCHPOINTS.md
     unified_ws,
     voice,
 )
@@ -397,6 +398,14 @@ app.include_router(
     knowledge.router, prefix="/api/v1/knowledge", tags=["knowledge"], dependencies=_auth
 )
 app.include_router(imports.router, prefix="/api/v1/imports", tags=["imports"], dependencies=_auth)
+# [fork] 二开扩展：测试工作台。dependencies=_auth 是必须的——裸挂会让落盘
+# 静默写进 admin 工作区（决策 0009）。已登记在 extensions/UPSTREAM-TOUCHPOINTS.md。
+app.include_router(
+    test_workbench.router,
+    prefix="/api/v1/test-workbench",
+    tags=["test-workbench"],
+    dependencies=_auth,
+)
 app.include_router(
     dashboard.router, prefix="/api/v1/dashboard", tags=["dashboard"], dependencies=_auth
 )

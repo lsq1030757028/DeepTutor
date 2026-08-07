@@ -1,0 +1,354 @@
+<meta charset="utf-8">
+<title>测试工作台 · 设计稿</title>
+<style>
+  /* ── DeepTutor 真实 token（globals.css 实测值，四套主题）────────────── */
+  :root{
+    --background:#fdfcf9; --foreground:#1c1816; --card:#fff; --card-fg:#1c1816;
+    --primary:#b0501e; --primary-fg:#fff; --secondary:#f5f2ea;
+    --muted:#f1ede2; --muted-fg:#6d645a; --accent:#ece7d8;
+    --destructive:#c53a2c; --border:#e6decc; --input:#e6decc; --ring:#b0501e;
+    --overlay:rgba(28,24,22,.42); color-scheme:light;
+  }
+  .dark{
+    --background:#1a1918; --foreground:#e8e4de; --card:#242220; --card-fg:#e8e4de;
+    --primary:#d4734b; --primary-fg:#1a1918; --secondary:#2a2725;
+    --muted:#2a2725; --muted-fg:#9b9590; --accent:#302d2a;
+    --destructive:#d44a3c; --border:#3a3634; --input:#3a3634; --ring:#d4734b;
+    --overlay:rgba(0,0,0,.6); color-scheme:dark;
+  }
+  .theme-snow{
+    --background:#fff; --foreground:#0d0d0d; --card:#fff; --card-fg:#0d0d0d;
+    --primary:#2563eb; --primary-fg:#fff; --secondary:#f7f7f7;
+    --muted:#f2f2f2; --muted-fg:#6e6e6e; --accent:#ececec;
+    --destructive:#d92d20; --border:#e5e5e5; --input:#e5e5e5; --ring:#2563eb;
+    --overlay:rgba(0,0,0,.4); color-scheme:light;
+  }
+  .theme-glass{
+    --background:#0e0d1a; --foreground:#fff; --card:rgba(255,255,255,.06);
+    --card-fg:#fff; --primary:#a855f7; --primary-fg:#fff;
+    --secondary:rgba(255,255,255,.04); --muted:rgba(255,255,255,.06); --muted-fg:#b5b5c7;
+    --accent:rgba(255,255,255,.12); --border:rgba(255,255,255,.12);
+    --input:rgba(255,255,255,.06); --ring:#a855f7; color-scheme:dark;
+  }
+  .theme-glass body{background-image:radial-gradient(circle at 20% 10%,rgba(168,85,247,.16),transparent 45%),radial-gradient(circle at 85% 80%,rgba(59,130,246,.12),transparent 45%);}
+
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--background);color:var(--foreground);
+    font-family:Geist,ui-sans-serif,system-ui,"Segoe UI",sans-serif;font-size:14px;line-height:1.5;}
+  .serif{font-family:Lora,Georgia,serif;}
+  a{color:inherit;}
+
+  /* ── 顶部说明条（不是产品的一部分，只是这份稿子的控件）───────────── */
+  .meta{border-bottom:1px solid var(--border);padding:14px 20px;display:flex;
+    flex-wrap:wrap;gap:10px;align-items:center;background:var(--card);}
+  .meta h1{font-size:15px;margin:0 12px 0 0;font-weight:600;}
+  .meta small{color:var(--muted-fg);font-size:12px;}
+  .seg{display:inline-flex;border:1px solid var(--border);border-radius:9px;overflow:hidden;}
+  .seg button{border:0;background:transparent;color:var(--muted-fg);font:inherit;font-size:12px;
+    padding:5px 11px;cursor:pointer;}
+  .seg button[data-on]{background:var(--primary);color:var(--primary-fg);}
+
+  /* ── shell：模拟 AppShell + WorkspaceSidebar ─────────────────────── */
+  .shell{display:flex;height:760px;overflow:hidden;}
+  .side{width:220px;flex:none;border-right:1px solid var(--border);background:var(--card);
+    padding:14px 10px;overflow-y:auto;}
+  .side .brand{font-size:13px;font-weight:600;padding:6px 10px 14px;}
+  .nav{display:flex;flex-direction:column;gap:2px;}
+  .nav a{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:9px;
+    text-decoration:none;color:var(--muted-fg);font-size:13px;}
+  .nav a.on{background:color-mix(in srgb,var(--primary) 8%,transparent);
+    color:var(--foreground);font-weight:500;}
+  .nav .sep{height:1px;background:var(--border);margin:10px 6px;}
+  .ic{width:15px;height:15px;flex:none;stroke:currentColor;fill:none;stroke-width:1.6;}
+
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden;}
+  .pad{padding:22px 24px 0;}
+
+  /* ── 页头：抄 SpaceSectionHeader 的真实结构 ──────────────────────── */
+  header.sec{margin-bottom:18px;display:flex;gap:16px;align-items:flex-end;justify-content:space-between;
+    border-bottom:1px solid color-mix(in srgb,var(--border) 60%,transparent);padding-bottom:18px;flex-wrap:wrap;}
+  .hl{display:flex;gap:14px;align-items:flex-start;min-width:0;}
+  .tile{margin-top:2px;width:36px;height:36px;flex:none;display:flex;align-items:center;justify-content:center;
+    border-radius:12px;border:1px solid color-mix(in srgb,var(--border) 60%,transparent);
+    background:var(--card);box-shadow:0 1px 2px rgba(0,0,0,.05);}
+  .h1{font-size:19px;font-weight:600;line-height:1.25;letter-spacing:-.01em;margin:0;}
+  .sub{margin:4px 0 0;font-size:13px;color:var(--muted-fg);max-width:44ch;}
+  .chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 8px;border-radius:999px;
+    border:1px solid var(--border);color:var(--muted-fg);}
+
+  /* ── 主体两栏 ──────────────────────────────────────────────────── */
+  .body{flex:1;min-height:0;display:grid;grid-template-columns:300px minmax(0,1fr);gap:16px;
+    padding:0 24px 0;overflow:hidden;}
+  .col{min-width:0;display:flex;flex-direction:column;min-height:0;}
+  .scroll{overflow-y:auto;min-height:0;flex:1;padding-bottom:18px;}
+
+  .rail{display:flex;flex-direction:column;gap:7px;}
+  .batch{border:1px solid var(--border);border-radius:12px;padding:11px 12px;background:var(--card);cursor:pointer;}
+  .batch.on{border-color:color-mix(in srgb,var(--primary) 40%,transparent);
+    background:color-mix(in srgb,var(--primary) 8%,transparent);}
+  .batch .t{font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .batch .d{font-size:11.5px;color:var(--muted-fg);margin-top:3px;display:flex;gap:8px;align-items:center;}
+  .bar{display:flex;height:3px;border-radius:2px;overflow:hidden;margin-top:8px;background:var(--muted);}
+  .bar i{display:block;}
+  .lbl{font-size:11px;color:var(--muted-fg);text-transform:none;padding:2px 4px 6px;font-weight:500;}
+
+  /* ── 结果/用例合一的表 ────────────────────────────────────────── */
+  .tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding-bottom:10px;}
+  .filt{display:inline-flex;border:1px solid var(--border);border-radius:9px;overflow:hidden;}
+  .filt button{border:0;background:transparent;font:inherit;font-size:12px;padding:5px 10px;
+    color:var(--muted-fg);cursor:pointer;display:flex;gap:6px;align-items:center;}
+  .filt button[data-on]{background:var(--accent);color:var(--foreground);}
+  .cnt{font-size:10.5px;padding:0 5px;border-radius:999px;background:var(--muted);}
+  .grow{flex:1;}
+  .tablewrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--card);}
+  table{border-collapse:collapse;width:100%;min-width:660px;font-size:13px;}
+  th{text-align:left;font-weight:500;font-size:11.5px;color:var(--muted-fg);padding:9px 12px;
+    border-bottom:1px solid var(--border);white-space:nowrap;}
+  td{padding:10px 12px;border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent);vertical-align:top;}
+  tr:last-child td{border-bottom:0;}
+  .num{font-variant-numeric:tabular-nums;color:var(--muted-fg);font-size:12px;}
+  .st{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:2px 8px;border-radius:999px;white-space:nowrap;}
+  .pass{background:rgba(16,185,129,.1);color:#059669;} .dark .pass,.theme-glass .pass{color:#34d399;}
+  .fail{background:rgba(239,68,68,.1);color:#dc2626;} .dark .fail,.theme-glass .fail{color:#f87171;}
+  .skip{background:rgba(245,158,11,.1);color:#d97706;} .dark .skip,.theme-glass .skip{color:#fbbf24;}
+  .idle{background:rgba(113,113,122,.1);color:#52525b;} .dark .idle,.theme-glass .idle{color:#d4d4d8;}
+  .run{background:color-mix(in srgb,var(--primary) 12%,transparent);color:var(--primary);}
+  .why{font-size:11.5px;color:var(--muted-fg);margin-top:4px;}
+  .diff{margin-top:6px;border-left:2px solid rgba(239,68,68,.4);padding:5px 0 5px 9px;
+    font-size:11.5px;font-family:ui-monospace,Consolas,monospace;color:var(--muted-fg);}
+  .diff b{color:#dc2626;font-weight:500;} .dark .diff b,.theme-glass .diff b{color:#f87171;}
+  input[type=checkbox]{accent-color:var(--primary);width:14px;height:14px;}
+
+  /* ── 底部动作条 ────────────────────────────────────────────────── */
+  .foot{flex:none;border-top:1px solid var(--border);background:var(--card);
+    padding:12px 24px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;}
+  .sel{font-size:12.5px;color:var(--muted-fg);}
+  .field{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted-fg);}
+  select{font:inherit;font-size:12.5px;padding:5px 9px;border-radius:9px;border:1px solid var(--input);
+    background:var(--card);color:var(--foreground);}
+  .btn{font:inherit;font-size:13px;padding:7px 15px;border-radius:9px;cursor:pointer;
+    border:1px solid var(--border);background:var(--card);color:var(--foreground);}
+  .btn.pri{background:var(--primary);color:var(--primary-fg);border-color:transparent;font-weight:500;}
+  .btn:disabled{opacity:.45;cursor:not-allowed;}
+  .blocker{font-size:12px;color:#b45309;display:flex;align-items:center;gap:6px;}
+  .dark .blocker,.theme-glass .blocker{color:#fbbf24;}
+  .blocker a{text-decoration:underline;text-underline-offset:2px;cursor:pointer;}
+
+  .prog{flex:1;min-width:180px;height:5px;border-radius:3px;background:var(--muted);overflow:hidden;}
+  .prog i{display:block;height:100%;background:var(--primary);width:42%;}
+
+  .note{margin:0 24px 18px;border:1px dashed var(--border);border-radius:12px;padding:12px 14px;
+    font-size:12.5px;color:var(--muted-fg);background:color-mix(in srgb,var(--muted) 45%,transparent);}
+  .note b{color:var(--foreground);font-weight:600;}
+  .narrow .body{grid-template-columns:minmax(0,1fr);}
+  .narrow .rail{flex-direction:row;overflow-x:auto;padding-bottom:6px;}
+  .narrow .batch{min-width:200px;flex:none;}
+  .narrow .side{display:none;}
+  .hidden{display:none !important;}
+</style>
+
+<div class="meta">
+  <h1 class="serif">测试工作台 · 设计稿</h1>
+  <div class="seg" id="themes">
+    <button data-t="light" data-on>Cream</button><button data-t="dark">Dark</button>
+    <button data-t="snow">Default</button><button data-t="glass">Glass</button>
+  </div>
+  <div class="seg" id="states">
+    <button data-s="result" data-on>有结果</button><button data-s="idle">未跑过</button>
+    <button data-s="running">执行中</button>
+  </div>
+  <div class="seg" id="widths">
+    <button data-w="wide" data-on>桌面</button><button data-w="narrow">窄屏</button>
+  </div>
+  <small>四套主题用的是 globals.css 实测值 · 结构抄 SpaceSectionHeader 真实 className</small>
+</div>
+
+<div class="shell">
+  <aside class="side">
+    <div class="brand serif">DeepTutor</div>
+    <nav class="nav">
+      <a><svg class="ic" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V21H3z"/></svg>Home</a>
+      <a><svg class="ic" viewBox="0 0 24 24"><path d="M12 21s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 5.5-7 10-7 10z"/></svg>Partners</a>
+      <a><svg class="ic" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M9 8V5h6v3"/></svg>My Agents</a>
+      <a><svg class="ic" viewBox="0 0 24 24"><path d="M4 20h16M6 16 18 4l2 2L8 18z"/></svg>Co-Writer</a>
+      <a><svg class="ic" viewBox="0 0 24 24"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/></svg>Book</a>
+      <a><svg class="ic" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7"/><rect x="13" y="4" width="7" height="7"/><rect x="4" y="13" width="7" height="7"/><rect x="13" y="13" width="7" height="7"/></svg>Learning Space</a>
+      <div class="sep"></div>
+      <a><svg class="ic" viewBox="0 0 24 24"><path d="M12 3a5 5 0 0 1 5 5v2a5 5 0 0 1-10 0V8a5 5 0 0 1 5-5z"/></svg>Memory</a>
+      <a><svg class="ic" viewBox="0 0 24 24"><path d="M5 4h13v16H5z"/><path d="M9 8h6M9 12h6"/></svg>Knowledge Center</a>
+      <a class="on"><svg class="ic" viewBox="0 0 24 24"><path d="m9 12 2 2 4-4"/><rect x="4" y="4" width="16" height="16" rx="3"/></svg>测试工作台</a>
+      <a><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>Settings</a>
+    </nav>
+  </aside>
+
+  <div class="main">
+    <div class="pad">
+      <header class="sec">
+        <div class="hl">
+          <span class="tile"><svg class="ic" viewBox="0 0 24 24"><path d="m9 12 2 2 4-4"/><rect x="4" y="4" width="16" height="16" rx="3"/></svg></span>
+          <div style="min-width:0">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <h1 class="h1 serif">测试工作台</h1>
+              <span class="chip" id="hchip">12 个批次</span>
+            </div>
+            <p class="sub">从交付批次里挑用例，选好环境直接跑，逐条看结果。</p>
+          </div>
+        </div>
+        <button class="btn">刷新</button>
+      </header>
+    </div>
+
+    <div class="body">
+      <div class="col">
+        <div class="lbl">交付批次</div>
+        <div class="scroll"><div class="rail">
+          <div class="batch on">
+            <div class="t">order-api · 下单主链路</div>
+            <div class="d"><span>18 条</span><span>·</span><span>今天 14:02 跑过</span></div>
+            <div class="bar"><i style="width:61%;background:#10b981"></i><i style="width:22%;background:#ef4444"></i><i style="width:17%;background:#f59e0b"></i></div>
+          </div>
+          <div class="batch">
+            <div class="t">user-center · 登录与资料</div>
+            <div class="d"><span>9 条</span><span>·</span><span>昨天 18:30 跑过</span></div>
+            <div class="bar"><i style="width:100%;background:#10b981"></i></div>
+          </div>
+          <div class="batch">
+            <div class="t">pay-gateway · 支付回调</div>
+            <div class="d"><span>24 条</span><span>·</span><span>没跑过</span></div>
+          </div>
+          <div class="batch" style="opacity:.6">
+            <div class="t">legacy-batch-0731</div>
+            <div class="d"><span>—</span><span>·</span><span>旧批次，无结构化用例</span></div>
+          </div>
+        </div></div>
+      </div>
+
+      <div class="col">
+        <div class="tools">
+          <div class="filt" id="filt">
+            <button data-f="fail" data-on>失败 <span class="cnt">4</span></button>
+            <button data-f="skip">跳过 <span class="cnt">3</span></button>
+            <button data-f="pass">通过 <span class="cnt">11</span></button>
+            <button data-f="all">全部 <span class="cnt">18</span></button>
+          </div>
+          <span class="grow"></span>
+          <span class="sel" id="runmeta">上次执行 今天 14:02 · 用时 26 秒</span>
+        </div>
+
+        <div class="scroll">
+          <div class="tablewrap">
+            <table>
+              <thead><tr>
+                <th style="width:34px"><input type="checkbox"></th>
+                <th style="width:76px">编号</th><th>用例</th>
+                <th style="width:104px">状态</th><th style="width:78px">耗时</th>
+              </tr></thead>
+              <tbody id="rows"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <span class="sel"><b id="nsel">2</b> 条已选</span>
+      <div class="field">环境
+        <select><option>测试环境</option><option>预发环境</option></select>
+      </div>
+      <div class="field">鉴权
+        <select><option>跟随环境</option><option>登录换新</option></select>
+      </div>
+      <span class="grow" id="footgap"></span>
+      <span class="blocker hidden" id="blocker">
+        <svg class="ic" viewBox="0 0 24 24" style="width:13px;height:13px"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+        <span id="btext"></span>
+      </span>
+      <div class="prog hidden" id="prog"><i></i></div>
+      <span class="sel hidden" id="ptext">第 8 / 18 条 · order.create</span>
+      <button class="btn hidden" id="stop">停止</button>
+      <button class="btn pri" id="go">执行选中的 2 条</button>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  <b>三处刻意的设计决定</b>：①「用例表」和「结果表」是<b>同一张表</b>——一行在生命周期里换状态，不另开结果页，
+  视线不用重定位。②<b>不能跑的原因写在按钮旁边</b>，不是点了才弹错——比如没选环境、选中的用例没有断言。
+  ③ 批次<b>跑过就默认落在「失败」筛选</b>，没跑过才落在用例列表——日常最高频的动作是看上次哪儿挂了。
+  <br><br>
+  <b>凭据</b>：页面上只出现<b>环境名</b>，值由网关在本机解析；响应体里回显的凭证过脱敏后显示为 <code>{{token}}</code>。
+</div>
+
+<script>
+const R=[
+ {id:'TC-003',t:'下单-库存不足时应拒绝',s:'fail',ms:'1.2s',
+  d:'期望 status <b>400</b>，实际 <b>200</b>；断言 <b>$.code == "STOCK_OUT"</b> 未命中'},
+ {id:'TC-007',t:'下单-优惠券过期',s:'fail',ms:'0.9s',
+  d:'期望 <b>$.message</b> 含「已过期」，实际为空'},
+ {id:'TC-011',t:'下单-地址缺省时回填默认地址',s:'fail',ms:'1.4s',
+  d:'期望 <b>$.data.addressId</b> 存在，实际 <b>null</b>'},
+ {id:'TC-016',t:'下单-并发扣减不应超卖',s:'fail',ms:'2.1s',
+  d:'期望 status <b>409</b>，实际 <b>500</b>'},
+ {id:'TC-005',t:'下单-未登录应拒绝',s:'skip',ms:'—',w:'跳过：该用例没有断言，不拿「发出去了」冒充「通过」'},
+ {id:'TC-009',t:'下单-指定发票抬头',s:'skip',ms:'—',w:'跳过：变量 <code>invoice_title</code> 未在所选环境里提供'},
+ {id:'TC-014',t:'下单-跨域回调',s:'skip',ms:'—',w:'跳过：目标 host 与所选环境不一致，整轮不跟随重定向'},
+ {id:'TC-001',t:'下单-正常下单成功',s:'pass',ms:'0.7s'},
+ {id:'TC-002',t:'下单-金额计算正确',s:'pass',ms:'0.6s'},
+ {id:'TC-004',t:'下单-库存充足扣减',s:'pass',ms:'0.8s'},
+];
+const S={pass:'通过',fail:'失败',skip:'跳过',idle:'待执行',run:'执行中'};
+let mode='result', filt='fail';
+
+function draw(){
+  const wrap=document.getElementById('rows');
+  let list=R.slice();
+  if(mode==='idle') list=list.map(r=>({...r,s:'idle',ms:'—',d:null,w:r.s==='skip'?r.w:null}));
+  if(mode==='running') list=list.map((r,i)=>({...r,s:i<3?r.s:(i===3?'run':'idle'),ms:i<4?r.ms:'—',d:i<3?r.d:null}));
+  if(mode==='result'&&filt!=='all') list=list.filter(r=>r.s===filt);
+  wrap.innerHTML=list.map(r=>`<tr>
+    <td><input type="checkbox" ${r.s==='fail'?'checked':''}></td>
+    <td class="num">${r.id}</td>
+    <td>${r.t}${r.d?`<div class="diff">${r.d}</div>`:''}${r.w?`<div class="why">${r.w}</div>`:''}</td>
+    <td><span class="st ${r.s}">${S[r.s]}</span></td>
+    <td class="num">${r.ms}</td></tr>`).join('');
+
+  const go=document.getElementById('go'), bl=document.getElementById('blocker'),
+        bt=document.getElementById('btext'), pg=document.getElementById('prog'),
+        pt=document.getElementById('ptext'), st=document.getElementById('stop'),
+        rm=document.getElementById('runmeta'), gap=document.getElementById('footgap');
+  [bl,pg,pt,st].forEach(e=>e.classList.add('hidden'));
+  go.classList.remove('hidden'); go.disabled=false; gap.classList.remove('hidden');
+
+  if(mode==='running'){
+    [pg,pt,st].forEach(e=>e.classList.remove('hidden'));
+    go.classList.add('hidden'); gap.classList.add('hidden');
+    rm.textContent='执行中 · 同步逐条，不并发';
+  }else if(mode==='idle'){
+    document.getElementById('nsel').textContent='3';
+    go.textContent='执行选中的 3 条'; go.disabled=true;
+    bl.classList.remove('hidden');
+    bt.innerHTML='选中的 3 条里有 1 条没有断言，<a>取消勾选它</a>就能跑';
+    rm.textContent='这个批次还没跑过';
+  }else{
+    document.getElementById('nsel').textContent='4';
+    go.textContent='重跑选中的 4 条';
+    rm.textContent='上次执行 今天 14:02 · 用时 26 秒';
+  }
+}
+document.getElementById('themes').onclick=e=>{const b=e.target.closest('button');if(!b)return;
+  [...e.currentTarget.children].forEach(x=>x.removeAttribute('data-on'));b.dataset.on='';
+  const r=document.documentElement;r.className='';const t=b.dataset.t;
+  if(t==='dark')r.className='dark';if(t==='snow')r.className='theme-snow';
+  if(t==='glass')r.className='dark theme-glass';};
+document.getElementById('states').onclick=e=>{const b=e.target.closest('button');if(!b)return;
+  [...e.currentTarget.children].forEach(x=>x.removeAttribute('data-on'));b.dataset.on='';
+  mode=b.dataset.s;
+  document.querySelector('.tools .filt').style.visibility=mode==='result'?'visible':'hidden';draw();};
+document.getElementById('widths').onclick=e=>{const b=e.target.closest('button');if(!b)return;
+  [...e.currentTarget.children].forEach(x=>x.removeAttribute('data-on'));b.dataset.on='';
+  document.querySelector('.shell').classList.toggle('narrow',b.dataset.w==='narrow');};
+document.getElementById('filt').onclick=e=>{const b=e.target.closest('button');if(!b)return;
+  [...e.currentTarget.children].forEach(x=>x.removeAttribute('data-on'));b.dataset.on='';
+  filt=b.dataset.f;draw();};
+draw();
+</script>

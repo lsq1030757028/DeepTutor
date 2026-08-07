@@ -1,0 +1,553 @@
+<meta charset="utf-8">
+<title>测试工作台 · 完整交互稿</title>
+<style>
+:root{--background:#fdfcf9;--foreground:#1c1816;--card:#fff;--primary:#b0501e;--primary-fg:#fff;
+  --muted:#f1ede2;--muted-fg:#6d645a;--accent:#ece7d8;--border:#e6decc;--input:#e6decc;color-scheme:light}
+.dark{--background:#1a1918;--foreground:#e8e4de;--card:#242220;--primary:#d4734b;--primary-fg:#1a1918;
+  --muted:#2a2725;--muted-fg:#9b9590;--accent:#302d2a;--border:#3a3634;--input:#3a3634;color-scheme:dark}
+.theme-snow{--background:#fff;--foreground:#0d0d0d;--card:#fff;--primary:#2563eb;--primary-fg:#fff;
+  --muted:#f2f2f2;--muted-fg:#6e6e6e;--accent:#ececec;--border:#e5e5e5;--input:#e5e5e5;color-scheme:light}
+.theme-glass{--background:#0e0d1a;--foreground:#fff;--card:rgba(255,255,255,.06);--primary:#a855f7;
+  --primary-fg:#fff;--muted:rgba(255,255,255,.06);--muted-fg:#b5b5c7;--accent:rgba(255,255,255,.12);
+  --border:rgba(255,255,255,.12);--input:rgba(255,255,255,.06);color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--background);color:var(--foreground);font-size:14px;line-height:1.5;
+  font-family:Geist,ui-sans-serif,system-ui,sans-serif}
+.serif{font-family:Lora,Georgia,serif}
+.top{position:sticky;top:0;z-index:9;border-bottom:1px solid var(--border);padding:11px 20px;
+  display:flex;gap:9px;align-items:center;flex-wrap:wrap;background:var(--card)}
+.top h1{font-size:15px;margin:0 8px 0 0;font-weight:600}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:9px;overflow:hidden}
+.seg button{border:0;background:transparent;color:var(--muted-fg);font:inherit;font-size:12px;
+  padding:5px 10px;cursor:pointer}
+.seg button[data-on]{background:var(--primary);color:var(--primary-fg)}
+.top small{color:var(--muted-fg);font-size:12px}
+.doc{max-width:1000px;margin:0 auto;padding:8px 24px 80px}
+.nav{position:sticky;top:52px;z-index:8;background:var(--background);padding:9px 0 5px;
+  border-bottom:1px solid var(--border);margin-bottom:4px}
+.nav a{font-size:11.5px;color:var(--muted-fg);text-decoration:none;padding:3px 8px;border-radius:7px;
+  display:inline-block}
+.nav a:hover{background:var(--muted);color:var(--foreground)}
+.step{margin-top:34px;scroll-margin-top:64px}
+.step>h2{font-size:17px;margin:0 0 3px;font-weight:600;display:flex;gap:9px;align-items:center}
+.step>h2 i{width:22px;height:22px;border-radius:7px;background:var(--primary);color:var(--primary-fg);
+  font-size:12px;font-style:normal;font-weight:600;display:flex;align-items:center;justify-content:center;flex:none}
+.step>p.k{margin:0 0 12px 31px;font-size:13px;color:var(--muted-fg)}
+.screen{border:1px solid var(--border);border-radius:13px;overflow:hidden;background:var(--card);
+  margin-left:31px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+.screen>.hd{padding:8px 13px;font-size:11.5px;color:var(--muted-fg);border-bottom:1px solid var(--border);
+  background:color-mix(in srgb,var(--muted) 35%,transparent)}
+.screen>.bd{padding:15px 17px}
+.why{margin:10px 0 0 31px;border-left:2px solid var(--primary);padding:2px 0 2px 12px;
+  font-size:12.5px;color:var(--muted-fg)}
+.why b{color:var(--foreground)}
+.fix{margin:10px 0 0 31px;border-left:2px solid #d97706;padding:2px 0 2px 12px;font-size:12.5px;
+  color:var(--muted-fg)}
+.fix b{color:var(--foreground)}
+.ic{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.6;flex:none}
+.hdr{display:flex;gap:13px;align-items:flex-start;border-bottom:1px solid var(--border);
+  padding-bottom:13px;margin-bottom:13px}
+.tile{width:34px;height:34px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:11px;
+  border:1px solid var(--border);background:var(--card)}
+.h1{font-size:18px;font-weight:600;margin:0}
+.sub{margin:3px 0 0;font-size:12.5px;color:var(--muted-fg)}
+.two{display:grid;grid-template-columns:250px minmax(0,1fr);gap:14px}
+@media(max-width:820px){.two{grid-template-columns:1fr}}
+.lbl{font-size:11px;color:var(--muted-fg);padding-bottom:6px;font-weight:500}
+.batch{border:1px solid var(--border);border-radius:11px;padding:10px 11px;margin-bottom:7px}
+.batch.on{border-color:color-mix(in srgb,var(--primary) 40%,transparent);
+  background:color-mix(in srgb,var(--primary) 8%,transparent)}
+.batch .t{font-size:12.5px;font-weight:500}
+.batch .d{font-size:11px;color:var(--muted-fg);margin-top:2px}
+.bar3{display:flex;height:3px;border-radius:2px;overflow:hidden;margin-top:6px;background:var(--muted)}
+.tw{overflow-x:auto;border:1px solid var(--border);border-radius:10px}
+table{border-collapse:collapse;width:100%;min-width:520px;font-size:12.5px}
+th{text-align:left;font-size:11px;font-weight:500;color:var(--muted-fg);padding:7px 10px;
+  border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent);vertical-align:top}
+tr:last-child td{border-bottom:0}
+.mono{font-family:ui-monospace,Consolas,monospace;font-size:11.5px}
+.m{font-size:10px;padding:1px 5px;border-radius:4px;font-weight:600;background:var(--muted);color:var(--muted-fg)}
+.m.get{background:rgba(16,185,129,.12);color:#059669}
+.m.post{background:rgba(37,99,235,.12);color:#2563eb}
+.dark .m.get,.theme-glass .m.get{color:#34d399}.dark .m.post,.theme-glass .m.post{color:#60a5fa}
+.tag{font-size:10.5px;padding:1px 6px;border-radius:999px;border:1px solid var(--border);color:var(--muted-fg)}
+.ok{background:rgba(16,185,129,.1);color:#059669;border:0}.dark .ok,.theme-glass .ok{color:#34d399}
+.warn{background:rgba(245,158,11,.12);color:#d97706;border:0}.dark .warn,.theme-glass .warn{color:#fbbf24}
+.bad{background:rgba(239,68,68,.1);color:#dc2626;border:0}.dark .bad,.theme-glass .bad{color:#f87171}
+.btn{font:inherit;font-size:12.5px;padding:6px 13px;border-radius:9px;cursor:pointer;
+  border:1px solid var(--border);background:var(--card);color:var(--foreground)}
+.btn.pri{background:var(--primary);color:var(--primary-fg);border-color:transparent;font-weight:500}
+.btn.sm{font-size:11.5px;padding:4px 9px}
+.grow{flex:1}
+.act{display:flex;gap:9px;align-items:center;flex-wrap:wrap;padding-top:11px;margin-top:11px;
+  border-top:1px solid var(--border)}
+input[type=checkbox]{accent-color:var(--primary);width:13px;height:13px;margin-top:1px}
+input,select,textarea{font:inherit;font-size:12.5px;padding:6px 9px;border-radius:8px;
+  border:1px solid var(--input);background:var(--card);color:var(--foreground);width:100%}
+textarea{resize:vertical;line-height:1.7}
+.drop{border:1.5px dashed var(--border);border-radius:11px;padding:22px;text-align:center;
+  color:var(--muted-fg);font-size:12.5px;background:color-mix(in srgb,var(--muted) 30%,transparent)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:9px;margin-top:11px}
+.kpi{border:1px solid var(--border);border-radius:9px;padding:9px 11px}
+.kpi .n{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums}
+.kpi .l{font-size:11px;color:var(--muted-fg)}
+.pii{border:1px solid rgba(245,158,11,.45);background:rgba(245,158,11,.08);border-radius:10px;
+  padding:9px 11px;font-size:12px;margin-top:11px}
+details{border:1px solid var(--border);border-radius:9px;padding:8px 11px;margin-top:9px;font-size:12px}
+summary{cursor:pointer;color:var(--muted-fg)}
+pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:7px;padding:9px;
+  overflow-x:auto;font-size:11px;line-height:1.55;margin:8px 0 0}
+.exp{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:9px}
+.expc{border:1px solid var(--border);border-radius:10px;padding:11px;cursor:pointer;
+  display:flex;gap:10px;align-items:flex-start}
+.expc[data-on]{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 8%,transparent)}
+.expc .t{font-weight:500;font-size:12.5px}
+.expc .s{color:var(--muted-fg);font-size:11px;margin-top:2px}
+.fi{width:30px;height:34px;flex:none}
+.envrow{display:grid;grid-template-columns:150px 1fr 56px;gap:6px;margin-bottom:6px;align-items:center}
+/* AI 工作流 */
+.wf{border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.wf .l{padding:9px 12px;display:flex;gap:9px;align-items:flex-start;font-size:12.5px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent)}
+.wf .l:last-child{border-bottom:0}
+.wf .l .s{width:15px;height:15px;flex:none;margin-top:2px}
+.wf .l.doing{background:color-mix(in srgb,var(--primary) 6%,transparent)}
+.wf .l small{display:block;color:var(--muted-fg);font-size:11.5px;margin-top:2px}
+.eg{border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:12px;
+  color:var(--muted-fg);background:color-mix(in srgb,var(--muted) 30%,transparent);margin-top:9px}
+.eg b{color:var(--foreground)}
+</style>
+
+<div class="top">
+  <h1 class="serif">测试工作台 · 完整交互稿</h1>
+  <div class="seg" id="th"><button data-t="light" data-on>Cream</button><button data-t="dark">Dark</button>
+    <button data-t="snow">Default</button><button data-t="glass">Glass</button></div>
+  <small>按真实操作顺序从头走一遍</small>
+</div>
+
+<div class="doc">
+<div class="nav">
+  <a href="#s0">0 位置</a><a href="#s1">1 主界面</a><a href="#s2">2 导入体检</a>
+  <a href="#s3">3 描述场景</a><a href="#s4">4 AI 干活</a><a href="#s5">5 审核采纳</a>
+  <a href="#s6" style="color:var(--primary);font-weight:500">6 批次成立 · 两条路</a>
+  <a href="#s7">7 导出</a><a href="#s8">8 执行结果</a>
+  <a href="#s9">9 局部配置</a><a href="#s10">10 公共配置</a>
+</div>
+
+<!-- 0 位置 -->
+<section class="step" id="s0">
+  <h2><i>0</i>它在 DeepTutor 里放哪</h2>
+  <p class="k">能力放一处，公共配置放另一处——这两件事分开。</p>
+  <div class="screen"><div class="bd">
+    <div style="display:grid;grid-template-columns:190px 1fr;gap:16px">
+      <div style="border:1px solid var(--border);border-radius:10px;padding:10px 8px;font-size:12.5px">
+        <div style="font-weight:600;padding:2px 8px 9px" class="serif">DeepTutor</div>
+        <div style="color:var(--muted-fg);padding:4px 8px">Home</div>
+        <div style="color:var(--muted-fg);padding:4px 8px">Partners</div>
+        <div style="color:var(--muted-fg);padding:4px 8px">My Agents</div>
+        <div style="color:var(--muted-fg);padding:4px 8px">Co-Writer</div>
+        <div style="color:var(--muted-fg);padding:4px 8px">Book</div>
+        <div style="color:var(--muted-fg);padding:4px 8px">Learning Space</div>
+        <div style="height:1px;background:var(--border);margin:8px 6px"></div>
+        <div style="color:var(--muted-fg);padding:4px 8px">Memory</div>
+        <div style="color:var(--muted-fg);padding:4px 8px">Knowledge Center</div>
+        <div style="padding:5px 8px;border-radius:7px;font-weight:500;
+          background:color-mix(in srgb,var(--primary) 9%,transparent)">测试工作台 ←</div>
+        <div style="padding:4px 8px;color:var(--muted-fg)">Settings
+          <span class="tag" style="margin-left:4px">公共配置在这</span></div>
+      </div>
+      <div style="font-size:12.5px;line-height:1.7">
+        <b>测试工作台</b>：<span class="mono">(utility)</span> 组，侧边栏第二组，Knowledge Center 下面。<br>
+        <span style="color:var(--muted-fg)">第一组是每天待着的工作区，它是控制台——来办一件事，办完就走，和 Memory / Knowledge Center 同类。</span>
+        <div style="margin-top:11px;padding-top:11px;border-top:1px solid var(--border)">
+          <b>配置分两层，不放一起：</b>
+          <div style="margin-top:7px;color:var(--muted-fg)">
+            <b style="color:var(--foreground)">局部配置</b>（测试环境、接口变量）→ <b style="color:var(--foreground)">在工作台里</b>。
+            它们只服务 HAR 这条能力，跟着能力走，换个能力就不需要它们。<br><br>
+            <b style="color:var(--foreground)">公共配置</b>（TAPD、数据库连接）→ <b style="color:var(--foreground)">进 DeepTutor 的 Settings</b>。
+            它们不属于测试工作台，别的地方也要用；塞进工作台等于把项目级设置藏进一个功能页里。
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <div class="fix"><b>上一版的错</b>：把测试环境、TAPD 令牌、伙伴平铺在同一个配置页里，
+    把两个层级压平了。现在按归属拆开——第 8 屏是局部，第 9 屏是公共。</div>
+</section>
+
+<!-- 1 主界面 -->
+<section class="step" id="s1">
+  <h2><i>1</i>主界面：批次 + 用例/结果</h2>
+  <p class="k">跑过的批次默认落在「失败」，没跑过的落在用例列表。</p>
+  <div class="screen">
+    <div class="hd"><span class="mono">/test-workbench</span></div>
+    <div class="bd">
+      <div class="hdr">
+        <span class="tile"><svg class="ic" viewBox="0 0 24 24"><path d="m9 12 2 2 4-4"/><rect x="4" y="4" width="16" height="16" rx="3"/></svg></span>
+        <div class="grow"><h1 class="h1 serif">测试工作台</h1>
+          <p class="sub">从抓包或需求生成接口用例，选好环境直接跑。</p></div>
+        <button class="btn pri">新建批次</button>
+      </div>
+      <div class="two">
+        <div>
+          <div class="lbl">交付批次</div>
+          <div class="batch on"><div class="t">登录到退出 · 主链路</div>
+            <div class="d">12 条 · 今天 14:02 跑过</div>
+            <div class="bar3"><i style="width:66%;background:#10b981"></i><i style="width:17%;background:#ef4444"></i><i style="width:17%;background:#f59e0b"></i></div></div>
+          <div class="batch"><div class="t">下单与优惠券</div>
+            <div class="d">18 条 · 昨天 18:30 跑过</div>
+            <div class="bar3"><i style="width:100%;background:#10b981"></i></div></div>
+          <div class="batch"><div class="t">支付回调</div><div class="d">24 条 · 没跑过</div></div>
+        </div>
+        <div>
+          <div style="display:flex;gap:7px;align-items:center;padding-bottom:9px;flex-wrap:wrap">
+            <span class="tag bad">失败 2</span><span class="tag">跳过 2</span>
+            <span class="tag">通过 8</span><span class="tag">全部 12</span>
+            <span class="grow"></span>
+            <span style="font-size:11.5px;color:var(--muted-fg)">上次 今天 14:02 · 18 秒</span></div>
+          <div class="tw"><table>
+            <thead><tr><th style="width:28px"><input type="checkbox"></th><th style="width:62px">编号</th>
+              <th>用例</th><th style="width:76px">状态</th></tr></thead>
+            <tbody>
+              <tr><td><input type="checkbox" checked></td><td class="mono">TC-004</td>
+                <td>密码错误应提示且不放行
+                  <div style="font-size:11px;color:var(--muted-fg);margin-top:3px;border-left:2px solid rgba(239,68,68,.4);padding-left:8px" class="mono">
+                    期望 401，实际 200</div></td>
+                <td><span class="tag bad">失败</span></td></tr>
+              <tr><td><input type="checkbox" checked></td><td class="mono">TC-009</td>
+                <td>退出后旧 token 应失效</td><td><span class="tag bad">失败</span></td></tr>
+              <tr><td><input type="checkbox"></td><td class="mono">TC-007</td>
+                <td>切换设备后会话保持
+                  <div style="font-size:11px;color:var(--muted-fg);margin-top:3px">跳过：没有断言，不拿「发出去了」冒充「通过」</div></td>
+                <td><span class="tag warn">跳过</span></td></tr>
+            </tbody></table></div>
+          <div class="act">
+            <span style="font-size:12px;color:var(--muted-fg)">已选 <b>2</b> 条 · 环境</span>
+            <select style="width:auto"><option>测试环境</option></select>
+            <span style="font-size:12px;color:var(--muted-fg)">鉴权</span>
+            <select style="width:auto"><option>跟随环境</option><option>登录换新</option></select>
+            <span class="grow"></span>
+            <button class="btn">导出…</button>
+            <button class="btn pri">重跑选中的 2 条</button></div>
+          <div style="font-size:11.5px;color:var(--muted-fg);margin-top:7px">
+            <b>导出和执行是平级的两个动作</b>，谁先谁后随意、可以只做一个、也可以反复做。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="why"><b>一张表，不是两张</b>：用例和结果是同一行在生命周期里换状态。</div>
+</section>
+
+<!-- 2 导入体检 -->
+<section class="step" id="s2">
+  <h2><i>2</i>新建批次 → 导入 HAR，本地体检</h2>
+  <p class="k">这一步<b>不调模型</b>，纯本地解析，免费且立即出结果。</p>
+  <div class="screen">
+    <div class="hd">新建批次 · 第 1 步，共 2 步</div>
+    <div class="bd">
+      <div class="drop">把 .har 拖到这里，或 <u>选择文件</u><br>
+        <span style="font-size:11px">浏览器 F12 → Network → 右键 → Save all as HAR</span></div>
+      <div class="kpis">
+        <div class="kpi"><div class="n">412</div><div class="l">HAR 里的请求</div></div>
+        <div class="kpi"><div class="n">297</div><div class="l">噪声已滤掉</div></div>
+        <div class="kpi"><div class="n">23</div><div class="l">归并后端点</div></div>
+        <div class="kpi"><div class="n">1</div><div class="l">识别到登录</div></div>
+      </div>
+      <details><summary>滤掉了什么（297 条）</summary>
+        <pre>静态资源  .js .css .png .svg .woff2 .ico          188
+预检       OPTIONS                                   41
+埋点/监控  /api/track  /collect  sentry.io           38
+轮询重复  同 URL+同 method 连发，只留首末各一条        30</pre></details>
+      <div class="pii"><b>凭据与个人信息，说实话</b>：Authorization / Cookie / token 这类<b>凭证已换成变量占位</b>，
+        界面和产物里都看不到真值。但<b>身份证、手机号、邮箱这类个人信息目前不在脱敏范围内</b>
+        （缺陷 BB-424，已登记未修），<b>分享产物前请自行检查</b>。</div>
+      <div class="act"><span class="grow"></span><button class="btn pri">下一步：说说你要测什么</button></div>
+    </div>
+  </div>
+  <div class="why">对标发现 MeterSphere <b>导入不给预览</b>，一次全量入库连「新增 N 条」都不告诉你。
+    HAR 是最脏的导入源，最需要这道闸。</div>
+</section>
+
+<!-- 3 描述场景 -->
+<section class="step" id="s3">
+  <h2><i>3</i>用一段话说你要测什么</h2>
+  <p class="k">就这一个框。<b>不填表、不勾选、不分字段。</b></p>
+  <div class="screen">
+    <div class="hd">新建批次 · 第 2 步，共 2 步</div>
+    <div class="bd">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+        <span style="font-size:12.5px">AI 看完这份抓包，猜你在测这个——不对就直接改。</span>
+        <span class="grow"></span>
+        <button class="btn sm">重新猜一次</button><button class="btn sm">清空自己写</button></div>
+      <textarea rows="4">目前测的是输入密码登录，点击首页，切换设备，退出登录。</textarea>
+      <div class="eg">
+        <b>就像跟同事描述你刚才在页面上点了什么</b>，一两句话就够。例如：<br>
+        · 目前测的是输入密码登录，点击首页，切换设备，退出登录<br>
+        · 下单流程：加购物车、用优惠券、提交订单，重点是库存不能超卖<br>
+        · 只测搜索，关注关键词为空和超长的情况
+      </div>
+      <details><summary>AI 是怎么猜的（可改，是你个人的预设）</summary>
+        <textarea rows="4" class="mono" style="font-size:11px;margin-top:8px">看完 HAR 体检报告，用一段大白话说这份抓包在做什么业务动作。
+按用户实际点击的先后顺序讲，一两句话，不要列字段、不要写术语。
+没抓到的不要提。</textarea>
+        <div style="display:flex;gap:8px;margin-top:8px"><button class="btn sm">存为我的默认</button>
+          <button class="btn sm">恢复系统默认</button></div></details>
+      <div class="act"><span class="grow"></span><button class="btn">上一步</button>
+        <button class="btn pri">交给 AI 生成用例</button></div>
+    </div>
+  </div>
+  <div class="fix"><b>上一版的错</b>：我把这里做成了五个字段的表单（业务场景 / 前置条件 / 要重点验的 /
+    不测什么 / 数据约束）。「降低心智负担」的手段被我做成了增加负担的形式——
+    用户不知道什么叫「数据约束」，也不该知道。<b>范本应该是一句示范，不是一张表格。</b></div>
+</section>
+
+<!-- 4 AI 干活 -->
+<section class="step" id="s4">
+  <h2><i>4</i>AI 干活：挑端点、生成用例</h2>
+  <p class="k"><b>挑端点是 AI 的活，不是你的活。</b>你只需要看它挑得对不对。</p>
+  <div class="screen">
+    <div class="hd">生成中</div>
+    <div class="bd">
+      <div class="wf">
+        <div class="l"><svg class="s" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2"><path d="m5 12 5 5L20 7"/></svg>
+          <div>读懂你的场景描述<small>登录 → 首页 → 切换设备 → 退出，4 个业务动作</small></div></div>
+        <div class="l"><svg class="s" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2"><path d="m5 12 5 5L20 7"/></svg>
+          <div>从 23 个端点里挑出相关的 → <b>选中 6 个</b>
+            <small><span class="mono">POST /api/auth/login</span> · <span class="mono">GET /api/home/feed</span> ·
+              <span class="mono">POST /api/device/switch</span> · <span class="mono">GET /api/user/profile</span> ·
+              <span class="mono">POST /api/auth/logout</span> · <span class="mono">GET /api/session/check</span>
+              　<a style="text-decoration:underline;cursor:pointer">挑得不对？点这里调整</a></small></div></div>
+        <div class="l doing"><svg class="s" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9" opacity=".25"/><path d="M12 3a9 9 0 0 1 9 9"/></svg>
+          <div>生成用例<small>已出 8 条，还在写…</small></div></div>
+        <div class="l" style="opacity:.45"><svg class="s" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
+          <div>自检并标出有问题的<small>待生成完成</small></div></div>
+      </div>
+      <div class="act"><span class="grow"></span><button class="btn">停止</button></div>
+    </div>
+  </div>
+  <div class="fix"><b>上一版的错</b>：我做了一屏让用户在端点表里逐个勾选。
+    一份 HAR 几百个接口时，那是把 AI 该干的苦力活外抛给人。
+    现在挑端点在 AI 工作流里，<b>结果给你看、可以调，但不用你动手</b>。</div>
+</section>
+
+<!-- 5 审核采纳 -->
+<section class="step" id="s5">
+  <h2><i>5</i>审核后采纳</h2>
+  <p class="k"><b>勾选是入库的唯一闸门</b>：生成 ≠ 入库。</p>
+  <div class="screen">
+    <div class="hd">生成完成 · 12 条 · 审核</div>
+    <div class="bd">
+      <div class="tw"><table>
+        <thead><tr><th style="width:28px"><input type="checkbox"></th><th style="width:62px">编号</th>
+          <th>用例</th><th style="width:92px">校验</th></tr></thead>
+        <tbody>
+          <tr><td><input type="checkbox" checked></td><td class="mono">TC-001</td>
+            <td>正确账号密码应登录成功
+              <div class="mono" style="font-size:11px;color:var(--muted-fg);margin-top:3px">
+                POST /api/auth/login · 断言 status==200, $.data.token 存在</div></td>
+            <td><span class="tag ok">可采纳</span></td></tr>
+          <tr><td><input type="checkbox" checked></td><td class="mono">TC-004</td>
+            <td>密码错误应提示且不放行
+              <div class="mono" style="font-size:11px;color:var(--muted-fg);margin-top:3px">
+                POST /api/auth/login · 断言 status==401</div>
+              <div style="font-size:11px;margin-top:3px;color:#d97706">只断言了 status，跑起来只能证明接口活着。
+                <a style="text-decoration:underline;cursor:pointer">补一条响应体断言</a></div></td>
+            <td><span class="tag warn">1 处提醒</span></td></tr>
+          <tr><td><input type="checkbox"></td><td class="mono">TC-009</td>
+            <td>退出后旧 token 应失效
+              <div style="font-size:11px;margin-top:3px;color:#dc2626">E13 URL 与来源端点对不上（模型写成
+                <span class="mono">/api/auth/signout</span>）——
+                <a style="text-decoration:underline;cursor:pointer">改回 /api/auth/logout</a> 或
+                <a style="text-decoration:underline;cursor:pointer">就地编辑</a></div></td>
+            <td><span class="tag bad">1 处待修</span></td></tr>
+        </tbody></table></div>
+      <div class="act"><span style="font-size:12px;color:var(--muted-fg)">已选 <b>10</b> 条 · 待修的不能采纳</span>
+        <span class="grow"></span><button class="btn">全部重生成</button>
+        <button class="btn pri">采纳 10 条</button></div>
+      <div style="font-size:11.5px;color:var(--muted-fg);margin-top:8px">
+        采纳就是终点——<b>不强迫你现在决定跑不跑</b>。批次建好后再选导出还是执行，都行。</div>
+    </div>
+  </div>
+  <div class="why">红色一定带<b>可操作的出路</b>（改回去 / 就地编辑）——界面指出问题却不给控件，
+    比不指出更让人堵。</div>
+</section>
+
+<!-- 6 批次成立：两条路 -->
+<section class="step" id="s6">
+  <h2><i>6</i>批次成立：两条平级的路</h2>
+  <p class="k">生成和执行是两件事。<b>不跑也能用，跑了也不是必须。</b></p>
+  <div class="screen">
+    <div class="hd">采纳完成 · 登录到退出 主链路（10 条）</div>
+    <div class="bd">
+      <div style="text-align:center;padding:6px 0 14px">
+        <div style="display:inline-flex;align-items:center;gap:8px;font-size:13px;
+          border:1px solid rgba(16,185,129,.4);background:rgba(16,185,129,.08);
+          border-radius:999px;padding:6px 15px">
+          <svg class="ic" viewBox="0 0 24 24" stroke="#059669"><path d="m5 12 5 5L20 7"/></svg>
+          批次已建好，10 条用例已经是你的资产了</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px" class="paths">
+        <div style="border:1px solid var(--border);border-radius:11px;padding:14px">
+          <div style="font-size:13.5px;font-weight:600;margin-bottom:5px">交出去</div>
+          <div style="font-size:12px;color:var(--muted-fg);line-height:1.7">
+            导出成 Excel 拿去评审、导成 Postman 给别人跑、贴进文档。<br>
+            <b style="color:var(--foreground)">不需要先执行。</b></div>
+          <button class="btn" style="margin-top:11px;width:100%">导出…</button>
+        </div>
+        <div style="border:1px solid var(--border);border-radius:11px;padding:14px">
+          <div style="font-size:13.5px;font-weight:600;margin-bottom:5px">自己先验一遍</div>
+          <div style="font-size:12px;color:var(--muted-fg);line-height:1.7">
+            选个环境跑一遍，看哪些真能过。跑完再导出，产物里会多一列执行结果。<br>
+            <b style="color:var(--foreground)">不跑也不影响导出。</b></div>
+          <button class="btn pri" style="margin-top:11px;width:100%">选环境执行…</button>
+        </div>
+      </div>
+      <div style="text-align:center;margin-top:12px">
+        <a style="font-size:12px;color:var(--muted-fg);text-decoration:underline;cursor:pointer">两个都先不做，回批次列表</a></div>
+    </div>
+  </div>
+  <div class="fix"><b>上一版的错</b>：屏序是「采纳 → 执行 → 导出」，
+    <b>在语义上暗示了"必须先跑才能导"</b>。实际上导出是把用例交给别人，执行是自己先验一遍，
+    <b>是并列的两个出口，不是前后两步</b>。旧排法还强迫用户在采纳那一刻就决定跑不跑，
+    而"只想拿一份用例去评审"的人根本不需要走那一段。</div>
+</section>
+
+<!-- 6 执行结果 -->
+<section class="step" id="s7">
+  <h2><i>7</i>导出</h2>
+  <p class="k">每种用自己的文件类型图标区分，不靠读文字辨认。可多选。</p>
+  <div class="screen">
+    <div class="hd">导出 · 登录到退出 主链路（12 条）</div>
+    <div class="bd">
+      <div class="exp">
+        <div class="expc" data-on>
+          <svg class="fi" viewBox="0 0 30 34"><path d="M3 2h16l8 8v22a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" fill="#1d6f42"/><path d="M19 2l8 8h-8V2z" fill="#134a2c"/><path d="M7 16h14v12H7z" fill="#fff" opacity=".92"/><path d="M7 20h14M7 24h14M12 16v12M17 16v12" stroke="#1d6f42" stroke-width="1"/></svg>
+          <div><div class="t">Excel</div><div class="s">列名对齐 TAPD 用例库</div></div></div>
+        <div class="expc" data-on>
+          <svg class="fi" viewBox="0 0 30 34"><path d="M3 2h16l8 8v22a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" fill="#ff6c37"/><path d="M19 2l8 8h-8V2z" fill="#c74a1d"/><circle cx="14" cy="22" r="6.5" fill="none" stroke="#fff" stroke-width="1.8"/><path d="M14 22l4.5-4.5" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <div><div class="t">Postman</div><div class="s">Apifox / Postman 直接导入执行</div></div></div>
+        <div class="expc">
+          <svg class="fi" viewBox="0 0 30 34"><path d="M3 2h16l8 8v22a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" fill="#4b5563"/><path d="M19 2l8 8h-8V2z" fill="#1f2937"/><path d="M6 18v9M6 18l3.5 4.5L13 18v9M16.5 18v6l3 3 3-3v-6" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <div><div class="t">Markdown</div><div class="s">贴进文档或聊天里看</div></div></div>
+        <div class="expc">
+          <svg class="fi" viewBox="0 0 30 34"><path d="M3 2h16l8 8v22a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" fill="#0f766e"/><path d="M19 2l8 8h-8V2z" fill="#0b4f49"/><text x="14" y="27" font-size="9" font-family="monospace" font-weight="700" fill="#fff" text-anchor="middle">CSV</text></svg>
+          <div><div class="t">CSV</div><div class="s">给别的系统吃</div></div></div>
+      </div>
+      <div class="act"><span style="font-size:12px;color:var(--muted-fg)">已选 2 种 · 打包成一个 zip</span>
+        <span class="grow"></span><button class="btn pri">导出</button></div>
+    </div>
+  </div>
+  <div class="why">四种都是后端已实现的（<span class="mono">xlsx / postman / markdown / csv</span>），
+    这一屏只是把它们暴露出来并<b>用图标分类</b>。</div>
+</section>
+
+<!-- 7 导出 -->
+<section class="step" id="s8">
+  <h2><i>8</i>执行与结果</h2>
+  <p class="k">回到主界面那张表，同一行换状态。</p>
+  <div class="screen">
+    <div class="hd">执行中 · 同步逐条，不并发</div>
+    <div class="bd">
+      <div class="tw"><table>
+        <thead><tr><th style="width:62px">编号</th><th>用例</th><th style="width:76px">状态</th><th style="width:56px">耗时</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">TC-001</td><td>正确账号密码应登录成功</td><td><span class="tag ok">通过</span></td><td class="mono">0.7s</td></tr>
+          <tr><td class="mono">TC-004</td><td>密码错误应提示且不放行
+            <div class="mono" style="font-size:11px;color:var(--muted-fg);margin-top:3px;border-left:2px solid rgba(239,68,68,.4);padding-left:8px">
+              期望 401，实际 200</div></td>
+            <td><span class="tag bad">失败</span></td><td class="mono">1.2s</td></tr>
+          <tr><td class="mono">TC-007</td><td>切换设备后会话保持</td>
+            <td><span class="tag" style="background:color-mix(in srgb,var(--primary) 12%,transparent);color:var(--primary);border:0">执行中</span></td>
+            <td class="mono">—</td></tr>
+        </tbody></table></div>
+      <div class="act">
+        <div style="flex:1;min-width:150px;height:5px;border-radius:3px;background:var(--muted);overflow:hidden">
+          <i style="display:block;height:100%;width:60%;background:var(--primary)"></i></div>
+        <span style="font-size:12px;color:var(--muted-fg)">第 6 / 10 条</span>
+        <button class="btn">停止</button></div>
+      <div class="pii" style="border-color:var(--border);background:color-mix(in srgb,var(--muted) 40%,transparent)">
+        响应体里若回显了凭证，报告里会换成 <span class="mono">{{token}}</span>。页面上只出现<b>环境名</b>。</div>
+    </div>
+  </div>
+</section>
+
+<!-- 8 局部配置 -->
+<section class="step" id="s9">
+  <h2><i>9</i>局部配置：跟着能力走</h2>
+  <p class="k">测试环境、接口变量——只服务这条能力，所以<b>就放在工作台里</b>。</p>
+  <div class="screen">
+    <div class="hd">测试工作台 · 环境与变量</div>
+    <div class="bd">
+      <div style="border:1px solid rgba(16,185,129,.35);background:rgba(16,185,129,.07);border-radius:9px;
+        padding:8px 11px;font-size:12px;margin-bottom:12px">
+        <b>只有你自己看得到。</b>环境、变量、凭据按用户隔离，别人用他们自己的（决策 0009）。</div>
+      <div style="border:1px solid var(--border);border-radius:10px;padding:11px">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:9px">
+          <span style="width:7px;height:7px;border-radius:50%;background:#10b981"></span>
+          <b style="font-size:12.5px">测试环境</b>
+          <span class="mono" style="color:var(--muted-fg)">https://api-test.example.com</span>
+          <span class="grow"></span><button class="btn sm">新建环境</button></div>
+        <div class="envrow"><span style="font-size:11px;color:var(--muted-fg)">变量名</span>
+          <span style="font-size:11px;color:var(--muted-fg)">值</span><span></span></div>
+        <div class="envrow"><input value="token"><input type="password" value="xxxxxxxxxxxx"><button class="btn sm">删</button></div>
+        <div class="envrow"><input value="login_username"><input value="qa_tester_01"><button class="btn sm">删</button></div>
+        <div class="envrow"><input value="login_password"><input type="password" value="xxxxxxxx"><button class="btn sm">删</button></div>
+        <div class="envrow"><input value="auth_token_path"><input value="$.data.token" class="mono"><button class="btn sm">删</button></div>
+        <div style="font-size:11px;color:var(--muted-fg);margin-top:6px">
+          后三个是<b>保留变量名</b>，配齐就能在执行时选「登录换新」自动拿新 token。</div>
+      </div>
+      <div style="font-size:11.5px;color:var(--muted-fg);margin-top:11px">
+        执行时按<b>环境名</b>引用，值由本机解析，不经过聊天也不进结果。</div>
+    </div>
+  </div>
+</section>
+
+<!-- 9 公共配置 -->
+<section class="step" id="s10">
+  <h2><i>10</i>公共配置：进 DeepTutor 的 Settings</h2>
+  <p class="k">TAPD、数据库这些<b>不属于测试工作台</b>，别的地方也要用。</p>
+  <div class="screen">
+    <div class="hd"><span class="mono">/settings</span> · DeepTutor 设置</div>
+    <div class="bd">
+      <div style="display:grid;grid-template-columns:150px 1fr;gap:14px">
+        <div style="font-size:12.5px">
+          <div style="color:var(--muted-fg);padding:4px 8px">通用</div>
+          <div style="color:var(--muted-fg);padding:4px 8px">模型</div>
+          <div style="color:var(--muted-fg);padding:4px 8px">外观</div>
+          <div style="color:var(--muted-fg);padding:4px 8px">MCP 服务</div>
+          <div style="padding:5px 8px;border-radius:7px;font-weight:500;
+            background:color-mix(in srgb,var(--primary) 9%,transparent)">外部连接 ←</div>
+        </div>
+        <div>
+          <div style="border:1px solid var(--border);border-radius:10px;padding:11px;font-size:12.5px;margin-bottom:9px">
+            <b>TAPD</b>
+            <div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:8px">
+              <span style="width:60px;color:var(--muted-fg)">令牌</span>
+              <input type="password" value="••••••••••••3f7a" style="flex:1;min-width:140px">
+              <span class="tag ok">已配置 · 末四位 3f7a</span></div>
+            <div style="color:var(--muted-fg);margin-top:7px;font-size:11.5px">
+              配上之后，测试工作台能贴需求链接生成用例，别的地方也能查需求。</div>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:10px;padding:11px;font-size:12.5px;opacity:.6">
+            <b>数据库连接</b> <span class="tag">还没做</span>
+            <div style="color:var(--muted-fg);margin-top:5px;font-size:11.5px">执行后直查数据落库结果。</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="fix"><b>上一版的错</b>：TAPD 令牌被我放进了测试工作台的配置页。
+    它是项目级的外部连接，塞进一个功能页等于把公共设置藏起来了。</div>
+</section>
+
+</div>
+
+<script>
+document.getElementById('th').onclick=e=>{const b=e.target.closest('button');if(!b)return;
+  [...e.currentTarget.children].forEach(x=>x.removeAttribute('data-on'));b.dataset.on='';
+  const r=document.documentElement;r.className='';const t=b.dataset.t;
+  if(t==='dark')r.className='dark';if(t==='snow')r.className='theme-snow';
+  if(t==='glass')r.className='dark theme-glass'};
+document.querySelectorAll('.expc').forEach(c=>c.onclick=()=>{
+  c.hasAttribute('data-on')?c.removeAttribute('data-on'):c.dataset.on=''});
+</script>
