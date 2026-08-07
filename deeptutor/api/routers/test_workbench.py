@@ -29,12 +29,14 @@ DeepTutor 自带按用户的工作区（`deeptutor/multi_user/paths.py` 的 `Use
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 import sys
 from typing import Any
+from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from deeptutor.multi_user.context import get_current_user_or_none
 from deeptutor.multi_user.paths import ADMIN_WORKSPACE_ROOT
@@ -119,3 +121,127 @@ def get_delivery(delivery_id: str) -> dict[str, Any]:
         # 批次 id 非法或不存在都走这里。id 校验在 workbench.safe_delivery_id 里，
         # 非法直接抛而不是"清洗后继续"——那是路径穿越的常见入口。
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ── HAR 体检（设计稿第 2 屏）─────────────────────────────────────────────────
+#
+# 这一步**不调模型**，是纯本地解析，所以免费、立即出结果。
+#
+# 最硬的一条纪律：**HAR 原件绝不落盘。** 它含未脱敏的 Authorization / Cookie /
+# 账号密码，一旦落进用户目录，后续任何一次打包、导出、备份都会把它带出去。
+# 这里只在内存里解析，落盘的是**脱敏后的报告**（草稿），供后面生成用例时引用。
+
+MAX_HAR_BYTES = 40 * 1024 * 1024
+"""HAR 上传体积上限。
+
+不是拍脑袋定的：对标 MeterSphere 时看到它的真实 issue #25162——浏览器录制的 HAR
+导入直接报 Jackson `exceeds the maximum length (5000000)`，而且是**用户传完了才吃异常**，
+没有前置提示。这里改成流式读、边读边计数、超限立刻拒，不等把整个文件读进内存再说。
+
+40 MB 是权衡后的值：一次典型抓包（约 400 个请求）在 3 MB 量级，40 MB 已经是几千个请求；
+再往上放，解析时的峰值内存（字符串 + 解析后的对象，几倍膨胀）就不好收场了——
+这一点在本项目构建镜像时被 apt 的 OOM 教训过一次，宁可保守。
+"""
+
+
+def _drafts_root() -> Path:
+    """当前用户的体检草稿目录。与交付批次同层，都在用户 scope 之下。"""
+    user = get_current_user_or_none()
+    base = Path(user.scope.root) if user is not None else ADMIN_WORKSPACE_ROOT
+    root = base / "test-workbench" / "drafts"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+async def _read_upload_capped(file: UploadFile) -> bytes:
+    """流式读上传内容，超限即拒。
+
+    分块读而不是 `await file.read()` 一把梭，就是为了在超限的那一刻就停手，
+    而不是先把一个几百 MB 的文件读进内存、再回头说"太大了"。
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(64 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_HAR_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"HAR 超过 {MAX_HAR_BYTES // (1024 * 1024)} MB 上限。"
+                    "抓包时先按域名过滤一下，或只保留要测的那段操作再导出。"
+                ),
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+@router.post("/har/inspect")
+async def inspect_har(file: UploadFile = File(...)) -> dict[str, Any]:
+    """上传 HAR，本地体检，返回脱敏后的报告并存成草稿。
+
+    返回里带 `draft_id`，下一步「描述场景 → 生成用例」凭它引用这份体检结果，
+    不必把 HAR 再传一遍（也就不必在服务端留着原件）。
+    """
+    _require_extension()  # 扩展没装时先给 503，别等到 import 才炸出 ImportError
+    from server import har_parse  # type: ignore[import-not-found]
+
+    raw = await _read_upload_capped(file)
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="HAR 不是 UTF-8 文本。它应当是浏览器导出的 .har（JSON），不是压缩包或二进制。",
+        ) from exc
+
+    report = har_parse.parse_har_report(har_content=content)
+    # parse_har_report 出错时返回带 error 字段的结果而不抛异常（工具边界的既定口径），
+    # 这里把它翻成 HTTP 语义，同时把它给的 hint 一起带出去——那句 hint 是给人看的。
+    if not report.get("ok", False):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": report.get("error"),
+                "message": report.get("message"),
+                "hint": report.get("hint"),
+            },
+        )
+
+    draft_id = f"har-{uuid4().hex[:12]}"
+    draft_path = _drafts_root() / f"{draft_id}.json"
+    draft_path.write_text(
+        json.dumps({"draft_id": draft_id, "source_name": file.filename, "report": report},
+                   ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    return {
+        "draft_id": draft_id,
+        "source_name": file.filename,
+        "report": report,
+        # 界面上必须如实说，不许写成"已全部脱敏"——凭证换成了占位，但身份证/手机号/
+        # 邮箱这类个人信息不在脱敏词表范围内（缺陷 BB-424，open）。
+        "redaction_notice": {
+            "credentials_redacted": True,
+            "pii_redacted": False,
+            "defect": "BB-424",
+            "message": "凭证已换成变量占位；身份证、手机号、邮箱这类个人信息暂不在脱敏范围内，分享产物前请自行检查。",
+        },
+    }
+
+
+@router.get("/har/drafts/{draft_id}")
+def get_har_draft(draft_id: str) -> dict[str, Any]:
+    """取回一份体检草稿。id 走与批次同一套校验，非法直接拒。"""
+    wb = _require_extension()
+    try:
+        safe = wb.safe_delivery_id(draft_id)
+    except wb.WorkbenchError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    path = _drafts_root() / f"{safe}.json"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"草稿 {safe} 不存在。")
+    return json.loads(path.read_text(encoding="utf-8"))

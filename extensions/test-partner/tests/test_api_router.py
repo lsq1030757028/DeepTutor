@@ -16,6 +16,9 @@ router 的改动能触发上游那条，但上游那条跑的是它自己的测�
 
 from __future__ import annotations
 
+import asyncio
+import io
+import json
 from pathlib import Path
 import sys
 import types
@@ -97,3 +100,92 @@ def test_listing_an_empty_workspace_does_not_blow_up(tmp_path, monkeypatch):
     out = tw.list_deliveries()
     assert isinstance(out, dict)
     assert out.get("deliveries") == []
+
+
+# ── HAR 体检路由（设计稿第 2 屏）────────────────────────────────────────────
+
+
+def _upload(content: bytes, name: str = "x.har"):
+    """造一个最小的 UploadFile 替身：只要有 async read(n) 与 filename 就够。"""
+
+    class _F:
+        filename = name
+
+        def __init__(self, data: bytes):
+            self._buf = io.BytesIO(data)
+
+        async def read(self, n: int = -1) -> bytes:
+            return self._buf.read(n)
+
+    return _F(content)
+
+
+def test_oversized_har_is_refused_before_being_read_whole(monkeypatch):
+    """体积闸必须在读完之前就拒，不是读完再说太大。
+
+    这条对着 MeterSphere 的真实 issue #25162 写的：它是用户传完了才吃
+    Jackson 异常。我们把上限调到很小，喂一个超限的流，断言 413，
+    并且**断言没有把整个内容读进来**——只读到刚超限那一刻。
+    """
+    monkeypatch.setattr(tw, "MAX_HAR_BYTES", 1024)
+    payload = b"x" * (1024 * 50)
+    up = _upload(payload)
+    with pytest.raises(tw.HTTPException) as ei:
+        asyncio.run(tw._read_upload_capped(up))
+    assert ei.value.status_code == 413
+    assert "MB" in str(ei.value.detail)
+
+
+def test_capped_read_returns_full_content_when_within_limit():
+    """没超限时要如数返回，别把内容读漏了——分块读最容易在这翻车。"""
+    payload = ("{\"log\":{\"entries\":[]}}" * 500).encode("utf-8")
+    got = asyncio.run(tw._read_upload_capped(_upload(payload)))
+    assert got == payload
+
+
+def test_drafts_root_is_per_user(tmp_path, monkeypatch):
+    """草稿目录也按用户隔离——HAR 体检报告里带着对方系统的端点与实例值。"""
+    a, b = tmp_path / "ua", tmp_path / "ub"
+    monkeypatch.setattr(tw, "get_current_user_or_none", lambda: _fake_user("a", a))
+    ra = tw._drafts_root()
+    monkeypatch.setattr(tw, "get_current_user_or_none", lambda: _fake_user("b", b))
+    rb = tw._drafts_root()
+    assert ra != rb
+    assert str(ra).startswith(str(a)) and str(rb).startswith(str(b))
+
+
+def test_draft_id_rejects_path_traversal(tmp_path, monkeypatch):
+    """草稿 id 走与批次同一套校验。这条是路径穿越的入口，必须拒而不是清洗。"""
+    monkeypatch.setattr(tw, "get_current_user_or_none", lambda: _fake_user("a", tmp_path))
+    for bad in ["../../etc/passwd", "a/b", "..", "/abs"]:
+        with pytest.raises(tw.HTTPException) as ei:
+            tw.get_har_draft(bad)
+        assert ei.value.status_code == 400, bad
+
+
+def test_inspect_har_never_writes_the_original(tmp_path, monkeypatch):
+    """**最硬的一条**：HAR 原件绝不落盘。
+
+    喂一份带真凭证的 HAR，跑完体检后遍历用户目录下所有文件，
+    断言那串凭证一个字节都没出现过。原件落了盘，后续任何一次打包导出都会带出去。
+    """
+    monkeypatch.setattr(tw, "get_current_user_or_none", lambda: _fake_user("a", tmp_path))
+    secret = "SUPERSECRETTOKENVALUE0123456789"
+    har = json.dumps({"log": {"entries": [{
+        "request": {"method": "POST", "url": "https://api.example.com/api/login",
+                    "headers": [{"name": "Authorization", "value": f"Bearer {secret}"}],
+                    "postData": {"text": json.dumps({"password": "hunter2"})}},
+        "response": {"status": 200, "content": {"text": "{\"ok\":true}"}},
+    }]}}).encode("utf-8")
+
+    out = asyncio.run(tw.inspect_har(_upload(har)))
+    assert out["draft_id"].startswith("har-")
+    # 界面文案不许宣称已全部脱敏——PII 不在范围内（BB-424）
+    assert out["redaction_notice"]["credentials_redacted"] is True
+    assert out["redaction_notice"]["pii_redacted"] is False
+    assert out["redaction_notice"]["defect"] == "BB-424"
+
+    leaked = [p for p in tmp_path.rglob("*") if p.is_file()
+              and secret in p.read_text(encoding="utf-8", errors="ignore")]
+    assert leaked == [], f"凭证落盘了：{leaked}"
+    assert "hunter2" not in json.dumps(out, ensure_ascii=False)
