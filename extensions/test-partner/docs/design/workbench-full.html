@@ -23,6 +23,11 @@ body{margin:0;background:var(--background);color:var(--foreground);font-size:14p
 .seg button[data-on]{background:var(--primary);color:var(--primary-fg)}
 .top small{color:var(--muted-fg);font-size:12px}
 .doc{max-width:1000px;margin:0 auto;padding:8px 24px 80px}
+.nav{position:sticky;top:52px;z-index:8;background:var(--background);padding:9px 0 5px;
+  border-bottom:1px solid var(--border);margin-bottom:4px}
+.nav a{font-size:11.5px;color:var(--muted-fg);text-decoration:none;padding:3px 8px;border-radius:7px;
+  display:inline-block}
+.nav a:hover{background:var(--muted);color:var(--foreground)}
 .step{margin-top:34px;scroll-margin-top:64px}
 .step>h2{font-size:17px;margin:0 0 3px;font-weight:600;display:flex;gap:9px;align-items:center}
 .step>h2 i{width:22px;height:22px;border-radius:7px;background:var(--primary);color:var(--primary-fg);
@@ -31,11 +36,14 @@ body{margin:0;background:var(--background);color:var(--foreground);font-size:14p
 .screen{border:1px solid var(--border);border-radius:13px;overflow:hidden;background:var(--card);
   margin-left:31px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
 .screen>.hd{padding:8px 13px;font-size:11.5px;color:var(--muted-fg);border-bottom:1px solid var(--border);
-  background:color-mix(in srgb,var(--muted) 35%,transparent);display:flex;gap:8px;align-items:center}
+  background:color-mix(in srgb,var(--muted) 35%,transparent)}
 .screen>.bd{padding:15px 17px}
 .why{margin:10px 0 0 31px;border-left:2px solid var(--primary);padding:2px 0 2px 12px;
   font-size:12.5px;color:var(--muted-fg)}
 .why b{color:var(--foreground)}
+.fix{margin:10px 0 0 31px;border-left:2px solid #d97706;padding:2px 0 2px 12px;font-size:12.5px;
+  color:var(--muted-fg)}
+.fix b{color:var(--foreground)}
 .ic{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.6;flex:none}
 .hdr{display:flex;gap:13px;align-items:flex-start;border-bottom:1px solid var(--border);
   padding-bottom:13px;margin-bottom:13px}
@@ -53,7 +61,7 @@ body{margin:0;background:var(--background);color:var(--foreground);font-size:14p
 .batch .d{font-size:11px;color:var(--muted-fg);margin-top:2px}
 .bar3{display:flex;height:3px;border-radius:2px;overflow:hidden;margin-top:6px;background:var(--muted)}
 .tw{overflow-x:auto;border:1px solid var(--border);border-radius:10px}
-table{border-collapse:collapse;width:100%;min-width:560px;font-size:12.5px}
+table{border-collapse:collapse;width:100%;min-width:520px;font-size:12.5px}
 th{text-align:left;font-size:11px;font-weight:500;color:var(--muted-fg);padding:7px 10px;
   border-bottom:1px solid var(--border);white-space:nowrap}
 td{padding:8px 10px;border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent);vertical-align:top}
@@ -71,14 +79,13 @@ tr:last-child td{border-bottom:0}
   border:1px solid var(--border);background:var(--card);color:var(--foreground)}
 .btn.pri{background:var(--primary);color:var(--primary-fg);border-color:transparent;font-weight:500}
 .btn.sm{font-size:11.5px;padding:4px 9px}
-.btn:disabled{opacity:.45}
 .grow{flex:1}
 .act{display:flex;gap:9px;align-items:center;flex-wrap:wrap;padding-top:11px;margin-top:11px;
   border-top:1px solid var(--border)}
 input[type=checkbox]{accent-color:var(--primary);width:13px;height:13px;margin-top:1px}
 input,select,textarea{font:inherit;font-size:12.5px;padding:6px 9px;border-radius:8px;
   border:1px solid var(--input);background:var(--card);color:var(--foreground);width:100%}
-textarea{resize:vertical;line-height:1.6}
+textarea{resize:vertical;line-height:1.7}
 .drop{border:1.5px dashed var(--border);border-radius:11px;padding:22px;text-align:center;
   color:var(--muted-fg);font-size:12.5px;background:color-mix(in srgb,var(--muted) 30%,transparent)}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:9px;margin-top:11px}
@@ -87,18 +94,10 @@ textarea{resize:vertical;line-height:1.6}
 .kpi .l{font-size:11px;color:var(--muted-fg)}
 .pii{border:1px solid rgba(245,158,11,.45);background:rgba(245,158,11,.08);border-radius:10px;
   padding:9px 11px;font-size:12px;margin-top:11px}
-.tpl{border:1px solid var(--border);border-radius:10px;overflow:hidden}
-.tpl .f{display:grid;grid-template-columns:98px 1fr;border-bottom:1px solid var(--border)}
-.tpl .f:last-child{border-bottom:0}
-.tpl .f .l{padding:8px 10px;font-size:12px;color:var(--muted-fg);
-  background:color-mix(in srgb,var(--muted) 30%,transparent);border-right:1px solid var(--border)}
-.tpl .f .v{padding:4px}
-.tpl textarea,.tpl input{border:0;background:transparent;padding:4px 6px}
 details{border:1px solid var(--border);border-radius:9px;padding:8px 11px;margin-top:9px;font-size:12px}
 summary{cursor:pointer;color:var(--muted-fg)}
 pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:7px;padding:9px;
   overflow-x:auto;font-size:11px;line-height:1.55;margin:8px 0 0}
-/* 导出卡：类别靠图标区分 */
 .exp{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:9px}
 .expc{border:1px solid var(--border);border-radius:10px;padding:11px;cursor:pointer;
   display:flex;gap:10px;align-items:flex-start}
@@ -106,12 +105,18 @@ pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:7px
 .expc .t{font-weight:500;font-size:12.5px}
 .expc .s{color:var(--muted-fg);font-size:11px;margin-top:2px}
 .fi{width:30px;height:34px;flex:none}
-.nav{position:sticky;top:52px;z-index:8;background:var(--background);padding:9px 0 5px;
-  border-bottom:1px solid var(--border);margin-bottom:4px}
-.nav a{font-size:11.5px;color:var(--muted-fg);text-decoration:none;padding:3px 8px;border-radius:7px;
-  display:inline-block}
-.nav a:hover{background:var(--muted);color:var(--foreground)}
-.envrow{display:grid;grid-template-columns:150px 1fr 66px;gap:6px;margin-bottom:6px;align-items:center}
+.envrow{display:grid;grid-template-columns:150px 1fr 56px;gap:6px;margin-bottom:6px;align-items:center}
+/* AI 工作流 */
+.wf{border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.wf .l{padding:9px 12px;display:flex;gap:9px;align-items:flex-start;font-size:12.5px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent)}
+.wf .l:last-child{border-bottom:0}
+.wf .l .s{width:15px;height:15px;flex:none;margin-top:2px}
+.wf .l.doing{background:color-mix(in srgb,var(--primary) 6%,transparent)}
+.wf .l small{display:block;color:var(--muted-fg);font-size:11.5px;margin-top:2px}
+.eg{border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:12px;
+  color:var(--muted-fg);background:color-mix(in srgb,var(--muted) 30%,transparent);margin-top:9px}
+.eg b{color:var(--foreground)}
 </style>
 
 <div class="top">
@@ -123,15 +128,16 @@ pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:7px
 
 <div class="doc">
 <div class="nav">
-  <a href="#s0">0 位置</a><a href="#s1">1 主界面</a><a href="#s2">2 导入体检</a><a href="#s3">3 挑端点</a>
-  <a href="#s4">4 场景描述</a><a href="#s5">5 用例清单</a><a href="#s6">6 审核采纳</a>
-  <a href="#s7">7 执行结果</a><a href="#s8">8 导出</a><a href="#s9">9 配置</a>
+  <a href="#s0">0 位置</a><a href="#s1">1 主界面</a><a href="#s2">2 导入体检</a>
+  <a href="#s3">3 描述场景</a><a href="#s4">4 AI 干活</a><a href="#s5">5 审核采纳</a>
+  <a href="#s6">6 执行结果</a><a href="#s7">7 导出</a>
+  <a href="#s8">8 局部配置</a><a href="#s9">9 公共配置</a>
 </div>
 
 <!-- 0 位置 -->
 <section class="step" id="s0">
   <h2><i>0</i>它在 DeepTutor 里放哪</h2>
-  <p class="k">这是产品信息架构问题，不是页面内的 tab 顺序。</p>
+  <p class="k">能力放一处，公共配置放另一处——这两件事分开。</p>
   <div class="screen"><div class="bd">
     <div style="display:grid;grid-template-columns:190px 1fr;gap:16px">
       <div style="border:1px solid var(--border);border-radius:10px;padding:10px 8px;font-size:12.5px">
@@ -147,29 +153,32 @@ pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:7px
         <div style="color:var(--muted-fg);padding:4px 8px">Knowledge Center</div>
         <div style="padding:5px 8px;border-radius:7px;font-weight:500;
           background:color-mix(in srgb,var(--primary) 9%,transparent)">测试工作台 ←</div>
-        <div style="color:var(--muted-fg);padding:4px 8px">Settings</div>
+        <div style="padding:4px 8px;color:var(--muted-fg)">Settings
+          <span class="tag" style="margin-left:4px">公共配置在这</span></div>
       </div>
       <div style="font-size:12.5px;line-height:1.7">
-        <b>建议：<span class="mono">(utility)</span> 路由组，侧边栏第二组，Knowledge Center 下面。</b>
-        <div style="margin-top:9px;color:var(--muted-fg)">
-          <b style="color:var(--foreground)">为什么不进第一组</b>：第一组（Home/Partners/Book…）是<b>每天要待着的工作区</b>，
-          测试工作台是<b>控制台</b>——来办一件事，办完就走。Memory 和 Knowledge Center 是同一类，都在第二组。<br><br>
-          <b style="color:var(--foreground)">为什么不进 <span class="mono">(workspace)</span> 组</b>：那个组的 layout 挂了
-          <span class="mono">UnifiedChatProvider</span>，且侧栏每次挂载都会发一次
-          <span class="mono">listSessions(50)</span> 请求。我们用不到聊天会话列表，进去等于白付这份成本。<br><br>
-          <b style="color:var(--foreground)">代价</b>：<span class="mono">(utility)</span> 组的 layout 更薄，
-          页头和容器要页面自己画——已在下面各屏体现。
+        <b>测试工作台</b>：<span class="mono">(utility)</span> 组，侧边栏第二组，Knowledge Center 下面。<br>
+        <span style="color:var(--muted-fg)">第一组是每天待着的工作区，它是控制台——来办一件事，办完就走，和 Memory / Knowledge Center 同类。</span>
+        <div style="margin-top:11px;padding-top:11px;border-top:1px solid var(--border)">
+          <b>配置分两层，不放一起：</b>
+          <div style="margin-top:7px;color:var(--muted-fg)">
+            <b style="color:var(--foreground)">局部配置</b>（测试环境、接口变量）→ <b style="color:var(--foreground)">在工作台里</b>。
+            它们只服务 HAR 这条能力，跟着能力走，换个能力就不需要它们。<br><br>
+            <b style="color:var(--foreground)">公共配置</b>（TAPD、数据库连接）→ <b style="color:var(--foreground)">进 DeepTutor 的 Settings</b>。
+            它们不属于测试工作台，别的地方也要用；塞进工作台等于把项目级设置藏进一个功能页里。
+          </div>
         </div>
       </div>
     </div>
   </div></div>
-  <div class="why"><b>这一条待你拍</b>：如果你希望它是"每天待着的地方"而不是"办事的地方"，那就该进第一组，我改。</div>
+  <div class="fix"><b>上一版的错</b>：把测试环境、TAPD 令牌、伙伴平铺在同一个配置页里，
+    把两个层级压平了。现在按归属拆开——第 8 屏是局部，第 9 屏是公共。</div>
 </section>
 
 <!-- 1 主界面 -->
 <section class="step" id="s1">
   <h2><i>1</i>主界面：批次 + 用例/结果</h2>
-  <p class="k">进来先看到的东西。跑过的批次默认落在「失败」，没跑过的落在用例列表。</p>
+  <p class="k">跑过的批次默认落在「失败」，没跑过的落在用例列表。</p>
   <div class="screen">
     <div class="hd"><span class="mono">/test-workbench</span></div>
     <div class="bd">
@@ -182,52 +191,47 @@ pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:7px
       <div class="two">
         <div>
           <div class="lbl">交付批次</div>
-          <div class="batch on"><div class="t">order-api · 下单主链路</div>
-            <div class="d">18 条 · 今天 14:02 跑过</div>
-            <div class="bar3"><i style="width:61%;background:#10b981"></i><i style="width:22%;background:#ef4444"></i><i style="width:17%;background:#f59e0b"></i></div></div>
-          <div class="batch"><div class="t">user-center · 登录与资料</div>
-            <div class="d">9 条 · 昨天 18:30 跑过</div>
+          <div class="batch on"><div class="t">登录到退出 · 主链路</div>
+            <div class="d">12 条 · 今天 14:02 跑过</div>
+            <div class="bar3"><i style="width:66%;background:#10b981"></i><i style="width:17%;background:#ef4444"></i><i style="width:17%;background:#f59e0b"></i></div></div>
+          <div class="batch"><div class="t">下单与优惠券</div>
+            <div class="d">18 条 · 昨天 18:30 跑过</div>
             <div class="bar3"><i style="width:100%;background:#10b981"></i></div></div>
-          <div class="batch"><div class="t">pay-gateway · 支付回调</div>
-            <div class="d">24 条 · 没跑过</div></div>
+          <div class="batch"><div class="t">支付回调</div><div class="d">24 条 · 没跑过</div></div>
         </div>
         <div>
           <div style="display:flex;gap:7px;align-items:center;padding-bottom:9px;flex-wrap:wrap">
-            <span class="tag bad">失败 4</span><span class="tag">跳过 3</span>
-            <span class="tag">通过 11</span><span class="tag">全部 18</span>
+            <span class="tag bad">失败 2</span><span class="tag">跳过 2</span>
+            <span class="tag">通过 8</span><span class="tag">全部 12</span>
             <span class="grow"></span>
-            <span style="font-size:11.5px;color:var(--muted-fg)">上次 今天 14:02 · 26 秒</span>
-          </div>
+            <span style="font-size:11.5px;color:var(--muted-fg)">上次 今天 14:02 · 18 秒</span></div>
           <div class="tw"><table>
-            <thead><tr><th style="width:28px"><input type="checkbox"></th><th style="width:66px">编号</th>
-              <th>用例</th><th style="width:82px">状态</th></tr></thead>
+            <thead><tr><th style="width:28px"><input type="checkbox"></th><th style="width:62px">编号</th>
+              <th>用例</th><th style="width:76px">状态</th></tr></thead>
             <tbody>
-              <tr><td><input type="checkbox" checked></td><td class="mono">TC-003</td>
-                <td>下单-库存不足时应拒绝
+              <tr><td><input type="checkbox" checked></td><td class="mono">TC-004</td>
+                <td>密码错误应提示且不放行
                   <div style="font-size:11px;color:var(--muted-fg);margin-top:3px;border-left:2px solid rgba(239,68,68,.4);padding-left:8px" class="mono">
-                    期望 400，实际 200；$.code == "STOCK_OUT" 未命中</div></td>
+                    期望 401，实际 200</div></td>
                 <td><span class="tag bad">失败</span></td></tr>
-              <tr><td><input type="checkbox" checked></td><td class="mono">TC-007</td>
-                <td>下单-优惠券过期</td><td><span class="tag bad">失败</span></td></tr>
-              <tr><td><input type="checkbox"></td><td class="mono">TC-005</td>
-                <td>下单-未登录应拒绝
+              <tr><td><input type="checkbox" checked></td><td class="mono">TC-009</td>
+                <td>退出后旧 token 应失效</td><td><span class="tag bad">失败</span></td></tr>
+              <tr><td><input type="checkbox"></td><td class="mono">TC-007</td>
+                <td>切换设备后会话保持
                   <div style="font-size:11px;color:var(--muted-fg);margin-top:3px">跳过：没有断言，不拿「发出去了」冒充「通过」</div></td>
                 <td><span class="tag warn">跳过</span></td></tr>
             </tbody></table></div>
           <div class="act">
-            <span style="font-size:12px;color:var(--muted-fg)">已选 <b>2</b> 条</span>
-            <span style="font-size:12px;color:var(--muted-fg)">环境</span>
+            <span style="font-size:12px;color:var(--muted-fg)">已选 <b>2</b> 条 · 环境</span>
             <select style="width:auto"><option>测试环境</option></select>
             <span style="font-size:12px;color:var(--muted-fg)">鉴权</span>
             <select style="width:auto"><option>跟随环境</option><option>登录换新</option></select>
-            <span class="grow"></span><button class="btn pri">重跑选中的 2 条</button>
-          </div>
+            <span class="grow"></span><button class="btn pri">重跑选中的 2 条</button></div>
         </div>
       </div>
     </div>
   </div>
-  <div class="why"><b>一张表，不是两张</b>：用例和结果是同一行在生命周期里换状态。视线不用重定位，
-    也不会出现「用例列表第 3 行」和「结果列表第 3 行」对不上。</div>
+  <div class="why"><b>一张表，不是两张</b>：用例和结果是同一行在生命周期里换状态。</div>
 </section>
 
 <!-- 2 导入体检 -->
@@ -235,7 +239,7 @@ pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:7px
   <h2><i>2</i>新建批次 → 导入 HAR，本地体检</h2>
   <p class="k">这一步<b>不调模型</b>，纯本地解析，免费且立即出结果。</p>
   <div class="screen">
-    <div class="hd">新建批次 · 第 1 步，共 4 步</div>
+    <div class="hd">新建批次 · 第 1 步，共 2 步</div>
     <div class="bd">
       <div class="drop">把 .har 拖到这里，或 <u>选择文件</u><br>
         <span style="font-size:11px">浏览器 F12 → Network → 右键 → Save all as HAR</span></div>
@@ -249,213 +253,163 @@ pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:7px
         <pre>静态资源  .js .css .png .svg .woff2 .ico          188
 预检       OPTIONS                                   41
 埋点/监控  /api/track  /collect  sentry.io           38
-轮询重复  同 URL+同 method 连发，只留首末各一条        30</pre>
-        <div style="margin-top:7px;font-size:11.5px">规则可调，滤掉的能单独捞回来。</div></details>
+轮询重复  同 URL+同 method 连发，只留首末各一条        30</pre></details>
       <div class="pii"><b>凭据与个人信息，说实话</b>：Authorization / Cookie / token 这类<b>凭证已换成变量占位</b>，
         界面和产物里都看不到真值。但<b>身份证、手机号、邮箱这类个人信息目前不在脱敏范围内</b>
         （缺陷 BB-424，已登记未修），<b>分享产物前请自行检查</b>。</div>
-      <div class="act"><span class="grow"></span><button class="btn pri">下一步：挑端点</button></div>
+      <div class="act"><span class="grow"></span><button class="btn pri">下一步：说说你要测什么</button></div>
     </div>
   </div>
-  <div class="why">对标 MeterSphere 时发现它<b>导入不给预览</b>，一次请求全量入库、连「新增 N 条」都不告诉你。
-    HAR 是所有导入源里最脏的，最需要这道闸——所以我们把体检做成第一等公民。</div>
+  <div class="why">对标发现 MeterSphere <b>导入不给预览</b>，一次全量入库连「新增 N 条」都不告诉你。
+    HAR 是最脏的导入源，最需要这道闸。</div>
 </section>
 
-<!-- 3 挑端点 -->
+<!-- 3 描述场景 -->
 <section class="step" id="s3">
-  <h2><i>3</i>挑要测的端点</h2>
-  <p class="k">按端点归并，不是按请求。「调用次数」能看出哪些是主链路。</p>
+  <h2><i>3</i>用一段话说你要测什么</h2>
+  <p class="k">就这一个框。<b>不填表、不勾选、不分字段。</b></p>
   <div class="screen">
-    <div class="hd">新建批次 · 第 2 步，共 4 步</div>
+    <div class="hd">新建批次 · 第 2 步，共 2 步</div>
     <div class="bd">
-      <div class="tw"><table>
-        <thead><tr><th style="width:28px"><input type="checkbox" checked></th><th>端点</th>
-          <th style="width:60px">调用</th><th style="width:88px">状态码</th><th style="width:74px">鉴权</th></tr></thead>
-        <tbody>
-          <tr><td><input type="checkbox" checked></td>
-            <td><span class="m post">POST</span> <span class="mono">/api/order/create</span></td>
-            <td class="mono">14</td><td><span class="tag ok">200</span> <span class="tag bad">400</span></td>
-            <td><span class="tag">Bearer</span></td></tr>
-          <tr><td><input type="checkbox" checked></td>
-            <td><span class="m get">GET</span> <span class="mono">/api/order/{id}</span></td>
-            <td class="mono">31</td><td><span class="tag ok">200</span></td><td><span class="tag">Bearer</span></td></tr>
-          <tr><td><input type="checkbox" checked></td>
-            <td><span class="m post">POST</span> <span class="mono">/api/coupon/apply</span></td>
-            <td class="mono">6</td><td><span class="tag ok">200</span> <span class="tag warn">422</span></td>
-            <td><span class="tag">Bearer</span></td></tr>
-          <tr style="opacity:.5"><td><input type="checkbox"></td>
-            <td><span class="m get">GET</span> <span class="mono">/api/config/theme</span>
-              <span class="tag" style="margin-left:5px">疑似非业务</span></td>
-            <td class="mono">52</td><td><span class="tag ok">200</span></td><td>—</td></tr>
-        </tbody></table></div>
-      <div class="act"><span style="font-size:12px;color:var(--muted-fg)">已选 3 个端点</span>
-        <span class="grow"></span><button class="btn">上一步</button>
-        <button class="btn pri">下一步：描述场景</button></div>
-    </div>
-  </div>
-</section>
-
-<!-- 4 场景描述 -->
-<section class="step" id="s4">
-  <h2><i>4</i>场景描述：AI 起草，你改</h2>
-  <p class="k">这是生成用例的核心输入，<b>属于 HAR 流程的一步，不是配置项</b>。</p>
-  <div class="screen">
-    <div class="hd">新建批次 · 第 3 步，共 4 步</div>
-    <div class="bd">
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-        <span style="font-size:12.5px">AI 读完这 3 个端点的流量后起草了下面这段。</span>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+        <span style="font-size:12.5px">AI 看完这份抓包，猜你在测这个——不对就直接改。</span>
         <span class="grow"></span>
-        <button class="btn sm">重新起草</button><button class="btn sm">恢复 AI 原稿</button>
+        <button class="btn sm">重新猜一次</button><button class="btn sm">清空自己写</button></div>
+      <textarea rows="4">目前测的是输入密码登录，点击首页，切换设备，退出登录。</textarea>
+      <div class="eg">
+        <b>就像跟同事描述你刚才在页面上点了什么</b>，一两句话就够。例如：<br>
+        · 目前测的是输入密码登录，点击首页，切换设备，退出登录<br>
+        · 下单流程：加购物车、用优惠券、提交订单，重点是库存不能超卖<br>
+        · 只测搜索，关注关键词为空和超长的情况
       </div>
-      <div class="tpl">
-        <div class="f"><div class="l">业务场景</div><div class="v">
-          <input value="电商下单主链路：加购 → 应用优惠券 → 提交订单 → 查订单详情"></div></div>
-        <div class="f"><div class="l">前置条件</div><div class="v">
-          <textarea rows="2">已登录用户（HAR 里识别到 POST /api/auth/login，token 走 Authorization: Bearer）；购物车已有 SKU-1001</textarea></div></div>
-        <div class="f"><div class="l">要重点验的</div><div class="v">
-          <textarea rows="3">1. 下单成功后 orderId 必须返回，且订单详情能查到刚下的单
-2. 库存不足时应拒绝，不能超卖
-3. 优惠券过期/不可叠加应返回明确错误码，不能静默忽略</textarea></div></div>
-        <div class="f"><div class="l">不测什么</div><div class="v">
-          <textarea rows="2">支付回调（这份 HAR 没抓到）；商品搜索与推荐（属另一条链路）</textarea></div></div>
-        <div class="f"><div class="l">数据约束</div><div class="v">
-          <textarea rows="2">qty 取 1-99；couponId 可为 null；同一 SKU 下单幂等（HAR 里调过 14 次）</textarea></div></div>
-      </div>
-      <details><summary>看看 AI 是按什么规则起草的（可改，是你个人的预设）</summary>
-        <textarea rows="6" class="mono" style="font-size:11px;margin-top:8px">你会拿到一份 HAR 体检报告（端点清单、调用次数、状态码分布、识别到的登录请求）。
-按「业务场景 / 前置条件 / 要重点验的 / 不测什么 / 数据约束」五段起草。
-- 只写 HAR 里真实出现过的，没抓到的写进「不测什么」，不要编
-- 「要重点验的」按业务价值排序，最多 5 条
-- 「数据约束」从实例值推断，写明是推断不是规范</textarea>
+      <details><summary>AI 是怎么猜的（可改，是你个人的预设）</summary>
+        <textarea rows="4" class="mono" style="font-size:11px;margin-top:8px">看完 HAR 体检报告，用一段大白话说这份抓包在做什么业务动作。
+按用户实际点击的先后顺序讲，一两句话，不要列字段、不要写术语。
+没抓到的不要提。</textarea>
         <div style="display:flex;gap:8px;margin-top:8px"><button class="btn sm">存为我的默认</button>
           <button class="btn sm">恢复系统默认</button></div></details>
       <div class="act"><span class="grow"></span><button class="btn">上一步</button>
-        <button class="btn pri">生成用例清单</button></div>
+        <button class="btn pri">交给 AI 生成用例</button></div>
     </div>
   </div>
-  <div class="why"><b>整段 + 固定范本 + 可编辑表单是同一件事</b>：范本的五个字段就是表单的五个格子——
-    读起来是一段完整的场景描述，改起来是填空，AI 起草时也知道该往哪几个格子里填。
-    自由文本框让人不知道写什么；纯勾选表达不了「库存不足不能超卖」这种业务话。</div>
+  <div class="fix"><b>上一版的错</b>：我把这里做成了五个字段的表单（业务场景 / 前置条件 / 要重点验的 /
+    不测什么 / 数据约束）。「降低心智负担」的手段被我做成了增加负担的形式——
+    用户不知道什么叫「数据约束」，也不该知道。<b>范本应该是一句示范，不是一张表格。</b></div>
 </section>
 
-<!-- 5 用例清单 -->
-<section class="step" id="s5">
-  <h2><i>5</i>先确认清单，再生成细节</h2>
-  <p class="k">这一步只生成<b>标题和意图</b>。改标题比改整条用例便宜十倍。</p>
+<!-- 4 AI 干活 -->
+<section class="step" id="s4">
+  <h2><i>4</i>AI 干活：挑端点、生成用例</h2>
+  <p class="k"><b>挑端点是 AI 的活，不是你的活。</b>你只需要看它挑得对不对。</p>
   <div class="screen">
-    <div class="hd">新建批次 · 第 4 步，共 4 步 · 清单</div>
+    <div class="hd">生成中</div>
     <div class="bd">
-      <div class="tw"><table>
-        <thead><tr><th style="width:28px"><input type="checkbox" checked></th><th style="width:66px">编号</th>
-          <th>标题（可就地改）</th><th style="width:66px">意图</th><th style="width:140px">来源端点</th></tr></thead>
-        <tbody>
-          <tr><td><input type="checkbox" checked></td><td class="mono">TC-001</td>
-            <td>正常下单，库存充足</td><td><span class="tag ok">正常</span></td>
-            <td class="mono">POST /api/order/create</td></tr>
-          <tr><td><input type="checkbox" checked></td><td class="mono">TC-002</td>
-            <td>库存不足应拒绝，不能超卖</td><td><span class="tag warn">边界</span></td>
-            <td class="mono">POST /api/order/create</td></tr>
-          <tr><td><input type="checkbox" checked></td><td class="mono">TC-003</td>
-            <td>优惠券过期应返回明确错误码</td><td><span class="tag warn">边界</span></td>
-            <td class="mono">POST /api/coupon/apply</td></tr>
-          <tr style="opacity:.55"><td><input type="checkbox"></td><td class="mono">TC-004</td>
-            <td>查询不存在的订单 <span class="tag warn">HAR 里没出现过 404，断言是猜的</span></td>
-            <td><span class="tag warn">边界</span></td><td class="mono">GET /api/order/{id}</td></tr>
-        </tbody></table></div>
-      <div class="act"><span style="font-size:12px;color:var(--muted-fg)">已选 3 / 4 · 没勾的不生成细节，不花钱</span>
-        <span class="grow"></span><button class="btn">重新出一版</button>
-        <button class="btn pri">生成这 3 条的请求与断言</button></div>
+      <div class="wf">
+        <div class="l"><svg class="s" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2"><path d="m5 12 5 5L20 7"/></svg>
+          <div>读懂你的场景描述<small>登录 → 首页 → 切换设备 → 退出，4 个业务动作</small></div></div>
+        <div class="l"><svg class="s" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2"><path d="m5 12 5 5L20 7"/></svg>
+          <div>从 23 个端点里挑出相关的 → <b>选中 6 个</b>
+            <small><span class="mono">POST /api/auth/login</span> · <span class="mono">GET /api/home/feed</span> ·
+              <span class="mono">POST /api/device/switch</span> · <span class="mono">GET /api/user/profile</span> ·
+              <span class="mono">POST /api/auth/logout</span> · <span class="mono">GET /api/session/check</span>
+              　<a style="text-decoration:underline;cursor:pointer">挑得不对？点这里调整</a></small></div></div>
+        <div class="l doing"><svg class="s" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9" opacity=".25"/><path d="M12 3a9 9 0 0 1 9 9"/></svg>
+          <div>生成用例<small>已出 8 条，还在写…</small></div></div>
+        <div class="l" style="opacity:.45"><svg class="s" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
+          <div>自检并标出有问题的<small>待生成完成</small></div></div>
+      </div>
+      <div class="act"><span class="grow"></span><button class="btn">停止</button></div>
     </div>
   </div>
-  <div class="why">Apifox 自己承认「接口文档越完善 AI 效果越好」，而它输入是 OpenAPI 自带 schema。
-    <b>HAR 没有 schema，只有一次调用的实例值，我们的输入质量天然更差</b>——所以把人工审核放在最便宜的位置。</div>
+  <div class="fix"><b>上一版的错</b>：我做了一屏让用户在端点表里逐个勾选。
+    一份 HAR 几百个接口时，那是把 AI 该干的苦力活外抛给人。
+    现在挑端点在 AI 工作流里，<b>结果给你看、可以调，但不用你动手</b>。</div>
 </section>
 
-<!-- 6 审核采纳 -->
-<section class="step" id="s6">
-  <h2><i>6</i>审核后采纳</h2>
+<!-- 5 审核采纳 -->
+<section class="step" id="s5">
+  <h2><i>5</i>审核后采纳</h2>
   <p class="k"><b>勾选是入库的唯一闸门</b>：生成 ≠ 入库。</p>
   <div class="screen">
-    <div class="hd">新建批次 · 审核</div>
+    <div class="hd">生成完成 · 12 条 · 审核</div>
     <div class="bd">
       <div class="tw"><table>
-        <thead><tr><th style="width:28px"><input type="checkbox"></th><th style="width:66px">编号</th>
-          <th>用例</th><th style="width:96px">校验</th></tr></thead>
+        <thead><tr><th style="width:28px"><input type="checkbox"></th><th style="width:62px">编号</th>
+          <th>用例</th><th style="width:92px">校验</th></tr></thead>
         <tbody>
           <tr><td><input type="checkbox" checked></td><td class="mono">TC-001</td>
-            <td>正常下单，库存充足
+            <td>正确账号密码应登录成功
               <div class="mono" style="font-size:11px;color:var(--muted-fg);margin-top:3px">
-                POST /api/order/create · 断言 status==200, $.data.orderId 存在</div></td>
+                POST /api/auth/login · 断言 status==200, $.data.token 存在</div></td>
             <td><span class="tag ok">可采纳</span></td></tr>
-          <tr><td><input type="checkbox" checked></td><td class="mono">TC-002</td>
-            <td>库存不足应拒绝
+          <tr><td><input type="checkbox" checked></td><td class="mono">TC-004</td>
+            <td>密码错误应提示且不放行
               <div class="mono" style="font-size:11px;color:var(--muted-fg);margin-top:3px">
-                POST /api/order/create · 断言 status==400</div>
+                POST /api/auth/login · 断言 status==401</div>
               <div style="font-size:11px;margin-top:3px;color:#d97706">只断言了 status，跑起来只能证明接口活着。
                 <a style="text-decoration:underline;cursor:pointer">补一条响应体断言</a></div></td>
             <td><span class="tag warn">1 处提醒</span></td></tr>
-          <tr><td><input type="checkbox"></td><td class="mono">TC-003</td>
-            <td>优惠券过期
+          <tr><td><input type="checkbox"></td><td class="mono">TC-009</td>
+            <td>退出后旧 token 应失效
               <div style="font-size:11px;margin-top:3px;color:#dc2626">E13 URL 与来源端点对不上（模型写成
-                <span class="mono">/api/coupons/apply</span>）——
-                <a style="text-decoration:underline;cursor:pointer">改回 /api/coupon/apply</a> 或
+                <span class="mono">/api/auth/signout</span>）——
+                <a style="text-decoration:underline;cursor:pointer">改回 /api/auth/logout</a> 或
                 <a style="text-decoration:underline;cursor:pointer">就地编辑</a></div></td>
             <td><span class="tag bad">1 处待修</span></td></tr>
         </tbody></table></div>
-      <div class="act"><span style="font-size:12px;color:var(--muted-fg)">已选 <b>2</b> 条 · 待修的不能采纳</span>
+      <div class="act"><span style="font-size:12px;color:var(--muted-fg)">已选 <b>10</b> 条 · 待修的不能采纳</span>
         <span class="grow"></span><button class="btn">全部重生成</button>
-        <button class="btn pri">采纳 2 条，建批次</button></div>
+        <button class="btn pri">采纳 10 条，建批次</button></div>
     </div>
   </div>
-  <div class="why">红色一定带<b>可操作的出路</b>（改回去 / 就地编辑），不留死路——
-    界面指出问题却不给控件，比不指出更让人堵。</div>
+  <div class="why">红色一定带<b>可操作的出路</b>（改回去 / 就地编辑）——界面指出问题却不给控件，
+    比不指出更让人堵。</div>
 </section>
 
-<!-- 7 执行结果 -->
-<section class="step" id="s7">
-  <h2><i>7</i>执行与结果</h2>
-  <p class="k">回到主界面那张表，同一行换状态。执行是有副作用的动作，要二次确认。</p>
+<!-- 6 执行结果 -->
+<section class="step" id="s6">
+  <h2><i>6</i>执行与结果</h2>
+  <p class="k">回到主界面那张表，同一行换状态。</p>
   <div class="screen">
     <div class="hd">执行中 · 同步逐条，不并发</div>
     <div class="bd">
       <div class="tw"><table>
-        <thead><tr><th style="width:66px">编号</th><th>用例</th><th style="width:82px">状态</th><th style="width:60px">耗时</th></tr></thead>
+        <thead><tr><th style="width:62px">编号</th><th>用例</th><th style="width:76px">状态</th><th style="width:56px">耗时</th></tr></thead>
         <tbody>
-          <tr><td class="mono">TC-001</td><td>正常下单，库存充足</td><td><span class="tag ok">通过</span></td><td class="mono">0.7s</td></tr>
-          <tr><td class="mono">TC-002</td><td>库存不足应拒绝
+          <tr><td class="mono">TC-001</td><td>正确账号密码应登录成功</td><td><span class="tag ok">通过</span></td><td class="mono">0.7s</td></tr>
+          <tr><td class="mono">TC-004</td><td>密码错误应提示且不放行
             <div class="mono" style="font-size:11px;color:var(--muted-fg);margin-top:3px;border-left:2px solid rgba(239,68,68,.4);padding-left:8px">
-              期望 400，实际 200</div></td>
+              期望 401，实际 200</div></td>
             <td><span class="tag bad">失败</span></td><td class="mono">1.2s</td></tr>
-          <tr><td class="mono">TC-003</td><td>优惠券过期</td>
+          <tr><td class="mono">TC-007</td><td>切换设备后会话保持</td>
             <td><span class="tag" style="background:color-mix(in srgb,var(--primary) 12%,transparent);color:var(--primary);border:0">执行中</span></td>
             <td class="mono">—</td></tr>
         </tbody></table></div>
       <div class="act">
         <div style="flex:1;min-width:150px;height:5px;border-radius:3px;background:var(--muted);overflow:hidden">
-          <i style="display:block;height:100%;width:66%;background:var(--primary)"></i></div>
-        <span style="font-size:12px;color:var(--muted-fg)">第 3 / 5 条</span>
+          <i style="display:block;height:100%;width:60%;background:var(--primary)"></i></div>
+        <span style="font-size:12px;color:var(--muted-fg)">第 6 / 10 条</span>
         <button class="btn">停止</button></div>
       <div class="pii" style="border-color:var(--border);background:color-mix(in srgb,var(--muted) 40%,transparent)">
-        响应体里若回显了凭证，报告里会换成 <span class="mono">{{token}}</span>。页面上只出现<b>环境名</b>，
-        值由本机解析，不经过聊天也不进结果。</div>
+        响应体里若回显了凭证，报告里会换成 <span class="mono">{{token}}</span>。页面上只出现<b>环境名</b>。</div>
     </div>
   </div>
 </section>
 
-<!-- 8 导出 -->
-<section class="step" id="s8">
-  <h2><i>8</i>导出</h2>
-  <p class="k">每种导出<b>用自己的文件类型图标区分</b>，不靠读文字辨认。可多选。</p>
+<!-- 7 导出 -->
+<section class="step" id="s7">
+  <h2><i>7</i>导出</h2>
+  <p class="k">每种用自己的文件类型图标区分，不靠读文字辨认。可多选。</p>
   <div class="screen">
-    <div class="hd">导出 · order-api 下单主链路（18 条）</div>
+    <div class="hd">导出 · 登录到退出 主链路（12 条）</div>
     <div class="bd">
       <div class="exp">
         <div class="expc" data-on>
           <svg class="fi" viewBox="0 0 30 34"><path d="M3 2h16l8 8v22a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" fill="#1d6f42"/><path d="M19 2l8 8h-8V2z" fill="#134a2c"/><path d="M7 16h14v12H7z" fill="#fff" opacity=".92"/><path d="M7 20h14M7 24h14M12 16v12M17 16v12" stroke="#1d6f42" stroke-width="1"/></svg>
-          <div><div class="t">Excel</div><div class="s">列名对齐 TAPD 用例库，人评审用</div></div></div>
+          <div><div class="t">Excel</div><div class="s">列名对齐 TAPD 用例库</div></div></div>
         <div class="expc" data-on>
           <svg class="fi" viewBox="0 0 30 34"><path d="M3 2h16l8 8v22a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" fill="#ff6c37"/><path d="M19 2l8 8h-8V2z" fill="#c74a1d"/><circle cx="14" cy="22" r="6.5" fill="none" stroke="#fff" stroke-width="1.8"/><path d="M14 22l4.5-4.5" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/></svg>
-          <div><div class="t">Postman</div><div class="s">Apifox / Postman 可直接导入执行</div></div></div>
+          <div><div class="t">Postman</div><div class="s">Apifox / Postman 直接导入执行</div></div></div>
         <div class="expc">
           <svg class="fi" viewBox="0 0 30 34"><path d="M3 2h16l8 8v22a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" fill="#4b5563"/><path d="M19 2l8 8h-8V2z" fill="#1f2937"/><path d="M6 18v9M6 18l3.5 4.5L13 18v9M16.5 18v6l3 3 3-3v-6" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <div><div class="t">Markdown</div><div class="s">贴进文档或聊天里看</div></div></div>
@@ -463,7 +417,7 @@ pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:7px
           <svg class="fi" viewBox="0 0 30 34"><path d="M3 2h16l8 8v22a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" fill="#0f766e"/><path d="M19 2l8 8h-8V2z" fill="#0b4f49"/><text x="14" y="27" font-size="9" font-family="monospace" font-weight="700" fill="#fff" text-anchor="middle">CSV</text></svg>
           <div><div class="t">CSV</div><div class="s">给别的系统吃</div></div></div>
       </div>
-      <div class="act"><span style="font-size:12px;color:var(--muted-fg)">已选 2 种 · 会打包成一个 zip</span>
+      <div class="act"><span style="font-size:12px;color:var(--muted-fg)">已选 2 种 · 打包成一个 zip</span>
         <span class="grow"></span><button class="btn pri">导出</button></div>
     </div>
   </div>
@@ -471,23 +425,22 @@ pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:7px
     这一屏只是把它们暴露出来并<b>用图标分类</b>。</div>
 </section>
 
-<!-- 9 配置 -->
-<section class="step" id="s9">
-  <h2><i>9</i>配置</h2>
-  <p class="k">只放<b>真正的配置</b>：环境、连接凭据、伙伴。生成能力不在这里。</p>
+<!-- 8 局部配置 -->
+<section class="step" id="s8">
+  <h2><i>8</i>局部配置：跟着能力走</h2>
+  <p class="k">测试环境、接口变量——只服务这条能力，所以<b>就放在工作台里</b>。</p>
   <div class="screen">
-    <div class="hd">测试工作台 · 配置</div>
+    <div class="hd">测试工作台 · 环境与变量</div>
     <div class="bd">
       <div style="border:1px solid rgba(16,185,129,.35);background:rgba(16,185,129,.07);border-radius:9px;
         padding:8px 11px;font-size:12px;margin-bottom:12px">
-        <b>这些只有你自己看得到。</b>环境、变量、凭据都按用户隔离，别人用他们自己的项目配置（决策 0009）。</div>
-
-      <div style="font-size:13px;font-weight:600;margin-bottom:7px">测试环境</div>
-      <div style="border:1px solid var(--border);border-radius:10px;padding:11px;margin-bottom:9px">
+        <b>只有你自己看得到。</b>环境、变量、凭据按用户隔离，别人用他们自己的（决策 0009）。</div>
+      <div style="border:1px solid var(--border);border-radius:10px;padding:11px">
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:9px">
           <span style="width:7px;height:7px;border-radius:50%;background:#10b981"></span>
           <b style="font-size:12.5px">测试环境</b>
-          <span class="mono" style="color:var(--muted-fg)">https://api-test.example.com</span></div>
+          <span class="mono" style="color:var(--muted-fg)">https://api-test.example.com</span>
+          <span class="grow"></span><button class="btn sm">新建环境</button></div>
         <div class="envrow"><span style="font-size:11px;color:var(--muted-fg)">变量名</span>
           <span style="font-size:11px;color:var(--muted-fg)">值</span><span></span></div>
         <div class="envrow"><input value="token"><input type="password" value="xxxxxxxxxxxx"><button class="btn sm">删</button></div>
@@ -497,30 +450,47 @@ pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:7px
         <div style="font-size:11px;color:var(--muted-fg);margin-top:6px">
           后三个是<b>保留变量名</b>，配齐就能在执行时选「登录换新」自动拿新 token。</div>
       </div>
+      <div style="font-size:11.5px;color:var(--muted-fg);margin-top:11px">
+        执行时按<b>环境名</b>引用，值由本机解析，不经过聊天也不进结果。</div>
+    </div>
+  </div>
+</section>
 
-      <div style="font-size:13px;font-weight:600;margin:14px 0 7px">连接与凭据</div>
-      <div style="border:1px solid var(--border);border-radius:10px;padding:11px;font-size:12.5px">
-        <div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap">
-          <span style="width:88px;color:var(--muted-fg)">TAPD 令牌</span>
-          <input type="password" value="••••••••••••3f7a" style="flex:1;min-width:150px">
-          <span class="tag ok">已配置 · 末四位 3f7a</span></div>
-        <div style="display:flex;gap:9px;align-items:center;margin-top:9px">
-          <span style="width:88px;color:var(--muted-fg)">状态</span>
-          <span><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#10b981"></span>
-            正常 · 今天 09:12 校验</span><span class="grow"></span><button class="btn sm">重新校验</button></div>
-      </div>
-
-      <div style="font-size:13px;font-weight:600;margin:14px 0 7px">测试伙伴</div>
-      <div style="border:1px solid var(--border);border-radius:10px;padding:11px;font-size:12.5px">
-        <b>test-agent</b> <span class="tag ok">已连接 · 6 个工具</span>
-        <div style="color:var(--muted-fg);margin-top:5px">
-          工作台管固定流程，开放式的问题在聊天里问伙伴。两边共用同一套工具和环境——
-          工作台点「生成用例」，走的就是伙伴那条链路。</div>
+<!-- 9 公共配置 -->
+<section class="step" id="s9">
+  <h2><i>9</i>公共配置：进 DeepTutor 的 Settings</h2>
+  <p class="k">TAPD、数据库这些<b>不属于测试工作台</b>，别的地方也要用。</p>
+  <div class="screen">
+    <div class="hd"><span class="mono">/settings</span> · DeepTutor 设置</div>
+    <div class="bd">
+      <div style="display:grid;grid-template-columns:150px 1fr;gap:14px">
+        <div style="font-size:12.5px">
+          <div style="color:var(--muted-fg);padding:4px 8px">通用</div>
+          <div style="color:var(--muted-fg);padding:4px 8px">模型</div>
+          <div style="color:var(--muted-fg);padding:4px 8px">外观</div>
+          <div style="color:var(--muted-fg);padding:4px 8px">MCP 服务</div>
+          <div style="padding:5px 8px;border-radius:7px;font-weight:500;
+            background:color-mix(in srgb,var(--primary) 9%,transparent)">外部连接 ←</div>
+        </div>
+        <div>
+          <div style="border:1px solid var(--border);border-radius:10px;padding:11px;font-size:12.5px;margin-bottom:9px">
+            <b>TAPD</b>
+            <div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:8px">
+              <span style="width:60px;color:var(--muted-fg)">令牌</span>
+              <input type="password" value="••••••••••••3f7a" style="flex:1;min-width:140px">
+              <span class="tag ok">已配置 · 末四位 3f7a</span></div>
+            <div style="color:var(--muted-fg);margin-top:7px;font-size:11.5px">
+              配上之后，测试工作台能贴需求链接生成用例，别的地方也能查需求。</div>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:10px;padding:11px;font-size:12.5px;opacity:.6">
+            <b>数据库连接</b> <span class="tag">还没做</span>
+            <div style="color:var(--muted-fg);margin-top:5px;font-size:11.5px">执行后直查数据落库结果。</div></div>
+        </div>
       </div>
     </div>
   </div>
-  <div class="why"><b>上一版我把「场景 prompt」放进了配置页，那是错的</b>——
-    它是生成流程的一步（第 4 屏），不是配置项。配置只放"配一次、长期不动"的东西。</div>
+  <div class="fix"><b>上一版的错</b>：TAPD 令牌被我放进了测试工作台的配置页。
+    它是项目级的外部连接，塞进一个功能页等于把公共设置藏起来了。</div>
 </section>
 
 </div>
