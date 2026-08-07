@@ -288,8 +288,16 @@ def normalize_format(fmt: str) -> str:
 
 
 def save_delivery(cases: Any, fmt: str = DEFAULT_FORMAT, title: str = "",
-                  source_fingerprint: str = "", login_request: Any = None) -> dict:
+                  source_fingerprint: str = "", login_request: Any = None,
+                  out_root: str = "") -> dict:
     """落盘交付产物 + 收据。出错返回带 error 字段的可读结果，不抛裸异常。
+
+    `out_root` 留空时落在仓库根的 `deliveries/`（MCP 工具那条线的既有行为，
+    一行不改）。工作台走 HTTP 面时会把**当前用户的**批次目录传进来——
+    决策 0009 要求按用户隔离，而 `DELIVERIES_DIR` 是模块常量、全进程共用一个。
+
+    为什么是参数而不是请求期改写模块常量：同进程里两个用户同时采纳会互踩，
+    改常量这种进程级可变状态在并发下必然出错。
 
     入参形状先过 `args_tolerance`（cases 的 JSON 字符串/单键包裹/单个用例对象、
     format 的大小写与空格都救回来），救回的动作如实回显在返回值的 `normalized` 里。
@@ -314,7 +322,7 @@ def save_delivery(cases: Any, fmt: str = DEFAULT_FORMAT, title: str = "",
         title = str(title or "").strip() or "测试用例"
         slug = slugify(title)
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        base_dir = os.path.join(DELIVERIES_DIR, f"{stamp}-{slug}")
+        base_dir = os.path.join(out_root or DELIVERIES_DIR, f"{stamp}-{slug}")
         out_dir, bump = base_dir, 1
         while os.path.exists(out_dir):      # 同秒同题的第二次交付不覆盖前一次
             bump += 1
@@ -442,15 +450,15 @@ def save_delivery(cases: Any, fmt: str = DEFAULT_FORMAT, title: str = "",
     except args_tolerance.ArgsToleranceError as exc:
         return {"ok": False, "error": exc.code, "message": exc.message,
                 "hint": exc.hint, "normalized": exc.normalized,
-                "deliveries_dir": DELIVERIES_DIR}
+                "deliveries_dir": out_root or DELIVERIES_DIR}
     except DeliveryError as exc:
         result = {"ok": False, "error": exc.code, "message": exc.message,
-                  "hint": exc.hint, "deliveries_dir": DELIVERIES_DIR}
+                  "hint": exc.hint, "deliveries_dir": out_root or DELIVERIES_DIR}
         if notes:
             result["normalized"] = notes
         return result
     except Exception as exc:  # noqa: BLE001 - 工具边界收口
         return {"ok": False, "error": "DELIVERY_FAILED",
                 "message": f"落盘出错：{type(exc).__name__}: {exc}",
-                "hint": "确认 deliveries/ 目录可写、产物文件未被 Excel 占用。",
-                "deliveries_dir": DELIVERIES_DIR}
+                "hint": "确认交付目录可写、产物文件未被 Excel 占用。",
+                "deliveries_dir": out_root or DELIVERIES_DIR}

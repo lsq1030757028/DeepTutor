@@ -221,3 +221,65 @@ def cancel_job(job_id: str) -> dict[str, Any]:
     if job is None:
         raise HTTPException(status_code=404, detail="任务不存在。")
     return job.public()
+
+
+# ── 采纳：勾选是入库的唯一闸门 ────────────────────────────────────────────
+
+class AdoptRequest(BaseModel):
+    #: 要采纳的用例编号。**空列表直接拒**——"一条都没勾"多半是误点，
+    #: 而不是"我想建一个空批次"。
+    case_ids: list[str] = Field(default_factory=list)
+    title: str = ""
+    fmt: str = ""
+
+
+@router.post("/generate/jobs/{job_id}/adopt")
+def adopt_cases(job_id: str, body: AdoptRequest) -> dict[str, Any]:
+    """把勾中的用例落成一个交付批次。
+
+    生成 ≠ 入库（对标 MeterSphere 时定的核心交互）：模型产出停在任务结果里，
+    只有用户勾过的那几条才写进批次。这里是那道闸的服务端实现——
+    页面上的复选框只是它的投影，绕开页面直接打接口也越不过去。
+    """
+    owner = _owner()
+    job = _STORE.get(job_id, owner)
+    if job is None:
+        raise HTTPException(status_code=404, detail="任务不存在。")
+    if job.state != _jobs.DONE or not job.result:
+        raise HTTPException(status_code=409, detail="这个任务还没有可采纳的结果。")
+
+    wanted = [cid for cid in body.case_ids if cid]
+    if not wanted:
+        raise HTTPException(status_code=400, detail="一条都没勾选。请先选中要采纳的用例。")
+
+    by_id = {str(c.get("id")): c for c in job.result.get("cases") or []}
+    unknown = [cid for cid in wanted if cid not in by_id]
+    if unknown:
+        # 不静默忽略：勾了个不存在的编号，多半是页面和结果对不上了，
+        # 悄悄少存几条比报错更难查。
+        raise HTTPException(
+            status_code=400,
+            detail=f"这些编号不在本次生成结果里：{'、'.join(unknown)}",
+        )
+
+    picked = [by_id[cid] for cid in wanted]
+
+    from server import delivery  # type: ignore[import-not-found]
+
+    from deeptutor.api.routers.test_workbench_paths import deliveries_root
+
+    result = delivery.save_delivery(
+        picked,
+        fmt=body.fmt or delivery.DEFAULT_FORMAT,
+        title=body.title or "从抓包生成的用例",
+        login_request=(job.result.get("login_request") or None),
+        # 落进**当前用户的**批次目录。不传的话会写到仓库根的共享目录，
+        # 决策 0009 的隔离就是假的。
+        out_root=deliveries_root(),
+    )
+    if not result.get("ok", False):
+        raise HTTPException(status_code=500, detail={
+            "error": result.get("error"), "message": result.get("message"),
+            "hint": result.get("hint"),
+        })
+    return {"adopted": len(picked), "delivery": result}

@@ -206,3 +206,100 @@ def test_user_scenario_is_passed_through_untouched(monkeypatch, as_alice, materi
 
     asyncio.run(go())
     assert seen.get("scenario") == "我自己写的"
+
+
+# ── 采纳：勾选是入库的唯一闸门，服务端也要守 ─────────────────────────────
+
+def _done_job(store, owner="alice", n=3):
+    job = store.create(owner)
+    store.update(job.id, state=jobs_mod.DONE, result={
+        "cases": [{"id": f"TC-{i:03d}", "title": f"用例{i}",
+                   "request": {"method": "GET", "url": "/api/x"},
+                   "assertions": [{"kind": "status", "expect": 200}]}
+                  for i in range(1, n + 1)],
+        "notes": [], "calls_used": 2, "complete": True,
+    })
+    return job
+
+
+def test_adopt_only_writes_the_checked_cases(monkeypatch, as_alice, clean_store, tmp_path):
+    """生成 ≠ 入库。页面上的复选框只是这道闸的投影——
+
+    绕开页面直接打接口也必须越不过去。
+    """
+    job = _done_job(clean_store, n=3)
+    seen = {}
+
+    from server import delivery as delivery_mod
+
+    def fake_save(cases, **kw):
+        seen["cases"] = cases
+        seen["out_root"] = kw.get("out_root")
+        return {"ok": True, "delivery_dir": str(tmp_path)}
+
+    monkeypatch.setattr(delivery_mod, "save_delivery", fake_save)
+    monkeypatch.setattr(
+        "deeptutor.api.routers.test_workbench_paths.deliveries_root",
+        lambda: str(tmp_path))
+
+    out = gen.adopt_cases(job.id, gen.AdoptRequest(case_ids=["TC-001", "TC-003"]))
+    assert out["adopted"] == 2
+    assert [c["id"] for c in seen["cases"]] == ["TC-001", "TC-003"]
+
+
+def test_adopt_writes_into_the_current_users_directory(monkeypatch, as_alice,
+                                                       clean_store, tmp_path):
+    """不传 out_root 的话会落到仓库根的共享目录，0009 的隔离就是假的。"""
+    job = _done_job(clean_store)
+    seen = {}
+
+    from server import delivery as delivery_mod
+    monkeypatch.setattr(delivery_mod, "save_delivery",
+                        lambda cases, **kw: seen.update(kw) or {"ok": True})
+    monkeypatch.setattr(
+        "deeptutor.api.routers.test_workbench_paths.deliveries_root",
+        lambda: str(tmp_path / "alice"))
+
+    gen.adopt_cases(job.id, gen.AdoptRequest(case_ids=["TC-001"]))
+    assert seen["out_root"] == str(tmp_path / "alice")
+
+
+def test_adopting_nothing_is_rejected(monkeypatch, as_alice, clean_store):
+    """"一条都没勾"多半是误点，不是"我想建个空批次"。"""
+    from fastapi import HTTPException
+    job = _done_job(clean_store)
+    with pytest.raises(HTTPException) as exc:
+        gen.adopt_cases(job.id, gen.AdoptRequest(case_ids=[]))
+    assert exc.value.status_code == 400
+
+
+def test_adopting_an_unknown_id_is_an_error_not_a_silent_skip(monkeypatch, as_alice,
+                                                              clean_store):
+    """勾了不存在的编号多半是页面与结果对不上了。
+
+    悄悄少存几条比报错更难查——用户会以为都存进去了。
+    """
+    from fastapi import HTTPException
+    job = _done_job(clean_store, n=2)
+    with pytest.raises(HTTPException) as exc:
+        gen.adopt_cases(job.id, gen.AdoptRequest(case_ids=["TC-001", "TC-999"]))
+    assert exc.value.status_code == 400
+    assert "TC-999" in str(exc.value.detail)
+
+
+def test_cannot_adopt_from_an_unfinished_job(monkeypatch, as_alice, clean_store):
+    from fastapi import HTTPException
+    job = clean_store.create("alice")
+    clean_store.update(job.id, state=jobs_mod.RUNNING)
+    with pytest.raises(HTTPException) as exc:
+        gen.adopt_cases(job.id, gen.AdoptRequest(case_ids=["TC-001"]))
+    assert exc.value.status_code == 409
+
+
+def test_cannot_adopt_from_someone_elses_job(monkeypatch, clean_store):
+    from fastapi import HTTPException
+    job = _done_job(clean_store, owner="bob")
+    monkeypatch.setattr(gen, "_owner", lambda: "alice")
+    with pytest.raises(HTTPException) as exc:
+        gen.adopt_cases(job.id, gen.AdoptRequest(case_ids=["TC-001"]))
+    assert exc.value.status_code == 404
