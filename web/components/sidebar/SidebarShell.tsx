@@ -11,6 +11,7 @@ import {
   Bot,
   Brain,
   ChevronDown,
+  ClipboardCheck,
   Github,
   HeartHandshake,
   House,
@@ -107,6 +108,16 @@ const SECONDARY_NAV: NavEntry[] = [
     label: "Knowledge Center",
     icon: BookOpen,
     tooltipKey: "Knowledge tooltip",
+  },
+  {
+    // [fork] 二开扩展。放第二组而不是第一组：第一组是每天待着的工作区，
+    // 这个是控制台——来办一件事，办完就走，和 Memory / Knowledge Center 同类。
+    // 不设 requires：生成用例要模型，但看批次、看结果、导出都不要，
+    // 整页锁掉会让没有模型授权的人连自己已有的用例都看不到。
+    href: "/test-workbench",
+    label: "Test Workbench",
+    icon: ClipboardCheck,
+    tooltipKey: "Test Workbench tooltip",
   },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

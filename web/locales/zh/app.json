@@ -2908,5 +2908,15 @@
   "Running {{app}}": "运行 {{app}}",
   "Product names and logos are trademarks of their respective owners, shown for identification only.": "产品名称与标识为其各自所有者的商标，此处仅用于标识。",
   "Needs authorization": "待授权",
-  "Reauthorize": "重新授权"
+  "Reauthorize": "重新授权",
+  "Test Workbench": "测试工作台",
+  "Test Workbench tooltip": "从抓包生成接口用例，选好环境直接跑",
+  "Generate API test cases from a HAR capture, then run them against an environment.": "从抓包文件生成接口用例，选好环境直接跑。",
+  "New batch": "新建批次",
+  "Test extension is not loaded": "测试扩展没有加载",
+  "No test batches yet": "还没有测试批次",
+  "Import a HAR capture and describe what you want to test — the cases get generated for you to review.": "导入抓包文件，用一段话说你要测什么，用例会生成好等你审核。",
+  "No structured cases": "没有结构化用例",
+  "cases": "条用例",
+  "Batches, environments and credentials are private to your account.": "批次、环境和凭据只有你自己看得到。"
 }
