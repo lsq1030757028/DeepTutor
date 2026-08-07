@@ -130,8 +130,9 @@ pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:7px
 <div class="nav">
   <a href="#s0">0 位置</a><a href="#s1">1 主界面</a><a href="#s2">2 导入体检</a>
   <a href="#s3">3 描述场景</a><a href="#s4">4 AI 干活</a><a href="#s5">5 审核采纳</a>
-  <a href="#s6">6 执行结果</a><a href="#s7">7 导出</a>
-  <a href="#s8">8 局部配置</a><a href="#s9">9 公共配置</a>
+  <a href="#s6" style="color:var(--primary);font-weight:500">6 批次成立 · 两条路</a>
+  <a href="#s7">7 导出</a><a href="#s8">8 执行结果</a>
+  <a href="#s9">9 局部配置</a><a href="#s10">10 公共配置</a>
 </div>
 
 <!-- 0 位置 -->
@@ -226,7 +227,11 @@ pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:7px
             <select style="width:auto"><option>测试环境</option></select>
             <span style="font-size:12px;color:var(--muted-fg)">鉴权</span>
             <select style="width:auto"><option>跟随环境</option><option>登录换新</option></select>
-            <span class="grow"></span><button class="btn pri">重跑选中的 2 条</button></div>
+            <span class="grow"></span>
+            <button class="btn">导出…</button>
+            <button class="btn pri">重跑选中的 2 条</button></div>
+          <div style="font-size:11.5px;color:var(--muted-fg);margin-top:7px">
+            <b>导出和执行是平级的两个动作</b>，谁先谁后随意、可以只做一个、也可以反复做。</div>
         </div>
       </div>
     </div>
@@ -359,44 +364,56 @@ pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:7px
         </tbody></table></div>
       <div class="act"><span style="font-size:12px;color:var(--muted-fg)">已选 <b>10</b> 条 · 待修的不能采纳</span>
         <span class="grow"></span><button class="btn">全部重生成</button>
-        <button class="btn pri">采纳 10 条，建批次</button></div>
+        <button class="btn pri">采纳 10 条</button></div>
+      <div style="font-size:11.5px;color:var(--muted-fg);margin-top:8px">
+        采纳就是终点——<b>不强迫你现在决定跑不跑</b>。批次建好后再选导出还是执行，都行。</div>
     </div>
   </div>
   <div class="why">红色一定带<b>可操作的出路</b>（改回去 / 就地编辑）——界面指出问题却不给控件，
     比不指出更让人堵。</div>
 </section>
 
-<!-- 6 执行结果 -->
+<!-- 6 批次成立：两条路 -->
 <section class="step" id="s6">
-  <h2><i>6</i>执行与结果</h2>
-  <p class="k">回到主界面那张表，同一行换状态。</p>
+  <h2><i>6</i>批次成立：两条平级的路</h2>
+  <p class="k">生成和执行是两件事。<b>不跑也能用，跑了也不是必须。</b></p>
   <div class="screen">
-    <div class="hd">执行中 · 同步逐条，不并发</div>
+    <div class="hd">采纳完成 · 登录到退出 主链路（10 条）</div>
     <div class="bd">
-      <div class="tw"><table>
-        <thead><tr><th style="width:62px">编号</th><th>用例</th><th style="width:76px">状态</th><th style="width:56px">耗时</th></tr></thead>
-        <tbody>
-          <tr><td class="mono">TC-001</td><td>正确账号密码应登录成功</td><td><span class="tag ok">通过</span></td><td class="mono">0.7s</td></tr>
-          <tr><td class="mono">TC-004</td><td>密码错误应提示且不放行
-            <div class="mono" style="font-size:11px;color:var(--muted-fg);margin-top:3px;border-left:2px solid rgba(239,68,68,.4);padding-left:8px">
-              期望 401，实际 200</div></td>
-            <td><span class="tag bad">失败</span></td><td class="mono">1.2s</td></tr>
-          <tr><td class="mono">TC-007</td><td>切换设备后会话保持</td>
-            <td><span class="tag" style="background:color-mix(in srgb,var(--primary) 12%,transparent);color:var(--primary);border:0">执行中</span></td>
-            <td class="mono">—</td></tr>
-        </tbody></table></div>
-      <div class="act">
-        <div style="flex:1;min-width:150px;height:5px;border-radius:3px;background:var(--muted);overflow:hidden">
-          <i style="display:block;height:100%;width:60%;background:var(--primary)"></i></div>
-        <span style="font-size:12px;color:var(--muted-fg)">第 6 / 10 条</span>
-        <button class="btn">停止</button></div>
-      <div class="pii" style="border-color:var(--border);background:color-mix(in srgb,var(--muted) 40%,transparent)">
-        响应体里若回显了凭证，报告里会换成 <span class="mono">{{token}}</span>。页面上只出现<b>环境名</b>。</div>
+      <div style="text-align:center;padding:6px 0 14px">
+        <div style="display:inline-flex;align-items:center;gap:8px;font-size:13px;
+          border:1px solid rgba(16,185,129,.4);background:rgba(16,185,129,.08);
+          border-radius:999px;padding:6px 15px">
+          <svg class="ic" viewBox="0 0 24 24" stroke="#059669"><path d="m5 12 5 5L20 7"/></svg>
+          批次已建好，10 条用例已经是你的资产了</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px" class="paths">
+        <div style="border:1px solid var(--border);border-radius:11px;padding:14px">
+          <div style="font-size:13.5px;font-weight:600;margin-bottom:5px">交出去</div>
+          <div style="font-size:12px;color:var(--muted-fg);line-height:1.7">
+            导出成 Excel 拿去评审、导成 Postman 给别人跑、贴进文档。<br>
+            <b style="color:var(--foreground)">不需要先执行。</b></div>
+          <button class="btn" style="margin-top:11px;width:100%">导出…</button>
+        </div>
+        <div style="border:1px solid var(--border);border-radius:11px;padding:14px">
+          <div style="font-size:13.5px;font-weight:600;margin-bottom:5px">自己先验一遍</div>
+          <div style="font-size:12px;color:var(--muted-fg);line-height:1.7">
+            选个环境跑一遍，看哪些真能过。跑完再导出，产物里会多一列执行结果。<br>
+            <b style="color:var(--foreground)">不跑也不影响导出。</b></div>
+          <button class="btn pri" style="margin-top:11px;width:100%">选环境执行…</button>
+        </div>
+      </div>
+      <div style="text-align:center;margin-top:12px">
+        <a style="font-size:12px;color:var(--muted-fg);text-decoration:underline;cursor:pointer">两个都先不做，回批次列表</a></div>
     </div>
   </div>
+  <div class="fix"><b>上一版的错</b>：屏序是「采纳 → 执行 → 导出」，
+    <b>在语义上暗示了"必须先跑才能导"</b>。实际上导出是把用例交给别人，执行是自己先验一遍，
+    <b>是并列的两个出口，不是前后两步</b>。旧排法还强迫用户在采纳那一刻就决定跑不跑，
+    而"只想拿一份用例去评审"的人根本不需要走那一段。</div>
 </section>
 
-<!-- 7 导出 -->
+<!-- 6 执行结果 -->
 <section class="step" id="s7">
   <h2><i>7</i>导出</h2>
   <p class="k">每种用自己的文件类型图标区分，不靠读文字辨认。可多选。</p>
@@ -425,9 +442,39 @@ pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:7px
     这一屏只是把它们暴露出来并<b>用图标分类</b>。</div>
 </section>
 
-<!-- 8 局部配置 -->
+<!-- 7 导出 -->
 <section class="step" id="s8">
-  <h2><i>8</i>局部配置：跟着能力走</h2>
+  <h2><i>8</i>执行与结果</h2>
+  <p class="k">回到主界面那张表，同一行换状态。</p>
+  <div class="screen">
+    <div class="hd">执行中 · 同步逐条，不并发</div>
+    <div class="bd">
+      <div class="tw"><table>
+        <thead><tr><th style="width:62px">编号</th><th>用例</th><th style="width:76px">状态</th><th style="width:56px">耗时</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">TC-001</td><td>正确账号密码应登录成功</td><td><span class="tag ok">通过</span></td><td class="mono">0.7s</td></tr>
+          <tr><td class="mono">TC-004</td><td>密码错误应提示且不放行
+            <div class="mono" style="font-size:11px;color:var(--muted-fg);margin-top:3px;border-left:2px solid rgba(239,68,68,.4);padding-left:8px">
+              期望 401，实际 200</div></td>
+            <td><span class="tag bad">失败</span></td><td class="mono">1.2s</td></tr>
+          <tr><td class="mono">TC-007</td><td>切换设备后会话保持</td>
+            <td><span class="tag" style="background:color-mix(in srgb,var(--primary) 12%,transparent);color:var(--primary);border:0">执行中</span></td>
+            <td class="mono">—</td></tr>
+        </tbody></table></div>
+      <div class="act">
+        <div style="flex:1;min-width:150px;height:5px;border-radius:3px;background:var(--muted);overflow:hidden">
+          <i style="display:block;height:100%;width:60%;background:var(--primary)"></i></div>
+        <span style="font-size:12px;color:var(--muted-fg)">第 6 / 10 条</span>
+        <button class="btn">停止</button></div>
+      <div class="pii" style="border-color:var(--border);background:color-mix(in srgb,var(--muted) 40%,transparent)">
+        响应体里若回显了凭证，报告里会换成 <span class="mono">{{token}}</span>。页面上只出现<b>环境名</b>。</div>
+    </div>
+  </div>
+</section>
+
+<!-- 8 局部配置 -->
+<section class="step" id="s9">
+  <h2><i>9</i>局部配置：跟着能力走</h2>
   <p class="k">测试环境、接口变量——只服务这条能力，所以<b>就放在工作台里</b>。</p>
   <div class="screen">
     <div class="hd">测试工作台 · 环境与变量</div>
@@ -457,8 +504,8 @@ pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:7px
 </section>
 
 <!-- 9 公共配置 -->
-<section class="step" id="s9">
-  <h2><i>9</i>公共配置：进 DeepTutor 的 Settings</h2>
+<section class="step" id="s10">
+  <h2><i>10</i>公共配置：进 DeepTutor 的 Settings</h2>
   <p class="k">TAPD、数据库这些<b>不属于测试工作台</b>，别的地方也要用。</p>
   <div class="screen">
     <div class="hd"><span class="mono">/settings</span> · DeepTutor 设置</div>
