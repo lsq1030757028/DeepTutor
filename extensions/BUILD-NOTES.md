@@ -110,3 +110,49 @@ docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -u -i -n -- dmesg
 它由单元测试覆盖（`tests/test_api_router.py::test_two_users_get_different_delivery_roots`，
 且已反向验证：故意让两用户共用 root 立刻转红）。
 开启鉴权后的多用户实测，留到有真实多账号环境时补。
+
+---
+
+## CI 不可用期间的补跑（2026-08-07）
+
+GitHub Actions 仍被停（所有 job 零步骤、分配不到 runner，手动触发同样如此），
+按决策 0008「CI 不可用期间的临时口径」在本地补跑替代证据。
+**真正的追认仍欠着**——Actions 恢复后必须对本期间合入的代码变更补跑一次全量。
+
+### 跑了什么
+
+| 闸 | 结果 | 怎么跑的 |
+|---|---|---|
+| **i18n parity**（硬闸） | **OK** | `node scripts/i18n_parity.mjs`，零依赖可直接跑 |
+| i18n audit | exit 0 | `node scripts/i18n_audit.mjs` |
+| i18n 占位符规则 | **0 违规** | 按 `tests/i18n-placeholders.test.ts` 里的真 `NAMESPACE_KEY` 正则复算全库 |
+| **我们的 pytest 全量** | **679 passed** | `extensions/test-partner` 本地 |
+| 上游 7 条 import check | **7/7 pass** | 在 `deeptutor:p3-skeleton` 镜像内按 `tests.yml` 原样跑 |
+| 路由注册 | **3 条工作台路径在 OpenAPI 里** | 镜像内 `app.openapi()` |
+| 上游 `tests/api` | **264 passed / 2 failed** | 镜像内挂仓库跑，失败已归因（见下） |
+
+### 两条红的归因：不是我们的
+
+`tests/api/test_cors_settings.py` 两条断言 `allow_origin_regex is None` 失败。
+
+**判法**：把 P3 代码全部移除（删 `test_workbench.py`，`main.py` 用
+`git show ut1.5.8-base:deeptutor/api/main.py` 还原成上游 504 行原版），
+在**基线镜像** `deeptutor:ut1.5.8-local` 里跑同样两条 —— **照样红**。
+
+故与 P3 无关。至于它为什么红，怀疑是本补跑的 harness 预先播种了
+`data/user/settings/auth.json`（AUTH_ENABLED=false）导致 CORS 走 permissive，
+**但这一步没有进一步验证，只记为怀疑，不当结论**。
+
+### 没跑的，如实列
+
+| 没跑 | 原因 |
+|---|---|
+| `npm run test:node`（前端 50 个测试） | `web/node_modules` 未安装 |
+| eslint | 同上 |
+| 上游其余 ~320 个测试文件 | 只跑了 `tests/api` 这一个直接受影响的子集 |
+
+### 一处自我纠错
+
+一度按 `app.routes` 过滤 `path` 找不到工作台路由，差点当成"路由没挂"。
+实际是这版 DeepTutor 用 `_IncludedRouter`（32 个）惰性包装，静态取不到 `.path`。
+**权威来源是 `app.openapi()` 的 paths**，不是 `app.routes` 的属性——查错了地方。
