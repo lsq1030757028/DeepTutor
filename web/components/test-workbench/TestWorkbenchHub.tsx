@@ -14,6 +14,7 @@ import { useTranslation } from "react-i18next";
 
 import { apiFetch, apiUrl } from "@/lib/api";
 import SpaceSectionHeader from "@/components/space/SpaceSectionHeader";
+import NewBatchFlow from "@/components/test-workbench/NewBatchFlow";
 
 interface DeliverySummary {
   id: string;
@@ -41,6 +42,7 @@ export default function TestWorkbenchHub() {
   const [deliveries, setDeliveries] = useState<DeliverySummary[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -92,8 +94,8 @@ export default function TestWorkbenchHub() {
             </button>
             <button
               type="button"
-              disabled
-              title={t("Coming soon")}
+              onClick={() => setCreating(true)}
+              disabled={creating || (health ? !health.extension_loaded : false)}
               className="inline-flex items-center gap-1.5 rounded-[9px] bg-[var(--primary)] px-3 py-1.5 text-[13px] font-medium text-[var(--primary-foreground)] disabled:opacity-45"
             >
               <Plus size={14} strokeWidth={1.8} />
@@ -117,6 +119,20 @@ export default function TestWorkbenchHub() {
       {error && (
         <div className="mb-4 rounded-xl border border-red-500/40 bg-red-500/10 px-3.5 py-3 text-[13px] text-red-600 dark:text-red-400">
           {error}
+        </div>
+      )}
+
+      {creating && (
+        <div className="mb-4">
+          <NewBatchFlow
+            onCancel={() => setCreating(false)}
+            onDone={() => {
+              // 采纳后回到列表并刷新——新批次要立刻看得见，
+              // 否则用户不确定到底存进去没有。
+              setCreating(false);
+              void load();
+            }}
+          />
         </div>
       )}
 
