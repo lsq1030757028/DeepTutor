@@ -152,6 +152,33 @@ P1 顺带拆掉两个首发雷（上游 `pypi-release.yml` 会往 PyPI 发包、
 
 ---
 
+## 后续目标（backlog · 未排期）
+
+### G1 · 让 DT 的聊天 agent 了解 DeepTutor 自身（2026-08-08 用户新增）
+
+用户原话：`目前我跟DT聊天时，它只知道自己是DeepTutor的agent，但不了解当前的DeepTutor
+系统知识，导致我问它信息的时候它需要去github上查官方文档，这个我认为应该有一个工具能够
+让它直接获取到相关信息，甚至必要时它可以推荐我如何使用或开发DeepTutor`。
+
+现状勘察（2026-08-08）：聊天 agent 的知识入口有四类现成机制——
+Knowledge Center 知识库（`rag`/`kb_files` 工具）、技能（`read_skill`，按 manifest 挂载）、
+联网（`web_search`/`web_fetch`/`github`，即目前"去 GitHub 查"的路径）、MCP 服务。
+系统自带文档（README/docs/CONTAINERIZATION 等）**不在生产镜像里**（上游 Dockerfile
+不 COPY docs），也没有任何"自我知识"的内建落点。
+
+候选路线（按 0011「先用平台现成机制」排序，未拍板）：
+
+| 路线 | 做法 | 代价 |
+|---|---|---|
+| A · 零代码试点 | 把官方文档灌进一个 Knowledge Center 知识库，聊天时挂上，agent 走 `rag` 直接答 | 只有导入劳动；按用户手动挂、升级要手动刷新 |
+| B · 技能层 | 写一份「DeepTutor 使用与开发顾问」SKILL.md，挂进技能 manifest，agent 按需 `read_skill` | 文档策展；适合"怎么用/怎么开发"的过程性指导 |
+| C · 内建工具 | 镜像带 docs + 新增 `deeptutor_docs` 检索工具 | 动上游触点（Dockerfile + 工具注册表），维护成本最高 |
+
+建议：先 A（一次导入即可验证"有了本体知识后回答质量"），价值成立再决定
+要不要 B/C 的"开箱即用"形态。**待用户拍板后排期。**
+
+---
+
 ## 用户出场点汇总
 
 2026-08-05 用户先裁定「全程只出场一次」（原话：`1、镜像不用我确认，你负责`
