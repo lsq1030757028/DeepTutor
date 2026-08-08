@@ -32,10 +32,10 @@ from pydantic import BaseModel, Field
 
 from deeptutor.api.routers.test_workbench_paths import (
     drafts_root as _drafts_root,
+    owner_id as _owner,
     require_extension as _require_extension,
 )
 from deeptutor.api.routers.test_workbench_model import call_model, has_usable_model
-from deeptutor.multi_user.context import get_current_user_or_none
 
 logger = logging.getLogger(__name__)
 
@@ -60,16 +60,6 @@ router = APIRouter()
 
 #: 进程内台账。重启即清空——生成结果的归宿是交付批次，不是这里。
 _STORE = _jobs.JobStore()
-
-
-def _owner() -> str:
-    """当前用户的 id；没有当前用户时用 admin 兜底。
-
-    与 `test_workbench._deliveries_root()` 同一套口径：不自己拼用户 id，
-    免得和平台的迁移逻辑各说各话。
-    """
-    user = get_current_user_or_none()
-    return str(getattr(user, "id", "") or "local-admin")
 
 
 def _load_material(draft_id: str):

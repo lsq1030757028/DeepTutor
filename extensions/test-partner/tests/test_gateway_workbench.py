@@ -259,6 +259,9 @@ def test_a_run_goes_through_the_real_executor_contract(root):
     assert call["env"] == "测试环境"                     # 传的是环境名，不是凭据
     assert call["case_ids"] == ["TC-001"]
     assert call["delivery_dir"] == os.path.join(root, name)   # 报告并进批次目录
+    # 报告合法根必须跟着台账的根走：不传的话执行层按 MCP 线的模块常量判定，
+    # 用户 scope 下的批次目录会被误拒、报告落不进批次（容器里实测踩过的缺陷）。
+    assert call["deliveries_root"] == os.path.abspath(root)
     assert call["title"] == "订单域用例"
     assert [c["case_id"] for c in call["cases"]] == ["TC-001", "TC-002"]
     assert "variables" not in call                       # 值从来不经过工作台

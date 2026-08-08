@@ -735,15 +735,20 @@ def _slugify(title: str) -> str:
     return slug[:40] or "execution"
 
 
-def _resolve_report_dir(delivery_dir: Any, notes: list) -> str:
+def _resolve_report_dir(delivery_dir: Any, notes: list,
+                        deliveries_root: Any = "") -> str:
     """报告目录：能合并进传入的交付目录就合并，否则在 deliveries/ 下新建。
 
-    只接受 `deliveries/` 之下的既有目录——工具不该按模型给的任意路径往磁盘上写。
+    只接受 deliveries 根之下的既有目录——工具不该按模型给的任意路径往磁盘上写。
+    根默认是模块常量 `DELIVERIES_DIR`（MCP 工具那条线），但工作台走 HTTP 面时
+    批次在**每用户的** scope 目录下（决策 0009），不传根的话合法目录会被这道闸
+    误判成"任意路径"、报告落进镜像内只读路径直接 PermissionError——
+    这是在容器里实测踩到的，不是理论风险。
     """
     raw = str(delivery_dir or "").strip().strip("\"'")
+    root = os.path.abspath(str(deliveries_root or "").strip() or DELIVERIES_DIR)
     if raw:
         target = os.path.abspath(raw)
-        root = os.path.abspath(DELIVERIES_DIR)
         inside = os.path.commonpath([target, root]) == root if os.path.splitdrive(
             target)[0].lower() == os.path.splitdrive(root)[0].lower() else False
         if inside and os.path.isdir(target):
@@ -751,7 +756,7 @@ def _resolve_report_dir(delivery_dir: Any, notes: list) -> str:
         notes.append(
             f"delivery_dir「{raw}」不是 deliveries/ 下的既有目录，已改为新建执行报告目录")
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    base = os.path.join(DELIVERIES_DIR, f"{stamp}-execution")
+    base = os.path.join(root, f"{stamp}-execution")
     out, bump = base, 1
     while os.path.exists(out):
         bump += 1
@@ -849,7 +854,7 @@ def execute_cases(cases: Any, base_url: Any = "", variables: Any = None,
                   auth: Any = DEFAULT_AUTH_MODE, login_request: Any = None,
                   auth_token_variable: Any = DEFAULT_TOKEN_VAR,
                   client: Any = None, env_store: Any = None,
-                  progress: Any = None) -> dict:
+                  progress: Any = None, deliveries_root: Any = "") -> dict:
     """逐条执行带 `request` 块的用例并落执行报告。
 
     返回 `{ok, summary, results, auth, report_hint, ...}`。`ok` 表示**这轮执行跑起来了**，
@@ -866,7 +871,8 @@ def execute_cases(cases: Any, base_url: Any = "", variables: Any = None,
     注入成 `auth_token_variable`（默认 `token`）。登录失败整轮不执行，返回 `ok: false`
     与可读原因，**不落报告**——一份全是 401 的报告没有信息量。
 
-    `client`（httpx transport）与 `env_store`（配置中心）都是给测试注入的同进程入口，
+    `client`（httpx transport）、`env_store`（配置中心）与 `deliveries_root`
+    （报告落盘的合法根，工作台传每用户的批次根）都是同进程注入口，
     不在 MCP 工具面上暴露。`progress` 同理：工作台在后台线程里跑这个函数，靠它把
     「第 N/M 条，当前用例名」喂给轮询端点——**执行是同步逐条的，所以进度是真的**，
     不是估算出来的。回调形状 `{done, total, current_case_id, current_title}`，
@@ -1035,7 +1041,7 @@ def execute_cases(cases: Any, base_url: Any = "", variables: Any = None,
     files: list = []
     report_error = ""
     try:
-        out_dir = _resolve_report_dir(delivery_dir, notes)
+        out_dir = _resolve_report_dir(delivery_dir, notes, deliveries_root)
         if notes:
             report["normalized"] = list(notes)
         files = _write_reports(out_dir, report)

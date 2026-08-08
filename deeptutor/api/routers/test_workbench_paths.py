@@ -67,6 +67,16 @@ def _user_root() -> Path:
     return Path(user.scope.root) if user is not None else ADMIN_WORKSPACE_ROOT
 
 
+def owner_id() -> str:
+    """当前用户的 id；没有当前用户时用 admin 兜底。
+
+    与平台 `LOCAL_ADMIN_ID` 同值（"local-admin"）。生成任务台账、执行台账、
+    环境金库都拿它当分区键——三处必须同一口径，所以住在这里。
+    """
+    user = get_current_user_or_none()
+    return str(getattr(user, "id", "") or "local-admin")
+
+
 def deliveries_root() -> str:
     """当前用户的交付批次目录（决策 0009：按用户隔离）。"""
     root = _user_root() / "test-workbench" / "deliveries"

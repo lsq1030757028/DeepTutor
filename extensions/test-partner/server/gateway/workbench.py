@@ -342,6 +342,101 @@ def load_cases_for_execution(delivery_id: str, root: str | None = None) -> tuple
     return dir_path, list(rows), _login_request_of(payload)
 
 
+# ── 导出（设计稿第 7 屏） ───────────────────────────────────────────────────
+
+#: 页面上四张导出卡对应的单格式名（`delivery.FORMATS` 里的组合值不在此列：
+#: 页面是多选卡片，组合由本函数自己拼）
+EXPORT_FORMATS = ("xlsx", "csv", "markdown", "postman")
+
+
+def export_delivery(delivery_id: str, formats: Any,
+                    root: str | None = None) -> dict[str, Any]:
+    """把批次的结构化用例（重新）写成所选格式，落在**批次目录内**。
+
+    与 `save_delivery` 的分工：那边是"采纳时建批次"（新目录 + 收据），
+    这边是"对既有批次补产物"——同名文件直接覆盖，重导出即刷新。
+    不写收据也不动 `cases.json`：收据记录的是采纳那一笔，导出只是投影。
+
+    产物内容来自 `cases.json` 原文（与执行同一份），标题与来源指纹也取自它——
+    导出的 markdown/collection 里写的指纹必须和采纳时一致，换了就不是同一批用例。
+    """
+    safe_id = safe_delivery_id(delivery_id)
+    dir_path, cases, _ = load_cases_for_execution(safe_id, root)
+
+    wanted: list[str] = []
+    for raw in (formats if isinstance(formats, (list, tuple)) else [formats]):
+        try:
+            normalized = delivery.normalize_format(raw)
+        except delivery.DeliveryError as exc:
+            raise WorkbenchError(str(exc.message), code="FORMAT_UNSUPPORTED") from exc
+        for one in normalized.split("+"):
+            if one not in wanted:
+                wanted.append(one)
+    if not wanted:
+        raise WorkbenchError("一种导出格式都没选。", code="NO_FORMAT_SELECTED")
+
+    meta = _read_json(os.path.join(dir_path, delivery.CASES_FILE))
+    meta = meta if isinstance(meta, dict) else {}
+    title = str(meta.get("title") or describe_delivery(dir_path)["title"])
+    source_fingerprint = str(meta.get("source_fingerprint") or "")
+
+    rows, index = delivery.to_rows(cases)
+    if not rows:
+        raise WorkbenchError("这批用例没有一条能落成表格行，无可导出内容。",
+                             code="CASES_ALL_INVALID")
+
+    generated_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    slug = delivery.slugify(title)
+    filenames = {"xlsx": "cases.xlsx", "csv": "cases.csv", "markdown": "cases.md",
+                 "postman": f"{slug}.postman_collection.json"}
+    files: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for one in wanted:
+        product = os.path.join(dir_path, filenames[one])
+        if one == "xlsx":
+            delivery._write_xlsx(product, rows)
+        elif one == "csv":
+            delivery._write_csv(product, rows)
+        elif one == "markdown":
+            delivery._write_markdown(product, rows, index, title, generated_at,
+                                     source_fingerprint)
+        else:
+            stats = delivery._write_postman(product, cases, title, source_fingerprint)
+            if stats.get("placeholder_count"):
+                warnings.append(
+                    f"{stats['placeholder_count']}/{stats['item_count']} "
+                    "条用例没有 request 块，collection 里是占位 item")
+            if stats.get("items_without_test"):
+                warnings.append(
+                    f"{stats['items_without_test']} 条用例没有可执行断言，"
+                    "导入后跑完无从判定成败")
+        files.append({"name": filenames[one], "path": os.path.abspath(product),
+                      "bytes": os.path.getsize(product)})
+
+    log.info("workbench: 批次 %s 导出 %s（%d 条用例）",
+             safe_id, "+".join(wanted), len(rows))
+    return {"ok": True, "format": "+".join(wanted), "case_count": len(rows),
+            "files": files, "warnings": warnings}
+
+
+def delivery_file_path(delivery_id: str, filename: str,
+                       root: str | None = None) -> str:
+    """批次目录内某个产物的绝对路径（给下载端点用）。
+
+    文件名走与批次 id 同一套白名单校验：只能是目录下的一级文件名，
+    带路径分隔符或上跳的直接拒——这是下载端点，路径穿越在这里就是任意文件读。
+    """
+    safe_id = safe_delivery_id(delivery_id)
+    name = str(filename or "").strip()
+    if not name or _UNSAFE_ID_RE.search(name) or os.path.isabs(name):
+        raise WorkbenchError(f"文件名「{name}」不合法。", code="BAD_FILENAME")
+    full = os.path.join(deliveries_root(root), safe_id, name)
+    if not os.path.isfile(full):
+        raise WorkbenchError(f"批次「{safe_id}」里没有文件「{name}」。",
+                             code="FILE_NOT_FOUND")
+    return os.path.abspath(full)
+
+
 # ── 执行（后台线程 + 轮询） ─────────────────────────────────────────────────
 
 class RunRegistry:
@@ -483,7 +578,11 @@ class RunRegistry:
             result = self._executor(
                 cases, case_ids=case_ids, env=env, timeout_s=timeout_s,
                 delivery_dir=delivery_dir, title=title, progress=progress,
-                auth=auth, login_request=login_request)
+                auth=auth, login_request=login_request,
+                # 报告合法根 = 本台账扫批次用的同一个根。不传的话执行层按
+                # MCP 线的模块常量判定，用户 scope 下的批次目录会被误拒
+                # （报告落不进批次，实测踩过）。
+                deliveries_root=deliveries_root(self._root))
         except Exception as exc:  # noqa: BLE001 - 后台线程里的异常必须收进 run
             self._update(run_id, state="error",
                          error=f"{type(exc).__name__}: {exc}",

@@ -200,3 +200,36 @@ GitHub Actions 仍被停（所有 job 零步骤、分配不到 runner，手动�
    于是文件根本没发出去、端点正确地报了 `Field required: file`。
    **两条都是测试写错不是产品坏了**——但这个判断是靠"手工直接打一次端点成功"
    证出来的，不是靠读代码猜的。
+
+---
+
+## P3 执行/导出/环境面端到端验证（2026-08-08）
+
+脚本：`extensions/test-partner/scripts/verify_p3_workbench.sh`。**27/27 PASS。**
+同样用副本卷 + 端口 3785，第 0 步先自证现役实例未被触碰。
+
+覆盖面：新 8 条路由在 openapi、环境金库建/删/去值投影/掩码、金库落点实测在
+`owner_secrets_dir`（0011 落点二）、执行起跑→轮询→逐条结论→**真通过**
+（夹具用例打容器内后端自己的 health 端点，断言 status+body 双过）、
+报告落盘进批次目录、四格式导出、单文件下载、zip 打包、路径穿越被拒。
+
+浏览器实测另走了一遍界面（批次列表→详情→环境表单→执行→导出面板→下载清单），
+**中文环境名经 UI 的 UTF-8 路径保存成功**——这条 Git Bash curl 验不了
+（CJK 被按 GBK 发出，FastAPI 报 body 解析错，是 harness 限制不是产品缺陷）。
+
+### 这轮验证挖出的真缺陷（已修，bug-bank BB-435）
+
+执行跑通但 `execution_report.json` **落不进批次目录**：
+`execute._resolve_report_dir` 的防任意写闸只认扩展自带的 `deliveries/` 模块常量，
+宿主部署下每用户批次根在 `/app/data/...`，合法目录被当"任意路径"拒掉，
+报告 fallback 到镜像内只读路径直接 PermissionError。
+修法与 `save_delivery` 的 `out_root` 同构：`execute_cases` 增 `deliveries_root`
+注入参（不上 MCP 工具面），`RunRegistry` 传台账同根。
+**单测测不出它**——所有单测都用模块常量根；这类"多部署形态下常量与语境脱节"
+只有真容器形态能暴露，这正是每轮改动都要重跑容器级验证的理由。
+
+### 三个 harness 坑（都不是产品问题）
+
+1. Git Bash 的 curl 发 CJK JSON 会变 GBK 字节——脚本里凡带中文的 payload 用 ASCII 或走 python。
+2. `docker exec` 不带 `-i` 时 heredoc 整个被丢，python 静默跑空脚本——夹具"造了"其实没造。
+3. Windows 版 curl 把 `/tmp/...` 当别的盘符路径，`-o` 的文件根本没写出来——落盘用相对路径。

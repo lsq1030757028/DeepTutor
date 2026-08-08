@@ -9,11 +9,13 @@
 // 状态色用 tailwind 原生色 + 成对 dark:；四套主题 Cream/Dark/Default/Glass 都得成立。
 
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, ClipboardCheck, Plus, RefreshCw } from "lucide-react";
+import { AlertTriangle, ClipboardCheck, Plus, RefreshCw, Settings2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { apiFetch, apiUrl } from "@/lib/api";
 import SpaceSectionHeader from "@/components/space/SpaceSectionHeader";
+import DeliveryDetail from "@/components/test-workbench/DeliveryDetail";
+import EnvironmentsPanel from "@/components/test-workbench/EnvironmentsPanel";
 import NewBatchFlow from "@/components/test-workbench/NewBatchFlow";
 
 interface DeliverySummary {
@@ -21,8 +23,14 @@ interface DeliverySummary {
   title?: string;
   case_count?: number;
   created_at?: string;
+  generated_at?: string;
   degraded?: boolean;
+  executed?: boolean;
+  last_execution?: { executed_at?: string; verdict?: string } | null;
 }
+
+//: 主区在看什么：批次列表 / 一个批次的详情 / 环境配置。
+type View = { kind: "list" } | { kind: "detail"; id: string } | { kind: "environments" };
 
 interface DeliveriesResponse {
   deliveries?: DeliverySummary[];
@@ -43,6 +51,7 @@ export default function TestWorkbenchHub() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [view, setView] = useState<View>({ kind: "list" });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -86,6 +95,15 @@ export default function TestWorkbenchHub() {
           <div className="flex items-center gap-2">
             <button
               type="button"
+              onClick={() => setView({ kind: "environments" })}
+              disabled={health ? !health.extension_loaded : false}
+              className="inline-flex items-center gap-1.5 rounded-[9px] border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-[13px] text-[var(--foreground)] hover:bg-[var(--accent)] disabled:opacity-45"
+            >
+              <Settings2 size={14} strokeWidth={1.6} />
+              {t("Environments")}
+            </button>
+            <button
+              type="button"
               onClick={() => void load()}
               className="inline-flex items-center gap-1.5 rounded-[9px] border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-[13px] text-[var(--foreground)] hover:bg-[var(--accent)]"
             >
@@ -104,6 +122,25 @@ export default function TestWorkbenchHub() {
           </div>
         }
       />
+
+      {/* 详情与环境配置各占整个主区，自带返回。列表状态的刷新在返回时顺手做。 */}
+      {view.kind === "environments" && (
+        <EnvironmentsPanel onBack={() => setView({ kind: "list" })} />
+      )}
+      {view.kind === "detail" && (
+        <DeliveryDetail
+          deliveryId={view.id}
+          onBack={() => {
+            setView({ kind: "list" });
+            void load();
+          }}
+          onOpenEnvironments={() => setView({ kind: "environments" })}
+        />
+      )}
+
+      {view.kind === "list" && (
+        <>
+
 
       {/* 扩展没装上——这是镜像漏 COPY extensions/ 时的样子，明说是哪条路径 */}
       {health && !health.extension_loaded && (
@@ -154,18 +191,32 @@ export default function TestWorkbenchHub() {
       {!loading && deliveries && deliveries.length > 0 && (
         <ul className="flex flex-col gap-2">
           {deliveries.map((d) => (
-            <li
-              key={d.id}
-              className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-3.5 py-3"
-            >
-              <div className="text-[13px] font-medium text-[var(--foreground)]">{d.title || d.id}</div>
-              <div className="mt-0.5 text-[11.5px] text-[var(--muted-foreground)]">
-                {typeof d.case_count === "number" ? `${d.case_count} ${t("cases")}` : t("No structured cases")}
-                {d.created_at ? ` · ${d.created_at}` : ""}
-              </div>
+            <li key={d.id}>
+              <button
+                type="button"
+                onClick={() => setView({ kind: "detail", id: d.id })}
+                className="w-full rounded-xl border border-[var(--border)] bg-[var(--card)] px-3.5 py-3 text-left hover:border-[var(--primary)]/40"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-[13px] font-medium text-[var(--foreground)]">{d.title || d.id}</span>
+                  <span className="flex-1" />
+                  {d.last_execution?.verdict && (
+                    <span className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[10.5px] text-[var(--muted-foreground)]">
+                      {d.last_execution.verdict}
+                    </span>
+                  )}
+                </div>
+                <div className="mt-0.5 text-[11.5px] text-[var(--muted-foreground)]">
+                  {typeof d.case_count === "number" ? `${d.case_count} ${t("cases")}` : t("No structured cases")}
+                  {(d.generated_at || d.created_at) ? ` · ${d.generated_at || d.created_at}` : ""}
+                  {d.last_execution?.executed_at ? ` · ${t("ran")} ${d.last_execution.executed_at}` : ` · ${t("never run")}`}
+                </div>
+              </button>
             </li>
           ))}
         </ul>
+      )}
+        </>
       )}
 
       {/* 只有自己看得见——决策 0009。这句要一直在，不是提示是承诺。 */}

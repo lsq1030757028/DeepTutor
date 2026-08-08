@@ -106,14 +106,16 @@ P1 顺带拆掉两个首发雷（上游 `pypi-release.yml` 会往 PyPI 发包、
 同轮用户另一条指示：`没必要从零搭一套`，要求先对标 MeterSphere / Apifox
 一类现成的接口用例管理工具再设计。对标结论进 v2 设计稿。
 
-- [ ] **前置勘察**（半天，独立成步）：DeepTutor 前端组件体系、路由结构、状态管理、
-      设计 token 的可复用程度。勘察结论可能推翻下面的形态细节——**先勘察再动手，不许边做边猜**。
-- [ ] 后端 API：走 DeepTutor 自身的路由体系，不再绕 MCP 传结构化数据
-- [ ] 前端：工作台作为 DeepTutor 界面内的原生页面，用它的设计系统与组件
-- [ ] 配置能力并入同一处，不再是独立页面
+- [x] **前置勘察**（半天，独立成步）：结论在 `recon-deeptutor-extension-points.md`
+- [x] 后端 API：走 DeepTutor 自身的路由体系（`test_workbench{,_generate,_model,_paths,_execute}.py`，
+      19 条路由；执行/导出/环境面 2026-08-08 落地，容器级验证 27/27）
+- [x] 前端：设计稿第 1-9 屏全部原生落地（Hub 列表 + 新建四步 + 批次详情/执行/导出 + 环境面板）
+- [x] 配置能力并入：局部配置（环境与变量）在工作台内，金库落
+      `owner_secrets_dir`（0011 落点二）；公共配置按 0011 裁定**不自建**（第 10 屏作废）
 - [ ] **MCP 面保留**：聊天链路（TAPD 需求→用例，UAT-2 已实测通过）继续经 MCP 提供
-- [ ] 原生原生 JS 单页（`server/gateway/webapp.py` 内嵌 HTML）退役
-- [ ] 每一处改动既有文件都登记进 `UPSTREAM-TOUCHPOINTS.md`
+- [ ] 原生 JS 单页（`server/gateway/webapp.py` 内嵌 HTML）退役
+      ——待 0011 的 TAPD 令牌迁移（走平台 MCP 配置面）落地后一并退
+- [x] 每一处改动既有文件都登记进 `UPSTREAM-TOUCHPOINTS.md`（现 6 条）
 
 **验收**：从 DeepTutor 界面单一入口进工作台，跑通「批次 → 用例 → 执行 → 结果」，
 凭据在页面与两份报告中均不出现真值。

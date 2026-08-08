@@ -226,3 +226,16 @@ def _include_generate_routes() -> None:
 
 
 _include_generate_routes()
+
+
+# ── 执行与导出面 ──────────────────────────────────────────────────────────
+# 会对被测环境发真实请求的接口同样单独成文件（`test_workbench_execute.py`）。
+# 同样放末尾 include：那个模块依赖 test_workbench_paths，与本模块无环，
+# 但挂载位置统一收在这里——main.py 只认识本 router 一个入口。
+def _include_execute_routes() -> None:
+    from deeptutor.api.routers import test_workbench_execute
+
+    router.include_router(test_workbench_execute.router)
+
+
+_include_execute_routes()

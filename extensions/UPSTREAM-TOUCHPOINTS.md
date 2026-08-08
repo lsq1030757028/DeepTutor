@@ -27,13 +27,8 @@
 
 | 3 | `deeptutor/api/main.py` | 注册测试工作台 router：import 块加 1 项 + 1 个 `include_router`（带 `dependencies=_auth`）。路由注册是集中式的，没有插件位 | 保留这两处，其余取上游。**`dependencies=_auth` 不可省**——裸挂会让落盘静默写进 admin 工作区（决策 0009） | **否** |
 | 4 | `Dockerfile` | 加 2 行 `COPY extensions/test-partner/{server,skills}/`。上游只 COPY `deeptutor/` `deeptutor_cli/` `scripts/`，**没有这两行镜像里就没有我们的代码**（P1 等价性验证时发现） | 保留这两行，其余取上游 | **否**——COPY 清单是集中式的 |
-
-### 预计将增（P3 剩余，勘察已确认，尚未动手）
-
-| 文件 | 预计改动 | 备注 |
-|---|---|---|
-| `web/components/sidebar/SidebarShell.tsx` | `SECONDARY_NAV` 加 1 个 `NavEntry`（约 7 行 + 1 个 icon import） | 导航注册是集中式数组，无插件位 |
-| `web/locales/en/app.json` + `zh/app.json` | 成对追加文案 key | `i18n:parity` 是硬闸，两边 key 集必须一致 |
+| 5 | `web/components/sidebar/SidebarShell.tsx` | `SECONDARY_NAV` 加 1 个 `NavEntry`（工作台入口）。导航注册是集中式数组，无插件位 | 保留这一段，其余取上游 | **否** |
+| 6 | `web/locales/en/app.json` + `zh/app.json` | 成对追加工作台文案 key（P3 前端各屏）。`i18n:parity` 是硬闸，两边 key 集必须一致 | 追加行在文件尾部，merge 时保留我方追加段，其余取上游 | **否**——文案库是集中式的 |
 
 勘察详见 `test-partner` 仓 `docs/recon-deeptutor-extension-points.md`。
 
