@@ -228,6 +228,18 @@ GitHub Actions 仍被停（所有 job 零步骤、分配不到 runner，手动�
 **单测测不出它**——所有单测都用模块常量根；这类"多部署形态下常量与语境脱节"
 只有真容器形态能暴露，这正是每轮改动都要重跑容器级验证的理由。
 
+### 本地回归闸（2026-08-08 起，CI 停摆期间的合入前唯一入口）
+
+`extensions/test-partner/scripts/regression_gate.sh`——四层一次跑完，任何一层红=整体红：
+扩展 pytest 全量 → i18n parity（脚本在 `web/scripts/` 下）→ 前端 node 测试 + eslint
+（要求 `web && npm ci` 已做过一次）→ 上游 `tests/api` 镜像内挂仓跑。
+首跑全绿：850 + parity OK + 334（扣 4 个已知上游坏件）+ 262（扣 cors 文件 4 例）。
+
+已知基线扣除的两组（扣已知、其余任何红都算真红）：前端 4 个测试文件因上游测试
+构建把带 `export` 的 `code-block-themes.js` 交给 `require` 而载入即炸（这 4 个文件
+在我们分支 diff 里零命中）；`tests/api/test_cors_settings.py` 整文件（其中 2 例
+在纯上游基线镜像同红，见上文归因）。Actions 恢复后本闸不废弃，转为合入前预检。
+
 ### 三个 harness 坑（都不是产品问题）
 
 1. Git Bash 的 curl 发 CJK JSON 会变 GBK 字节——脚本里凡带中文的 payload 用 ASCII 或走 python。
