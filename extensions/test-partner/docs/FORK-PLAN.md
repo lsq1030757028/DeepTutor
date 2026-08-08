@@ -76,11 +76,13 @@ P1 顺带拆掉两个首发雷（上游 `pypi-release.yml` 会往 PyPI 发包、
 
 纯搬运，不改行为。目的是让 667 例在新家继续全绿，作为后续所有改动的护栏。
 
-- [ ] `server/` 全套 → `extensions/test-partner/`（parse_har / validate_cases / save_delivery /
+- [x] `server/` 全套 → `extensions/test-partner/`（parse_har / validate_cases / save_delivery /
       execute_cases / gateway / args_tolerance）
-- [ ] 667 例测试同迁，CI 配置复制自 P0
-- [ ] `skills/`、`partner/`、`tapd-runtime/` 同迁
-- [ ] 执行层四条安全红线**逐条复验**（跨 host 拒发 / 变量残留 skip / 凭据零回显 / 无断言不算过）
+- [x] 667 例测试同迁（后续增至 850，本地实跑全绿），CI 配置复制自 P0
+- [x] `skills/`、`partner/`、`tapd-runtime/` 同迁
+- [x] 执行层四条安全红线**逐条复验**（跨 host 拒发 / 变量残留 skip / 凭据零回显 / 无断言不算过
+      ——test_execute.py + test_api_router.py 各有对应用例，2026-08-08 实跑 104 例含此四条全绿；
+      此四框长期漏勾，2026-08-08 全量盘点时回勾）
 
 **验收**：fork 仓 CI 里 667 例全绿；四条红线各有对应测试可点开。
 **明确不做**：不改任何行为、不重构、不优化。搬运和改造混在一起就无法定位问题。
