@@ -1,0 +1,123 @@
+# -*- coding: utf-8 -*-
+"""ingest — 原子工具 1：接入 + 定档。
+
+输入：URL + 凭证引用 + 需求文档 → 输出 `intake_profile`（终点 + 档位确认卡数据）。
+牙（挂产物）：溯源/能力锁——base_url 可达性探测 + 实例指纹采集（sot_gate 前置字段）。
+
+定档分流（checklist / standard / deep）：机械启发式给推荐档 + 确认卡数据，
+档位确认是人闸（ask_user；0015 授权补充下由 manager 代持，tier_confirmed_via 记出处）。
+"""
+from __future__ import annotations
+
+import hashlib
+import re
+from typing import Any
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
+
+from server.journey import artifacts, redlines
+from server.journey.digest import text_digest
+
+TIERS = ("checklist", "standard", "deep")
+
+#: 风险×复杂度机械启发式的词表（可解释，不是判官）
+_WRITE_HINTS = re.compile(r"(新增|创建|删除|修改|编辑|下单|支付|退款|提交|审批|导入|上传)")
+_ROLE_HINTS = re.compile(r"(角色|权限|管理员|销售员|操作员|普通用户)")
+
+
+def probe_target(base_url: str, timeout_s: int = 10) -> dict[str, Any]:
+    """可达性探测 + 实例指纹素材。只发 GET /，不带凭证。"""
+    url = str(base_url or "").strip().rstrip("/")
+    if not redlines.host_key(url):
+        return {"reachable": False, "error": f"base_url 不是合法 http(s) 地址: {base_url!r}"}
+    try:
+        req = Request(url + "/", method="GET")
+        with urlopen(req, timeout=timeout_s) as resp:  # noqa: S310 - 目标即被测系统
+            status = resp.status
+            body = resp.read(4096)
+            final_url = resp.geturl()
+    except HTTPError as exc:
+        status, body, final_url = exc.code, exc.read(4096) if exc.fp else b"", url
+    except (URLError, OSError, ValueError) as exc:
+        return {"reachable": False, "error": str(exc)}
+    # 红线：探测期间若被重定向出等价类，如实报告（不算可达）
+    if final_url and not redlines.same_host(url, final_url):
+        return {"reachable": False,
+                "error": f"GET / 重定向落点越出等价类: {final_url}"}
+    text = body.decode("utf-8", "replace")
+    title_m = re.search(r"<title[^>]*>([^<]{0,120})</title>", text, re.I)
+    return {
+        "reachable": True,
+        "status": status,
+        "page_title": (title_m.group(1).strip() if title_m else ""),
+        "body_head_sha256": hashlib.sha256(body).hexdigest()[:16],
+    }
+
+
+def propose_tier(requirement_text: str, writes_expected: bool | None = None) -> dict[str, Any]:
+    """机械定档建议：风险×复杂度 → checklist / standard / deep + 可解释理由。"""
+    text = requirement_text or ""
+    plain = re.sub(r"\s", "", text)
+    n_chars = len(plain)
+    n_writes = len(_WRITE_HINTS.findall(text))
+    n_roles = len(set(_ROLE_HINTS.findall(text)))
+    reasons = [f"需求正文 {n_chars} 字", f"写操作动词 {n_writes} 处", f"角色词 {n_roles} 类"]
+    if writes_expected is not None:
+        reasons.append(f"调用方声明含写操作={writes_expected}")
+    score = (2 if n_chars >= 1500 else 1 if n_chars >= 300 else 0) \
+        + (2 if n_writes >= 8 else 1 if n_writes >= 2 else 0) \
+        + (1 if n_roles >= 2 else 0) \
+        + (1 if writes_expected else 0)
+    tier = "checklist" if score <= 1 else ("standard" if score <= 4 else "deep")
+    return {"proposed_tier": tier, "score": score, "reasons": reasons,
+            "card": {
+                "question": "本批次按哪个档位走？",
+                "options": [
+                    {"value": "checklist", "label": "checklist：小需求 → R 规则+checklist,人勾完成,不建用例库"},
+                    {"value": "standard", "label": "standard：完整链(澄清→分析→用例→采纳→编译→执行→覆盖图)"},
+                    {"value": "deep", "label": "deep：标准链+全量故障注入与双趟复执行"},
+                ],
+                "recommended": tier,
+            }}
+
+
+def ingest(title: str, base_url: str, *, source_kind: str, source_ref: str,
+           requirement_text: str = "", environment_ref: str = "",
+           tier: str = "", tier_confirmed_via: str = "",
+           owner: str = "") -> dict[str, Any]:
+    """建批次 + 落 intake_profile。tier 未给时只回确认卡数据（不落产物——
+    档位是 intake_profile 的必备字段，人闸没走完就没有这个产物）。"""
+    probe = probe_target(base_url)
+    proposal = propose_tier(requirement_text)
+    if not tier:
+        return {"ok": False, "need": "tier_confirmation",
+                "probe": probe, **proposal}
+    if tier not in TIERS:
+        return {"ok": False, "error": f"tier 必须是 {TIERS} 之一，实为 {tier!r}"}
+    if not probe.get("reachable"):
+        # 溯源/能力锁：终点不可达 = 不建批次（fail-closed，不能对空气接单）
+        return {"ok": False, "error": "接入终点不可达，不建批次", "probe": probe}
+    batch = artifacts.create_batch(title, owner=owner, base_url=base_url.rstrip("/"),
+                                   environment_ref=environment_ref,
+                                   source_ref=source_ref)
+    bid = batch["batch_id"]
+    if requirement_text:
+        # 需求正文快照落批次目录（oracle 出处锚，content_digest 的对象）
+        import os
+        snap = os.path.join(artifacts.batch_dir(bid), "requirement.txt")
+        with open(snap, "w", encoding="utf-8") as fh:
+            fh.write(requirement_text)
+    profile = artifacts.save_artifact(bid, "intake_profile", {
+        "base_url": base_url.rstrip("/"),
+        "environment_ref": environment_ref,
+        "source": {"kind": source_kind, "ref": source_ref,
+                   "content_digest": (text_digest(requirement_text)
+                                      if requirement_text else "")},
+        "target_probe": probe,
+        "tier": tier,
+        "tier_proposal": {k: proposal[k] for k in ("proposed_tier", "score", "reasons")},
+        "tier_confirmed_via": tier_confirmed_via or "unspecified",
+    })
+    artifacts.append_event(bid, {"type": "tier_confirm", "tier": tier,
+                                 "via": tier_confirmed_via or "unspecified"})
+    return {"ok": True, "batch_id": bid, "intake_profile": profile}

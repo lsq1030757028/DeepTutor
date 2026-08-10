@@ -132,7 +132,8 @@ def validate_case(case: Any, index: int) -> list[dict[str, Any]]:
     if not isinstance(auto, dict) or not isinstance(auto.get("admissible"), bool):
         _err(errors, "S26", f"{label}.automation", "必须含 admissible(bool)")
     else:
-        if set(auto) - {"admissible", "exclusion_reason"}:
+        # recipe：工作基线扩面字段（可编译执行配方），变更记录见 run 目录 schema-changelog.md
+        if set(auto) - {"admissible", "exclusion_reason", "recipe"}:
             _err(errors, "S26", f"{label}.automation", "含未知字段")
         if auto.get("admissible") is False and not (
                 isinstance(auto.get("exclusion_reason"), str)

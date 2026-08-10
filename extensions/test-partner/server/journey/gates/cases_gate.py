@@ -21,8 +21,11 @@ CASES_FILES = ["cases_exec.json", "cases.md"]
 CASES_INDEX = "cases_index.json"
 SKIP_DIRS = {"evidence", "node_modules", "__pycache__", ".git"}
 
+# M1 适配：追加 `<slug>/R<n>-C<nnn>` 分支（ApprovedCaseSet 稳定 case_id 形态，
+# schema.CASE_ID_RE 同源）。只扩识别面不改判据——原件全部向量照过（见 test_gate_cases.py）。
 CASE_ID = re.compile(
     r"(?:^|[|\s(（【])((?:[A-Za-z]{1,6}[-_])+[A-Za-z0-9]*\d+[A-Za-z0-9_-]*"
+    r"|[a-z0-9-]+/R[0-9]+-C[0-9]{3}"
     r"|用例\s*\d+|CASE\s*\d+)(?=[|\s)）】:：,，.。]|$)", re.I)
 SEP_ROW = re.compile(r"^\s*\|[\s:|.\-—–]+\|?\s*$")
 HEADER_HINT = re.compile(r"(用例\s*(ID|编号|号)|case\s*id)", re.I)
