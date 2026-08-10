@@ -24,11 +24,29 @@ on:
       - "extensions/test-partner/**"
       - "!extensions/test-partner/docs/**"
       - ".github/workflows/test-partner.yml"
+      # 宿主接线面：这些文件属于上游目录，但坏了同样让我们这条线整个不可用。
+      # 实证（2026-08-08 P5 勘察）：一次上游同步只改 `deeptutor/**` 与 `web/**`，
+      # 于是改动了工作台的挂载点 `api/main.py` 却**触发不了本工作流**——
+      # 850 例一条没跑，「不绿不合」在同步 PR 上是一句空话。
+      # 只列我们自己的接线文件，不整个 `deeptutor/**` 兜底：那样每次上游同步
+      # 都全量跑，额度纪律就白立了。
+      - "deeptutor/api/routers/test_workbench*.py"
+      - "deeptutor/api/main.py"
+      - "Dockerfile"
   pull_request:
     paths:
       - "extensions/test-partner/**"
       - "!extensions/test-partner/docs/**"
       - ".github/workflows/test-partner.yml"
+      # 宿主接线面：这些文件属于上游目录，但坏了同样让我们这条线整个不可用。
+      # 实证（2026-08-08 P5 勘察）：一次上游同步只改 `deeptutor/**` 与 `web/**`，
+      # 于是改动了工作台的挂载点 `api/main.py` 却**触发不了本工作流**——
+      # 850 例一条没跑，「不绿不合」在同步 PR 上是一句空话。
+      # 只列我们自己的接线文件，不整个 `deeptutor/**` 兜底：那样每次上游同步
+      # 都全量跑，额度纪律就白立了。
+      - "deeptutor/api/routers/test_workbench*.py"
+      - "deeptutor/api/main.py"
+      - "Dockerfile"
   workflow_dispatch:
 
 # 同一分支上新推送即取消上一次未跑完的 run；main 不取消（要留完整基线证据）
