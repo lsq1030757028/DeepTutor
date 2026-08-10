@@ -46,8 +46,11 @@ interface GeneratedCase {
   id?: string;
   title?: string;
   intent?: string;
-  request?: { method?: string; url?: string };
+  request?: { method?: string; url?: string; assertions?: unknown[] };
   assertions?: unknown[];
+  //: 纯本地标记：这条在审核界面上被改过。采纳时据它决定送不送 edits，
+  //: 不改过的一条也不送——少送一个字段就少一分把原样内容"改"坏的机会。
+  _edited?: boolean;
 }
 
 interface JobResult {
@@ -85,9 +88,13 @@ async function readError(res: Response): Promise<string> {
   }
 }
 
-export default function NewBatchFlow({ onDone, onCancel }: {
+export default function NewBatchFlow({ onDone, onCancel, resumeJobId = null }: {
   onDone: () => void;
   onCancel: () => void;
+  //: 从常驻任务条「回到任务」进来时带的任务号。有它就不从上传开始，
+  //: 直接认领那个任务（在跑就接着轮询，跑完就进审核）——这是 BB-489 的另一半：
+  //: 光有提示条但点进去还得重传 HAR，等于没找回。
+  resumeJobId?: string | null;
 }) {
   const { t } = useTranslation();
   const [step, setStep] = useState<Step>("upload");
@@ -199,6 +206,37 @@ export default function NewBatchFlow({ onDone, onCancel }: {
     }
   }, [draft, scenario, stopPolling]);
 
+  // ── 接管既有任务（从常驻任务条进来）───────────────────────────────────
+  const watch = useCallback((jobId: string) => {
+    stopPolling();
+    const tick = async () => {
+      try {
+        const r = await apiFetch(apiUrl(`${BASE}/generate/jobs/${jobId}`));
+        if (!r.ok) throw new Error(await readError(r));
+        const cur: Job = await r.json();
+        setJob(cur);
+        if (cur.state === "done") {
+          stopPolling();
+          setPicked(new Set((cur.result?.cases || []).map((c) => String(c.id))));
+          setStep("review");
+        } else if (cur.state === "failed" || cur.state === "cancelled") {
+          stopPolling();
+        }
+      } catch (e) {
+        stopPolling();
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    };
+    void tick();                       // 先立刻取一次，别让用户干等一个轮询周期
+    pollRef.current = setInterval(() => void tick(), POLL_MS);
+  }, [stopPolling]);
+
+  useEffect(() => {
+    if (!resumeJobId) return;
+    setStep("running");                // 先进运行态，watch 取回后若已完成会自动转审核
+    watch(resumeJobId);
+  }, [resumeJobId, watch]);
+
   const cancelJob = useCallback(async () => {
     if (!job) return;
     stopPolling();
@@ -209,6 +247,55 @@ export default function NewBatchFlow({ onDone, onCancel }: {
     }
   }, [job, onCancel, stopPolling]);
 
+  // ── 采纳前的三个出路（0010 硬约束三，设计稿画了但一直没实现）──────────
+  //
+  // 改的是**本地这份待采纳结果**，不回后端：这一步还没入库，
+  // "勾选是入库唯一闸门"这条纪律要求在采纳那一刻之前什么都不落盘。
+  const [editingCase, setEditingCase] = useState<string | null>(null);
+
+  const patchCase = useCallback((caseId: string, patch: Record<string, unknown>) => {
+    setJob((prev) => {
+      if (!prev?.result?.cases) return prev;
+      return {
+        ...prev,
+        result: {
+          ...prev.result,
+          cases: prev.result.cases.map((c) =>
+            String(c.id) === caseId ? { ...c, ...patch, _edited: true } : c),
+        },
+      };
+    });
+  }, []);
+
+  const addBodyAssertion = useCallback((caseId: string) => {
+    setJob((prev) => {
+      if (!prev?.result?.cases) return prev;
+      return {
+        ...prev,
+        result: {
+          ...prev.result,
+          cases: prev.result.cases.map((c) => {
+            if (String(c.id) !== caseId) return c;
+            const req = (c.request || {}) as Record<string, unknown>;
+            const existing = Array.isArray(req.assertions) ? req.assertions : [];
+            return {
+              ...c,
+              _edited: true,
+              request: {
+                ...req,
+                // 给一条**建议**断言而不是猜死一个值：路径留空让用户填，
+                // 编成一个具体的 $.data.xxx 反而会被当成"系统说该这么写"
+                assertions: [...existing,
+                             { type: "json_path", path: "", expected: "" }],
+              },
+            };
+          }),
+        },
+      };
+    });
+    setEditingCase(caseId);          // 加完直接展开，让用户填那个路径
+  }, []);
+
   // ── 第 4 步：采纳 ───────────────────────────────────────────────────────
   const adopt = useCallback(async () => {
     if (!job) return;
@@ -218,7 +305,18 @@ export default function NewBatchFlow({ onDone, onCancel }: {
       const res = await apiFetch(apiUrl(`${BASE}/generate/jobs/${job.job_id}/adopt`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ case_ids: Array.from(picked) }),
+        body: JSON.stringify({
+          case_ids: Array.from(picked),
+          // 采纳前的就地修改：只送改过的字段，底稿仍是服务端那份
+          edits: Object.fromEntries(
+            (job.result?.cases || [])
+              .filter((c) => picked.has(String(c.id)) && c._edited)
+              .map((c) => [String(c.id), {
+                ...(c.title !== undefined ? { title: c.title } : {}),
+                ...(c.request !== undefined ? { request: c.request } : {}),
+              }]),
+          ),
+        }),
       });
       if (!res.ok) throw new Error(await readError(res));
       onDone();
@@ -463,8 +561,43 @@ export default function NewBatchFlow({ onDone, onCancel }: {
                             {c.request?.method} {c.request?.url}
                           </div>
                           {thin && (
-                            <div className="mt-1 text-[11.5px] text-amber-600 dark:text-amber-400">
-                              {t("Only asserts the status code — running it just proves the endpoint is alive.")}
+                            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11.5px] text-amber-600 dark:text-amber-400">
+                              <span>{t("Only asserts the status code — running it just proves the endpoint is alive.")}</span>
+                              {/* 0010 硬约束三：指出问题必须给控件。这一个是"我知道该加什么" */}
+                              <button
+                                type="button"
+                                onClick={() => addBodyAssertion(id)}
+                                className="rounded border border-amber-500/50 px-1.5 py-0.5 text-[11px] hover:bg-amber-500/10"
+                              >
+                                {t("Add a response-body assertion")}
+                              </button>
+                            </div>
+                          )}
+                          {/* 这一个是"让我自己来"——就地编辑，改完立刻回到这张表 */}
+                          <button
+                            type="button"
+                            onClick={() => setEditingCase(editingCase === id ? null : id)}
+                            className="mt-1 text-[11px] text-[var(--muted-foreground)] underline"
+                          >
+                            {editingCase === id ? t("Done editing") : t("Edit inline")}
+                          </button>
+                          {editingCase === id && (
+                            <div className="mt-1.5 rounded-lg border border-[var(--border)] p-2">
+                              <input
+                                value={c.title || ""}
+                                onChange={(e) => patchCase(id, { title: e.target.value })}
+                                className="mb-1.5 w-full rounded border border-[var(--input)] bg-[var(--card)] px-2 py-1 text-[12px] text-[var(--foreground)]"
+                              />
+                              <input
+                                value={c.request?.url || ""}
+                                onChange={(e) => patchCase(id, {
+                                  request: { ...(c.request || {}), url: e.target.value },
+                                })}
+                                className="w-full rounded border border-[var(--input)] bg-[var(--card)] px-2 py-1 font-mono text-[11.5px] text-[var(--foreground)]"
+                              />
+                              <p className="mt-1 text-[10.5px] text-[var(--muted-foreground)]">
+                                {t("Edits here apply to what gets adopted — nothing is stored until you adopt.")}
+                              </p>
                             </div>
                           )}
                         </td>

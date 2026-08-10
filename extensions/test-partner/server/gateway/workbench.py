@@ -53,7 +53,7 @@ import threading
 import time
 from typing import Any
 
-from server import delivery, execute
+from server import case_validate, delivery, execute
 
 log = logging.getLogger("test-partner.gateway")
 
@@ -213,6 +213,37 @@ def _as_text_list(value: Any) -> list[str]:
     return []
 
 
+def required_vars(request: Any) -> list[str]:
+    """一条用例要用到的变量名（去重保序）。`baseUrl` 不算——它来自环境的地址栏，
+    不是变量表里的一项，混进去会让用户以为自己还差配一个变量。
+
+    复用 `execute.missing_vars` 而不是另写一个正则：那个函数是执行层判"变量缺失
+    不发请求"的同一个实现，两处若各写各的，界面说"齐了"而执行说"缺"就成了必然。
+    传空 mapping 即得到"全部被引用的变量"。
+    """
+    if not isinstance(request, dict):
+        return []
+    texts = [str(request.get("url") or "")]
+    headers = request.get("headers")
+    if isinstance(headers, (list, tuple)):
+        for h in headers:
+            if isinstance(h, dict):
+                texts.append(str(h.get("value", "")))
+            elif isinstance(h, str):
+                texts.append(h)
+    body = request.get("body")
+    if isinstance(body, dict) and body.get("raw") is not None:
+        raw = body["raw"]
+        texts.append(raw if isinstance(raw, str)
+                     else json.dumps(raw, ensure_ascii=False))
+    out: list[str] = []
+    for text in texts:
+        for name in execute.missing_vars(text, {}):
+            if name != execute.BASE_URL_VAR and name not in out:
+                out.append(name)
+    return out
+
+
 def _case_row(case: Any, index: int) -> dict[str, Any]:
     """一条用例 → 表格行 + 展开详情。**请求块原样带出，`{{变量}}` 不解析。**
 
@@ -238,6 +269,12 @@ def _case_row(case: Any, index: int) -> dict[str, Any]:
         "request": request if isinstance(request, dict) else None,
         "executable": isinstance(request, dict) and _assertion_count(request) > 0,
         "assertion_count": _assertion_count(request),
+        # 这条用例引用了哪些变量。**页面拿它与所选环境的键名做差集**算"还缺哪些"——
+        # 差集在前端算，切换环境下拉框就能立刻更新，不必回后端再问一次。
+        "required_vars": required_vars(request),
+        # 这条是模型写的还是人改过的（0012 ADR-2 的留痕）。缺字段的旧批次按 ai 处理：
+        # 它们成文时还没有编辑功能，不可能是人改的。
+        "origin": str(case.get("origin") or "ai"),
         "broken": False,
     }
 
@@ -340,6 +377,140 @@ def load_cases_for_execution(delivery_id: str, root: str | None = None) -> tuple
         raise WorkbenchError(f"{delivery.CASES_FILE} 里没有可执行的用例数组。",
                              code="CASES_JSON_BROKEN")
     return dir_path, list(rows), _login_request_of(payload)
+
+
+# ── 变量反查：这个变量被谁用着（闭环稿 B2 屏） ──────────────────────────────
+
+def variable_usage(root: str | None = None) -> dict[str, Any]:
+    """扫全部批次 →「变量名 → 哪些批次的哪几条用例在用它」。
+
+    为什么要有它：变量在配置页是个孤立的键值对，用户问的是"我配这个有什么用"。
+    没有这张反查表，答案只能靠人去每个批次里翻。
+
+    实现上就是把每个批次的 `required_vars` 汇总反转。全表扫描——批次是几十个量级，
+    每个 cases.json 几十 KB，一次扫描远快于为它建索引再维护索引一致性。
+    真到了慢的那天，缓存的键是 deliveries 目录的 mtime，不是现在该做的事。
+    """
+    base = deliveries_root(root)
+    usage: dict[str, dict[str, Any]] = {}
+    if not os.path.isdir(base):
+        return {"ok": True, "usage": {}}
+    for name in sorted(os.listdir(base)):
+        dir_path = os.path.join(base, name)
+        if not os.path.isdir(dir_path):
+            continue
+        payload = _read_json(os.path.join(dir_path, delivery.CASES_FILE))
+        rows = payload.get("cases") if isinstance(payload, dict) else payload
+        if not isinstance(rows, (list, tuple)):
+            continue
+        title = str((payload or {}).get("title") or name) if isinstance(payload, dict) else name
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            case_id = str(row.get("case_id") or "")
+            for var in required_vars(row.get("request")):
+                slot = usage.setdefault(var, {"delivery_count": 0, "case_count": 0,
+                                              "deliveries": []})
+                entry = next((d for d in slot["deliveries"] if d["id"] == name), None)
+                if entry is None:
+                    entry = {"id": name, "title": title, "case_ids": []}
+                    slot["deliveries"].append(entry)
+                    slot["delivery_count"] += 1
+                if case_id and case_id not in entry["case_ids"]:
+                    entry["case_ids"].append(case_id)
+                    slot["case_count"] += 1
+    return {"ok": True, "usage": usage}
+
+
+# ── 用例编辑（闭环稿 D 屏 · 0012 ADR-2） ────────────────────────────────────
+
+#: 允许被编辑的顶层字段。**白名单而不是黑名单**：漏掉一个该禁的字段，
+#: 后果是让调用方改到 case_id 这种身份字段，比漏掉一个该放的严重得多。
+EDITABLE_FIELDS = ("title", "module", "priority", "case_type", "preconditions",
+                   "steps", "expected", "test_data", "endpoints", "request")
+
+
+def update_case(delivery_id: str, case_id: str, patch: Any,
+                root: str | None = None) -> dict[str, Any]:
+    """就地改一条已采纳用例，并标记为人工修改。
+
+    **改完立刻按 `validate_cases` 复校，不合法直接拒、不落盘**——
+    这是 0010 硬约束二的延伸：那道闸管"不合格的别进库"，
+    没有理由允许合格的东西被改成不合格之后留在库里。
+
+    只改 `cases.json`（执行与页面都读它）。导出产物不同步重写：
+    它们是某一次导出动作的快照，改了用例就重新导出一次即可——
+    偷偷改掉用户已经拿去评审的那份 xlsx 更糟。
+    """
+    safe_id = safe_delivery_id(delivery_id)
+    dir_path = os.path.join(deliveries_root(root), safe_id)
+    cases_path = os.path.join(dir_path, delivery.CASES_FILE)
+    if not os.path.isfile(cases_path):
+        raise WorkbenchError("这个批次没有结构化用例数据，改不了。", code="NO_CASES_JSON")
+    if not isinstance(patch, dict) or not patch:
+        raise WorkbenchError("没给出要改的内容。", code="EMPTY_PATCH")
+
+    payload = _read_json(cases_path)
+    rows = payload.get("cases") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        raise WorkbenchError(f"{delivery.CASES_FILE} 读不出用例数组。",
+                             code="CASES_JSON_BROKEN")
+
+    wanted = str(case_id or "").strip()
+    index = next((i for i, r in enumerate(rows)
+                  if isinstance(r, dict) and str(r.get("case_id") or "") == wanted), -1)
+    if index < 0:
+        raise WorkbenchError(f"批次里没有编号「{wanted}」的用例。", code="CASE_NOT_FOUND")
+
+    rejected = sorted(set(patch) - set(EDITABLE_FIELDS))
+    if rejected:
+        raise WorkbenchError(
+            f"这些字段不允许编辑：{'、'.join(rejected)}。"
+            f"可改的是：{'、'.join(EDITABLE_FIELDS)}。", code="FIELD_NOT_EDITABLE")
+
+    updated = dict(rows[index])
+    updated.update(patch)
+    updated["origin"] = "human"          # 留痕：这条被人动过
+
+    # 单条复校：把这一条交给与落盘时同一套规则，errors 非空即拒。
+    verdict = case_validate.validate_cases([updated])
+    errors = [e for e in (verdict.get("errors") or [])]
+    if errors:
+        raise WorkbenchError(
+            "改完之后这条用例不合格，没有保存："
+            + "；".join(str(e.get("message") or e) for e in errors[:3]),
+            code="CASE_INVALID")
+
+    rows[index] = updated
+    if isinstance(payload, dict):
+        payload["cases"] = rows
+        payload["last_edited_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        payload = rows
+    # 原子写：改用例的同时被读到半截文件，页面会以为整批坏了
+    tmp = cases_path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        os.replace(tmp, cases_path)
+    except OSError as exc:
+        # 写不进去最常见的原因是目录属主不对（例如批次是被另一个身份的进程建的）。
+        # 裸抛会变成一句 Internal Server Error，用户既不知道发生了什么也无从下手。
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise WorkbenchError(
+            f"改动没能写进批次目录：{type(exc).__name__}: {exc}。"
+            "常见原因是该批次目录不是当前服务进程建的（属主不同），"
+            "用例本身没有被改动。", code="CASES_WRITE_FAILED") from exc
+
+    log.info("workbench: 批次 %s 的用例 %s 已被人工修改（%d 个字段）",
+             safe_id, wanted, len(patch))
+    return {"ok": True, "case": _case_row(updated, index),
+            "warnings": [str(w.get("message") or w)
+                         for w in (verdict.get("warnings") or [])[:5]]}
 
 
 # ── 导出（设计稿第 7 屏） ───────────────────────────────────────────────────

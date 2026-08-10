@@ -14,6 +14,7 @@ import { useTranslation } from "react-i18next";
 
 import { apiFetch, apiUrl } from "@/lib/api";
 import SpaceSectionHeader from "@/components/space/SpaceSectionHeader";
+import ActiveJobBar from "@/components/test-workbench/ActiveJobBar";
 import DeliveryDetail from "@/components/test-workbench/DeliveryDetail";
 import EnvironmentsPanel from "@/components/test-workbench/EnvironmentsPanel";
 import NewBatchFlow from "@/components/test-workbench/NewBatchFlow";
@@ -52,6 +53,8 @@ export default function TestWorkbenchHub() {
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [view, setView] = useState<View>({ kind: "list" });
+  //: 从常驻任务条点「回到任务」时带进来的任务号——新建流程据它接管在跑/已跑完的任务
+  const [resumeJobId, setResumeJobId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -123,9 +126,26 @@ export default function TestWorkbenchHub() {
         }
       />
 
+      {/* 常驻任务条：在任意一屏之上，切页/刷新都还在（BB-489）。
+          放在视图分支之外就是它"常驻"的实现——不属于任何一屏。 */}
+      {health?.extension_loaded !== false && (
+        <ActiveJobBar
+          onOpen={(jobId) => {
+            // 回到任务 = 打开新建流程并接管那个任务号，而不是重新发起一次
+            setResumeJobId(jobId);
+            setCreating(true);
+            setView({ kind: "list" });
+          }}
+        />
+      )}
+
       {/* 详情与环境配置各占整个主区，自带返回。列表状态的刷新在返回时顺手做。 */}
       {view.kind === "environments" && (
-        <EnvironmentsPanel onBack={() => setView({ kind: "list" })} />
+        <EnvironmentsPanel
+          onBack={() => setView({ kind: "list" })}
+          // 「回到那个批次」——B2 屏那条回程路，配完变量能直接看到效果
+          onOpenDelivery={(id) => setView({ kind: "detail", id })}
+        />
       )}
       {view.kind === "detail" && (
         <DeliveryDetail
@@ -162,11 +182,16 @@ export default function TestWorkbenchHub() {
       {creating && (
         <div className="mb-4">
           <NewBatchFlow
-            onCancel={() => setCreating(false)}
+            resumeJobId={resumeJobId}
+            onCancel={() => {
+              setCreating(false);
+              setResumeJobId(null);
+            }}
             onDone={() => {
               // 采纳后回到列表并刷新——新批次要立刻看得见，
               // 否则用户不确定到底存进去没有。
               setCreating(false);
+              setResumeJobId(null);
               void load();
             }}
           />

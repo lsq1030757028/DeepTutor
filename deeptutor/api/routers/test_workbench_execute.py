@@ -165,6 +165,18 @@ class EnvironmentDeleteBody(BaseModel):
     name: str = Field(..., min_length=1)
 
 
+@router.get("/environments/usage")
+def environment_usage() -> dict[str, Any]:
+    """「这个变量被谁用着」——变量名 → 哪些批次的哪几条用例引用了它。
+
+    环境页靠它回答用户那句"我配这个有什么用"（决策 0012 · B2 屏）。
+    只出批次 id/标题与用例编号，**不出任何变量值**——这是一张引用关系表，
+    不是配置表。
+    """
+    wb = _require_extension()
+    return wb.variable_usage(_deliveries_root())
+
+
 @router.post("/environments/delete")
 def delete_environment(body: EnvironmentDeleteBody) -> dict[str, Any]:
     """删一个环境（名字走请求体，不走 URL——中文环境名进路径是自找编码问题）。"""

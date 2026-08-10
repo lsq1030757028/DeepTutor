@@ -37,6 +37,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from deeptutor.multi_user.context import get_current_user_or_none
 from deeptutor.multi_user.paths import ADMIN_WORKSPACE_ROOT
@@ -94,6 +95,42 @@ def get_delivery(delivery_id: str) -> dict[str, Any]:
         # 批次 id 非法或不存在都走这里。id 校验在 workbench.safe_delivery_id 里，
         # 非法直接抛而不是"清洗后继续"——那是路径穿越的常见入口。
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class CasePatch(BaseModel):
+    """一条用例的可编辑字段。全部可选——只传要改的那几个。
+
+    字段白名单在扩展层（`workbench.EDITABLE_FIELDS`）再校一次：
+    这里的模型定义是给 OpenAPI 看的，真正的闸不能只长在最外层。
+    """
+
+    title: str | None = None
+    module: str | None = None
+    priority: str | None = None
+    case_type: str | None = None
+    preconditions: str | None = None
+    steps: list[str] | None = None
+    expected: str | None = None
+    test_data: str | None = None
+    endpoints: list[str] | None = None
+    request: dict[str, Any] | None = None
+
+
+@router.patch("/deliveries/{delivery_id}/cases/{case_id}")
+def patch_case(delivery_id: str, case_id: str, body: CasePatch) -> dict[str, Any]:
+    """改一条已采纳用例（决策 0012 ADR-2）。
+
+    改完标记 `origin=human` 并按落盘时同一套规则复校，不合格拒存。
+    只动 `cases.json`；已导出的产物是历史快照，不追改（要新的就重新导出）。
+    """
+    wb = _require_extension()
+    patch = {k: v for k, v in body.model_dump().items() if v is not None}
+    try:
+        return wb.update_case(delivery_id, case_id, patch, _deliveries_root())
+    except wb.WorkbenchError as exc:
+        raise HTTPException(status_code=400, detail={
+            "code": getattr(exc, "code", "WORKBENCH_ERROR"),
+            "message": str(exc)}) from exc
 
 
 # ── HAR 体检（设计稿第 2 屏）─────────────────────────────────────────────────

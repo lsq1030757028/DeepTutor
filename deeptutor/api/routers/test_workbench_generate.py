@@ -196,6 +196,27 @@ async def start_generation(body: GenerateRequest) -> dict[str, Any]:
     return job.public()
 
 
+@router.get("/generate/jobs/active")
+def active_job() -> dict[str, Any]:
+    """当前用户还在跑（或刚跑完还没被取走）的生成任务。
+
+    工作台任意页面靠它挂常驻任务条（决策 0012 · C 回得来）：
+    页面刷新、切到别的屏、甚至关掉标签页再打开，都能重新找回任务——
+    任务在服务端跑，不在页面里。缺这一条时用户的体感是"任务消失了"（BB-489）。
+
+    **必须放在 `/generate/jobs/{job_id}` 之前**：FastAPI 按声明顺序匹配，
+    写在后面的话 `active` 会被当成一个 job_id 吃掉，永远返回 404。
+    """
+    jobs = _STORE.list_for(_owner())
+    live = [j for j in jobs if j.state in (_jobs.PENDING, _jobs.RUNNING)]
+    if live:
+        # 一个用户同时只允许一个生成任务（见模块 docstring），取最近的那个
+        return {"job": live[-1].public()}
+    # 跑完但用户还没回来看的，也要能提示——否则他不知道结果已经好了
+    done = [j for j in jobs if j.state == _jobs.DONE]
+    return {"job": done[-1].public() if done else None}
+
+
 @router.get("/generate/jobs/{job_id}")
 def get_job(job_id: str) -> dict[str, Any]:
     job = _STORE.get(job_id, _owner())
@@ -221,6 +242,12 @@ class AdoptRequest(BaseModel):
     case_ids: list[str] = Field(default_factory=list)
     title: str = ""
     fmt: str = ""
+    #: 采纳前用户在审核界面上的就地修改：`{用例编号: {字段: 新值}}`。
+    #:
+    #: 为什么是"改哪几个字段"而不是"整条用例送上来"：后者等于允许调用方
+    #: 提交任意内容并当作模型产出入库，"只有本次生成的用例才能被采纳"
+    #: 这条闸就没了。收窄成字段级补丁，底稿仍是服务端那份。
+    edits: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 @router.post("/generate/jobs/{job_id}/adopt")
@@ -252,7 +279,23 @@ def adopt_cases(job_id: str, body: AdoptRequest) -> dict[str, Any]:
             detail=f"这些编号不在本次生成结果里：{'、'.join(unknown)}",
         )
 
-    picked = [by_id[cid] for cid in wanted]
+    # 应用采纳前的就地修改（0010 硬约束三的三个出路之一）。
+    # 字段白名单与已采纳用例的编辑面同一份——两处若各管各的，
+    # 会出现"采纳前能改的字段，采纳后反而不让改"这种说不通的差异。
+    wb = _require_extension()
+    picked: list[dict[str, Any]] = []
+    for cid in wanted:
+        case = dict(by_id[cid])
+        patch = body.edits.get(cid) or {}
+        rejected = sorted(set(patch) - set(wb.EDITABLE_FIELDS))
+        if rejected:
+            raise HTTPException(
+                status_code=400,
+                detail=f"这些字段不允许修改：{'、'.join(rejected)}（用例 {cid}）")
+        if patch:
+            case.update(patch)
+            case["origin"] = "human"      # 采纳前改过的，同样留痕
+        picked.append(case)
 
     from server import delivery  # type: ignore[import-not-found]
 

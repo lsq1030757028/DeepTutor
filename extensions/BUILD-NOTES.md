@@ -245,3 +245,32 @@ GitHub Actions 仍被停（所有 job 零步骤、分配不到 runner，手动�
 1. Git Bash 的 curl 发 CJK JSON 会变 GBK 字节——脚本里凡带中文的 payload 用 ASCII 或走 python。
 2. `docker exec` 不带 `-i` 时 heredoc 整个被丢，python 静默跑空脚本——夹具"造了"其实没造。
 3. Windows 版 curl 把 `/tmp/...` 当别的盘符路径，`-o` 的文件根本没写出来——落盘用相对路径。
+
+---
+
+## 闭环实现的验证（2026-08-10 · 决策 0012）
+
+脚本：`extensions/test-partner/scripts/verify_closure.sh`，端口 3786，副本卷。
+**16/16 PASS**，逐条对应 spec 的 AC-1～AC-8。
+
+### 三个坑，都是脚手架不是产品
+
+判定方法一律是「与真实形态对照」，不是读代码猜：
+
+1. **PATCH 报 500 / PermissionError**——`docker exec` 默认以 root 造夹具，
+   批次目录归 root，而应用进程是 `deeptutor` 用户，写不进去。
+   判据：真实批次目录属主全是 `deeptutor`，夹具那个是 `root`。
+   修法：`docker exec -u deeptutor`。产品侧顺带把裸 500 改成
+   `CASES_WRITE_FAILED` 可读错误——属主不对时用户该看到原因而不是 Internal Server Error。
+2. **夹具"没造出来"**——`python -c` 里的中文标题被 Git Bash 按 GBK 发出，
+   容器按 UTF-8 读成乱码，匹配永远不中。**本仓第三次踩同一个坑**，
+   已在脚本里写死 ASCII 标识并注释原因。
+3. **构建"成功"其实失败**——`docker build ... | tail -4` 把退出码换成了 tail 的 0。
+   与 `regression_gate.sh` 第 4 层修过的是同一个错误，这次犯在 docker 上。
+   **凡要判断成败的命令，不许接管道**；要看尾部就先重定向到文件再 tail。
+
+### 一处坏闸被自己抓出来
+
+AC-8（真值不出现在响应里）第一版写成「grep 不到就算过」——
+接口挂掉返回空串时它照样绿。改成**先断言响应体可识别、再断言不含真值**。
+与 P1 记过的"因不存在而恒真的断言"是同一类，只是这次发生在自己新写的脚本里。

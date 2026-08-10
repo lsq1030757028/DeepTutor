@@ -32,11 +32,26 @@ interface EnvironmentPublic {
 //: 配齐这三个保留变量名，执行时才能选「登录换新」。
 const RESERVED_HINT = ["login_username", "login_password", "auth_token_path"];
 
-export default function EnvironmentsPanel({ onBack }: { onBack: () => void }) {
+interface VarUsage {
+  delivery_count: number;
+  case_count: number;
+  deliveries: { id: string; title: string; case_ids: string[] }[];
+}
+
+export default function EnvironmentsPanel({ onBack, onOpenDelivery }: {
+  onBack: () => void;
+  onOpenDelivery?: (id: string) => void;
+}) {
   const { t } = useTranslation();
   const [rows, setRows] = useState<EnvironmentPublic[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  //: 变量反查表：这个变量被哪些批次的哪几条用例用着（闭环稿 B2 屏）。
+  //: 用户在这一页问的是"我配这个有什么用"，这张表就是答案。
+  const [usage, setUsage] = useState<Record<string, VarUsage>>({});
+  //: 保存后的变化回执：「N 条用例从待配置变为可执行」——不说这句，
+  //: 用户填完只看到表单收起来，不知道自己刚才那一下产生了什么效果。
+  const [savedNote, setSavedNote] = useState<{ text: string; delivery?: string } | null>(null);
 
   // 编辑态。null = 列表；否则是表单。
   const [editing, setEditing] = useState<{
@@ -54,6 +69,13 @@ export default function EnvironmentsPanel({ onBack }: { onBack: () => void }) {
       if (!res.ok) throw new Error(await readError(res));
       const data = await res.json();
       setRows(Array.isArray(data.environments) ? data.environments : []);
+      // 反查表单独取：它要扫全部批次，比环境列表慢，失败也不该拖垮这一页
+      try {
+        const u = await apiFetch(apiUrl(`${BASE}/environments/usage`)).then((r) => r.json());
+        setUsage(u?.usage || {});
+      } catch {
+        setUsage({});
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -100,13 +122,29 @@ export default function EnvironmentsPanel({ onBack }: { onBack: () => void }) {
       if (!res.ok) throw new Error(await readError(res));
       const data = await res.json();
       setRows(Array.isArray(data.environments) ? data.environments : []);
+
+      // 变化回执：这次新填的变量各自解锁了几条用例（闭环稿 B2）
+      const before = new Set(
+        (rows || []).find((r) => r.name === (editing.originalName || editing.name))
+          ?.variables.map((v) => v.key) || [],
+      );
+      const added = editing.variables
+        .filter((v) => v.key.trim() && v.value && !before.has(v.key.trim()))
+        .map((v) => v.key.trim());
+      const unlocked = added.reduce((n, k) => n + (usage[k]?.case_count || 0), 0);
+      const firstDelivery = added.map((k) => usage[k]?.deliveries?.[0]?.id).find(Boolean);
+      setSavedNote(unlocked > 0
+        ? { text: t("Saved. {{n}} case(s) went from waiting-on-config to runnable.", { n: unlocked }),
+            delivery: firstDelivery }
+        : { text: t("Saved.") });
       setEditing(null);
+      void load();                       // 重新取反查表：新变量也要出现在「谁在用」里
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }, [editing]);
+  }, [editing, rows, usage, t, load]);
 
   const remove = useCallback(async (name: string) => {
     setBusy(true);
@@ -177,6 +215,29 @@ export default function EnvironmentsPanel({ onBack }: { onBack: () => void }) {
           </div>
         )}
 
+        {/* 保存回执：告诉用户刚才那一下产生了什么变化，并给回到现场的路 */}
+        {savedNote && (
+          <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/8 px-3 py-2 text-[12.5px] text-[var(--foreground)]">
+            <span>{savedNote.text}</span>
+            {savedNote.delivery && onOpenDelivery && (
+              <button
+                type="button"
+                onClick={() => onOpenDelivery(savedNote.delivery!)}
+                className="text-[var(--primary)] underline"
+              >
+                {t("Back to that batch")}
+              </button>
+            )}
+            <span className="flex-1" />
+            <button
+              type="button"
+              aria-label={t("Dismiss")}
+              onClick={() => setSavedNote(null)}
+              className="text-[var(--muted-foreground)]"
+            >×</button>
+          </div>
+        )}
+
         {/* ── 列表 ── */}
         {!editing && rows && rows.length === 0 && (
           <div className="rounded-lg border border-[var(--border)] px-4 py-8 text-center">
@@ -217,12 +278,56 @@ export default function EnvironmentsPanel({ onBack }: { onBack: () => void }) {
               </button>
             </div>
             {env.variables.length > 0 && (
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {env.variables.map((v) => (
-                  <span key={v.key} className="rounded border border-[var(--border)] px-1.5 py-0.5 font-mono text-[10.5px] text-[var(--muted-foreground)]">
-                    {v.key}={v.masked || "*"}
-                  </span>
-                ))}
+              <div className="mt-2 overflow-x-auto rounded-lg border border-[var(--border)]">
+                <table className="w-full min-w-[380px] border-collapse text-[11.5px]">
+                  <thead>
+                    <tr>
+                      <th className="w-36 border-b border-[var(--border)] px-2 py-1.5 text-left font-medium text-[var(--muted-foreground)]">{t("Variable name")}</th>
+                      <th className="w-24 border-b border-[var(--border)] px-2 py-1.5 text-left font-medium text-[var(--muted-foreground)]">{t("Value")}</th>
+                      <th className="border-b border-[var(--border)] px-2 py-1.5 text-left font-medium text-[var(--muted-foreground)]">{t("Used by")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {env.variables.map((v) => {
+                      const u = usage[v.key];
+                      return (
+                        <tr key={v.key}>
+                          <td className="border-b border-[var(--border)]/50 px-2 py-1.5 font-mono text-[var(--foreground)]">
+                            {v.key}
+                            {RESERVED_HINT.includes(v.key) && (
+                              <span className="ml-1.5 rounded-full bg-emerald-500/12 px-1.5 py-0.5 text-[10px] text-emerald-600 dark:text-emerald-400">
+                                {t("reserved")}
+                              </span>
+                            )}
+                          </td>
+                          <td className="border-b border-[var(--border)]/50 px-2 py-1.5 font-mono text-[var(--muted-foreground)]">
+                            {v.masked || "*"}
+                          </td>
+                          <td className="border-b border-[var(--border)]/50 px-2 py-1.5">
+                            {!u ? (
+                              <span className="text-[var(--muted-foreground)]">{t("no case references it yet")}</span>
+                            ) : (
+                              <span className="flex flex-wrap items-center gap-1.5">
+                                <span className="text-[var(--foreground)]">
+                                  {t("{{d}} batch(es) · {{c}} case(s)", { d: u.delivery_count, c: u.case_count })}
+                                </span>
+                                {onOpenDelivery && u.deliveries[0] && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onOpenDelivery(u.deliveries[0].id)}
+                                    className="text-[var(--primary)] underline"
+                                  >
+                                    {u.deliveries[0].title}
+                                  </button>
+                                )}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             )}
             {env.note && (

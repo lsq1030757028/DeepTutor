@@ -1,0 +1,471 @@
+<meta charset="utf-8">
+<title>测试工作台 · 闭环交互稿（补四类关系）</title>
+<style>
+/* 视觉语言原样沿用 workbench-full.html（0010 已验收）——本稿只设计连接，不做新的视觉决策 */
+:root{--background:#fdfcf9;--foreground:#1c1816;--card:#fff;--primary:#b0501e;--primary-fg:#fff;
+  --muted:#f1ede2;--muted-fg:#6d645a;--accent:#ece7d8;--border:#e6decc;--input:#e6decc;color-scheme:light}
+.dark{--background:#1a1918;--foreground:#e8e4de;--card:#242220;--primary:#d4734b;--primary-fg:#1a1918;
+  --muted:#2a2725;--muted-fg:#9b9590;--accent:#302d2a;--border:#3a3634;--input:#3a3634;color-scheme:dark}
+.theme-snow{--background:#fff;--foreground:#0d0d0d;--card:#fff;--primary:#2563eb;--primary-fg:#fff;
+  --muted:#f2f2f2;--muted-fg:#6e6e6e;--accent:#ececec;--border:#e5e5e5;--input:#e5e5e5;color-scheme:light}
+.theme-glass{--background:#0e0d1a;--foreground:#fff;--card:rgba(255,255,255,.06);--primary:#a855f7;
+  --primary-fg:#fff;--muted-fg:#b5b5c7;--muted:rgba(255,255,255,.06);--accent:rgba(255,255,255,.12);
+  --border:rgba(255,255,255,.12);--input:rgba(255,255,255,.06);color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--background);color:var(--foreground);font-size:14px;line-height:1.5;
+  font-family:Geist,ui-sans-serif,system-ui,sans-serif}
+.serif{font-family:Lora,Georgia,serif}
+.top{position:sticky;top:0;z-index:9;border-bottom:1px solid var(--border);padding:11px 20px;
+  display:flex;gap:9px;align-items:center;flex-wrap:wrap;background:var(--card)}
+.top h1{font-size:15px;margin:0 8px 0 0;font-weight:600}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:9px;overflow:hidden}
+.seg button{border:0;background:transparent;color:var(--muted-fg);font:inherit;font-size:12px;
+  padding:5px 10px;cursor:pointer}
+.seg button[data-on]{background:var(--primary);color:var(--primary-fg)}
+.top small{color:var(--muted-fg);font-size:12px}
+.doc{max-width:1000px;margin:0 auto;padding:8px 24px 80px}
+.nav{position:sticky;top:52px;z-index:8;background:var(--background);padding:9px 0 5px;
+  border-bottom:1px solid var(--border);margin-bottom:4px}
+.nav a{font-size:11.5px;color:var(--muted-fg);text-decoration:none;padding:3px 8px;border-radius:7px;
+  display:inline-block}
+.nav a:hover{background:var(--muted);color:var(--foreground)}
+.step{margin-top:34px;scroll-margin-top:64px}
+.step>h2{font-size:17px;margin:0 0 3px;font-weight:600;display:flex;gap:9px;align-items:center}
+.step>h2 i{width:26px;height:22px;border-radius:7px;background:var(--primary);color:var(--primary-fg);
+  font-size:11px;font-style:normal;font-weight:600;display:flex;align-items:center;justify-content:center;flex:none}
+.step>p.k{margin:0 0 12px 35px;font-size:13px;color:var(--muted-fg)}
+.screen{border:1px solid var(--border);border-radius:13px;overflow:hidden;background:var(--card);
+  margin-left:35px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+.screen>.hd{padding:8px 13px;font-size:11.5px;color:var(--muted-fg);border-bottom:1px solid var(--border);
+  background:color-mix(in srgb,var(--muted) 35%,transparent)}
+.screen>.bd{padding:15px 17px}
+.why{margin:10px 0 0 35px;border-left:2px solid var(--primary);padding:2px 0 2px 12px;
+  font-size:12.5px;color:var(--muted-fg)}
+.why b{color:var(--foreground)}
+.fix{margin:10px 0 0 35px;border-left:2px solid #d97706;padding:2px 0 2px 12px;font-size:12.5px;
+  color:var(--muted-fg)}
+.fix b{color:var(--foreground)}
+.ic{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.6;flex:none}
+.tw{overflow-x:auto;border:1px solid var(--border);border-radius:10px}
+table{border-collapse:collapse;width:100%;min-width:540px;font-size:12.5px}
+th{text-align:left;font-size:11px;font-weight:500;color:var(--muted-fg);padding:7px 10px;
+  border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent);vertical-align:top}
+tr:last-child td{border-bottom:0}
+.mono{font-family:ui-monospace,Consolas,monospace;font-size:11.5px}
+.m{font-size:10px;padding:1px 5px;border-radius:4px;font-weight:600;background:var(--muted);color:var(--muted-fg)}
+.m.get{background:rgba(16,185,129,.12);color:#059669}
+.m.post{background:rgba(37,99,235,.12);color:#2563eb}
+.dark .m.get,.theme-glass .m.get{color:#34d399}.dark .m.post,.theme-glass .m.post{color:#60a5fa}
+.tag{font-size:10.5px;padding:1px 6px;border-radius:999px;border:1px solid var(--border);color:var(--muted-fg)}
+.ok{background:rgba(16,185,129,.1);color:#059669;border:0}.dark .ok,.theme-glass .ok{color:#34d399}
+.warn{background:rgba(245,158,11,.12);color:#d97706;border:0}.dark .warn,.theme-glass .warn{color:#fbbf24}
+.bad{background:rgba(239,68,68,.1);color:#dc2626;border:0}.dark .bad,.theme-glass .bad{color:#f87171}
+.edited{background:rgba(168,85,247,.12);color:#7c3aed;border:0}.dark .edited,.theme-glass .edited{color:#c4b5fd}
+.btn{font:inherit;font-size:12.5px;padding:6px 13px;border-radius:9px;cursor:pointer;
+  border:1px solid var(--border);background:var(--card);color:var(--foreground)}
+.btn.pri{background:var(--primary);color:var(--primary-fg);border-color:transparent;font-weight:500}
+.btn.sm{font-size:11.5px;padding:4px 9px}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.grow{flex:1}
+.act{display:flex;gap:9px;align-items:center;flex-wrap:wrap;padding-top:11px;margin-top:11px;
+  border-top:1px solid var(--border)}
+input[type=checkbox]{accent-color:var(--primary);width:13px;height:13px;margin-top:1px}
+input,select,textarea{font:inherit;font-size:12.5px;padding:6px 9px;border-radius:8px;
+  border:1px solid var(--input);background:var(--card);color:var(--foreground);width:100%}
+textarea{resize:vertical;line-height:1.7}
+details{border:1px solid var(--border);border-radius:9px;padding:8px 11px;margin-top:9px;font-size:12px}
+summary{cursor:pointer;color:var(--muted-fg)}
+pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:7px;padding:9px;
+  overflow-x:auto;font-size:11px;line-height:1.55;margin:8px 0 0}
+.kv{display:grid;grid-template-columns:104px minmax(0,1fr);gap:4px 10px;font-size:12px;margin-top:4px}
+.kv .k{color:var(--muted-fg)}
+.miss{border:1px solid rgba(245,158,11,.45);background:rgba(245,158,11,.08);border-radius:9px;
+  padding:8px 11px;font-size:12px;margin-top:9px}
+.good{border:1px solid rgba(16,185,129,.4);background:rgba(16,185,129,.07);border-radius:9px;
+  padding:8px 11px;font-size:12px;margin-top:9px}
+.rel{display:flex;gap:8px;align-items:center;font-size:11.5px;color:var(--muted-fg);margin-top:7px;flex-wrap:wrap}
+.chip{border:1px solid var(--border);border-radius:999px;padding:1px 8px;font-size:11px}
+.chip.on{border-color:color-mix(in srgb,#10b981 50%,transparent);color:#059669}
+.chip.off{border-color:rgba(245,158,11,.5);color:#d97706}
+.dark .chip.on,.theme-glass .chip.on{color:#34d399}
+.dark .chip.off,.theme-glass .chip.off{color:#fbbf24}
+.bar{display:flex;height:5px;border-radius:3px;overflow:hidden;background:var(--muted);margin-top:6px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted-fg);margin:6px 0 0 35px}
+.legend b{color:var(--foreground);font-weight:500}
+.rel-map{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin-top:4px}
+.rel-card{border:1px solid var(--border);border-radius:11px;padding:11px 12px}
+.rel-card .t{font-size:12.5px;font-weight:600;display:flex;gap:6px;align-items:center}
+.rel-card .s{font-size:11.5px;color:var(--muted-fg);margin-top:4px;line-height:1.6}
+.rel-card .w{font-size:11px;margin-top:6px;color:var(--primary)}
+.toast{position:relative;border:1px solid var(--border);border-radius:11px;padding:10px 12px;
+  background:color-mix(in srgb,var(--muted) 40%,transparent);font-size:12.5px;display:flex;gap:9px;align-items:center}
+</style>
+
+<div class="top">
+  <h1 class="serif">测试工作台 · 闭环交互稿</h1>
+  <div class="seg" id="th"><button data-t="light" data-on>Cream</button><button data-t="dark">Dark</button>
+    <button data-t="snow">Default</button><button data-t="glass">Glass</button></div>
+  <small>只补屏与屏之间的连接，十一屏各自的形态不动</small>
+</div>
+
+<div class="doc">
+<div class="nav">
+  <a href="#s0">0 为什么是这四类</a>
+  <a href="#s1">A 看得见</a><a href="#s2">B 连得上·用例侧</a><a href="#s3">B 连得上·环境侧</a>
+  <a href="#s4">C 回得来</a><a href="#s5">D 改得动</a><a href="#s6">E 空态</a>
+  <a href="#s7">附 判据对照</a>
+</div>
+
+<!-- 0 · 根因 -->
+<section class="step" id="s0">
+  <h2><i>0</i>缺的是四类关系，不是四个功能</h2>
+  <p class="k">已验收的设计稿组织原则是「按真实操作顺序从头走一遍」——一条单向路。凡不是"下一步"的东西，结构性地不存在。</p>
+  <div class="screen"><div class="bd">
+    <div class="rel-map">
+      <div class="rel-card">
+        <div class="t">↩ 回头路</div>
+        <div class="s">离开一个进行中的动作，还能回来找到它。</div>
+        <div class="w">缺它 → 生成中点别处，任务消失（BB-489）</div>
+      </div>
+      <div class="rel-card">
+        <div class="t">↔ 横向引用</div>
+        <div class="s">两屏各自管一块，但用户心里它们是连着的：变量配在这边，用例跑在那边。</div>
+        <div class="w">缺它 → 环境与用例是两张皮，变量加了不知是否生效</div>
+      </div>
+      <div class="rel-card">
+        <div class="t">↧ 下钻</div>
+        <div class="s">列表给概览，展开看细节。</div>
+        <div class="w">缺它 → 看不到用例到底会发什么请求</div>
+      </div>
+      <div class="rel-card">
+        <div class="t">⤳ 旁支</div>
+        <div class="s">不顺利的情形：零可选、缺配置、出错。</div>
+        <div class="w">缺它 → 全选点了没反应（BB-490）</div>
+      </div>
+    </div>
+  </div></div>
+  <div class="why"><b>这一节不是背景，是划界依据</b>：下面每一屏都只回答"某两个东西怎么连起来"，
+    不重画任何一屏本身。十一屏的形态是 0010 验收过的，本稿不动它。</div>
+</section>
+
+<!-- A 看得见 -->
+<section class="step" id="s1">
+  <h2><i>A</i>看得见：用例展开就是完整请求</h2>
+  <p class="k">下钻关系。列表行照旧，多一个展开——展开后是这条用例<b>真正会发出去的东西</b>。</p>
+  <div class="screen">
+    <div class="hd">批次详情 · 登录到退出 主链路（10 条）</div>
+    <div class="bd">
+      <div class="tw"><table>
+        <thead><tr><th style="width:28px"><input type="checkbox"></th><th style="width:62px">编号</th>
+          <th>用例</th><th style="width:84px">变量</th><th style="width:70px">状态</th></tr></thead>
+        <tbody>
+          <tr><td><input type="checkbox" checked></td><td class="mono">TC-001</td>
+            <td>正确账号密码应登录成功
+              <div style="font-size:11px;color:var(--muted-fg);margin-top:2px">
+                <span class="m post">POST</span> <span class="mono">/api/auth/login</span> · 2 条断言</div>
+            </td>
+            <td><span class="chip on">✓ 齐</span></td>
+            <td><span class="tag ok">通过</span></td></tr>
+        </tbody></table></div>
+
+      <div style="border:1px solid var(--border);border-top:0;border-radius:0 0 10px 10px;padding:12px 13px">
+        <div style="font-size:11.5px;color:var(--muted-fg);margin-bottom:8px">TC-001 展开 ↓</div>
+        <div class="kv">
+          <span class="k">方法与地址</span><span><span class="m post">POST</span>
+            <span class="mono">{{baseUrl}}/api/auth/login</span></span>
+          <span class="k">请求头</span><span class="mono">Content-Type: application/json<br>
+            Authorization: Bearer {{token}}</span>
+          <span class="k">请求体</span><span></span>
+        </div>
+        <pre>{
+  "username": "{{login_username}}",
+  "password": "{{login_password}}"
+}</pre>
+        <div style="font-size:11.5px;color:var(--muted-fg);margin-top:10px">断言（逐条）</div>
+        <div class="tw" style="margin-top:5px"><table>
+          <thead><tr><th style="width:88px">类型</th><th>路径</th><th style="width:120px">期望</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">status</td><td class="mono">—</td><td class="mono">200</td></tr>
+            <tr><td class="mono">json_path</td><td class="mono">$.data.token</td><td class="mono">存在即可</td></tr>
+          </tbody></table></div>
+        <div class="good"><b>凭据只出现位置，不出现值。</b>上面每一个 <span class="mono">{{变量名}}</span>
+          都是占位——真值存在本机的环境里，执行那一刻才在服务端解析，界面上任何地方都不显示它。</div>
+        <div class="act"><span class="grow"></span>
+          <button class="btn sm">编辑这条</button><button class="btn sm">只跑这一条</button></div>
+      </div>
+    </div>
+  </div>
+  <div class="why">用例行上多了一列<b>「变量」</b>——它是 A 与 B 的接缝：
+    看得见参数的同时，立刻知道这些参数配没配。两件事分开做就又是两张皮。</div>
+  <div class="fix"><b>后端零改动</b>：请求块本来就随详情接口返回了，只是界面没展示。这一屏是纯展示层。</div>
+</section>
+
+<!-- B 连得上：用例侧 -->
+<section class="step" id="s2">
+  <h2><i>B1</i>连得上（用例侧）：这条用例缺哪个变量，点一下就去配</h2>
+  <p class="k">横向引用。红色必须带可操作的出路——这是 0010 的硬约束，不是本稿新加的。</p>
+  <div class="screen">
+    <div class="hd">批次详情 · 有用例缺变量时</div>
+    <div class="bd">
+      <div class="tw"><table>
+        <thead><tr><th style="width:28px"><input type="checkbox"></th><th style="width:62px">编号</th>
+          <th>用例</th><th style="width:96px">变量</th><th style="width:70px">状态</th></tr></thead>
+        <tbody>
+          <tr><td><input type="checkbox" checked></td><td class="mono">TC-001</td>
+            <td>正确账号密码应登录成功</td>
+            <td><span class="chip on">✓ 齐</span></td><td><span class="tag">未跑</span></td></tr>
+          <tr><td><input type="checkbox" disabled></td><td class="mono">TC-005</td>
+            <td>切换设备后会话保持
+              <div style="font-size:11px;margin-top:3px;color:#d97706">
+                缺变量 <span class="mono">{{device_id}}</span>——不配它这条跑起来会把
+                <span class="mono">{{device_id}}</span> 原样发出去，所以先不给跑</div></td>
+            <td><span class="chip off">缺 1 个</span></td>
+            <td><span class="tag warn">待配置</span></td></tr>
+        </tbody></table></div>
+      <div class="miss">
+        <b>这批用例还缺 1 个变量：</b><span class="mono">device_id</span>（被 TC-005、TC-008 用到）
+        <div style="margin-top:7px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn sm pri">去「测试环境」补上它</button>
+          <span style="font-size:11.5px">补完自动回到这里，不用你自己找路</span>
+        </div>
+      </div>
+      <div class="act">
+        <span style="font-size:12px;color:var(--muted-fg)">已选 <b>8</b> 条 · 缺变量的 2 条不参与</span>
+        <span class="grow"></span><button class="btn pri">执行选中的 8 条</button></div>
+    </div>
+  </div>
+  <div class="why"><b>为什么不干脆让它跑</b>：执行层的既有红线是"变量缺失就不发请求"，跑了也只会得到一条
+    skip。与其让用户跑完才发现，不如在这里就说清楚<b>并给出去配的路</b>。</div>
+</section>
+
+<!-- B 连得上：环境侧 -->
+<section class="step" id="s3">
+  <h2><i>B2</i>连得上（环境侧）：这个变量被谁用着、配上之后有什么变化</h2>
+  <p class="k">同一条关系的反向。用户在环境页问的是"我配这个有什么用"。</p>
+  <div class="screen">
+    <div class="hd">测试工作台 · 环境与变量</div>
+    <div class="bd">
+      <div style="border:1px solid var(--border);border-radius:10px;padding:11px">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:9px">
+          <span style="width:7px;height:7px;border-radius:50%;background:#10b981"></span>
+          <b style="font-size:12.5px">测试环境</b>
+          <span class="mono" style="color:var(--muted-fg)">https://api-test.example.com</span></div>
+        <div class="tw"><table>
+          <thead><tr><th style="width:150px">变量名</th><th style="width:110px">值</th>
+            <th>谁在用</th><th style="width:56px"></th></tr></thead>
+          <tbody>
+            <tr><td class="mono">token</td><td class="mono">********3f7a</td>
+              <td><span class="tag">登录到退出 主链路 · 9 条</span></td>
+              <td><button class="btn sm">删</button></td></tr>
+            <tr><td class="mono">login_username</td><td class="mono">********r_01</td>
+              <td><span class="tag">2 个批次 · 11 条</span>
+                <span class="tag ok" style="margin-left:4px">保留名·启用登录换新</span></td>
+              <td><button class="btn sm">删</button></td></tr>
+            <tr style="background:color-mix(in srgb,#f59e0b 7%,transparent)">
+              <td class="mono">device_id</td><td><input type="password" placeholder="待填"></td>
+              <td><span class="tag warn">2 条用例正等它</span>
+                <span style="font-size:11px;color:var(--muted-fg);margin-left:4px">TC-005、TC-008</span></td>
+              <td><button class="btn sm">删</button></td></tr>
+          </tbody></table></div>
+        <div class="good" style="margin-top:10px">
+          <b>填好保存后会告诉你变化：</b>「已保存。<b>2 条用例</b>从「待配置」变为「可执行」，
+          <a style="text-decoration:underline;cursor:pointer">回到那个批次</a>」
+        </div>
+      </div>
+      <div class="miss" style="border-color:var(--border);background:color-mix(in srgb,var(--muted) 40%,transparent)">
+        <b>保留变量名</b>：<span class="mono">login_username</span> /
+        <span class="mono">login_password</span> / <span class="mono">auth_token_path</span>
+        三个配齐，执行时才能选「登录换新」。这里直接标出还差哪个，不让用户去文档里找。
+      </div>
+    </div>
+  </div>
+  <div class="why"><b>「谁在用」这一列是这次的核心新增</b>：它把"变量"从一个孤立的配置项，
+    变成"某几条用例的前置条件"。用户问的"加了怎么生效"，答案就是这一列 + 保存后那句变化说明。</div>
+  <div class="fix"><b>能力已有，只是没接上</b>：系统本来就能算出"某段文本还缺哪些变量"，
+    从没暴露给界面。这一屏是把既有能力接出来，不是新造机制。</div>
+</section>
+
+<!-- C 回得来 -->
+<section class="step" id="s4">
+  <h2><i>C</i>回得来：生成任务不因为你走开而消失</h2>
+  <p class="k">回头路。用户原话：「点击其它选项…都会导致任务消失」。</p>
+  <div class="screen">
+    <div class="hd">工作台任意页面 · 有任务在跑时</div>
+    <div class="bd">
+      <div class="toast">
+        <svg class="ic" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="9" opacity=".25"/><path d="M12 3a9 9 0 0 1 9 9"/></svg>
+        <div class="grow">
+          <b style="font-size:12.5px">正在生成用例</b>
+          <span style="font-size:11.5px;color:var(--muted-fg)"> · 第 6/10 条 · 已跑 42 秒</span>
+          <div class="bar"><i style="display:block;height:100%;width:60%;background:var(--primary)"></i></div>
+        </div>
+        <button class="btn sm">回到任务</button><button class="btn sm">停止</button>
+      </div>
+      <div style="font-size:11.5px;color:var(--muted-fg);margin-top:9px">
+        这条常驻在工作台内<b>任何一屏</b>的顶部，直到任务结束。切到环境页、点开别的批次，它都还在。
+      </div>
+
+      <div style="margin-top:16px;border-top:1px dashed var(--border);padding-top:13px">
+        <div style="font-size:11.5px;color:var(--muted-fg);margin-bottom:7px">跑完了但你还没回来看时 ↓</div>
+        <div class="toast" style="border-color:rgba(16,185,129,.4);background:rgba(16,185,129,.07)">
+          <svg class="ic" viewBox="0 0 24 24" stroke="#059669"><path d="m5 12 5 5L20 7"/></svg>
+          <div class="grow"><b style="font-size:12.5px">用例生成完了 · 12 条待审核</b>
+            <div style="font-size:11.5px;color:var(--muted-fg)">还没采纳，随时回来接着看</div></div>
+          <button class="btn sm pri">去审核</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="why"><b>为什么做成常驻条而不是"记住上次位置"</b>：用户离开是为了干别的事，
+    不该被弹回来。常驻条让他<b>知道任务还活着</b>并能一键回去，同时不打断当前动作。</div>
+  <div class="fix"><b>刷新页面、甚至关掉标签页再打开也找得回</b>——任务在服务端跑，
+    页面重新打开时主动问一次"我有没有在跑的任务"。这一条后端只差把任务号返回。</div>
+</section>
+
+<!-- D 改得动 -->
+<section class="step" id="s5">
+  <h2><i>D</i>改得动：采纳前后都能改，改过的留痕</h2>
+  <p class="k">你拍板的范围。<b>采纳前那三个控件是设计稿早就画了但没实现的</b>，这次一并补。</p>
+  <div class="screen">
+    <div class="hd">采纳前（生成结果审核）· 补齐设计稿已画的三个出路</div>
+    <div class="bd">
+      <div class="tw"><table>
+        <thead><tr><th style="width:28px"><input type="checkbox"></th><th style="width:62px">编号</th>
+          <th>用例</th><th style="width:92px">校验</th></tr></thead>
+        <tbody>
+          <tr><td><input type="checkbox" checked></td><td class="mono">TC-004</td>
+            <td>密码错误应提示且不放行
+              <div style="font-size:11px;margin-top:3px;color:#d97706">只断言了 status，跑起来只能证明接口活着。
+                <a style="text-decoration:underline;cursor:pointer">补一条响应体断言</a></div></td>
+            <td><span class="tag warn">1 处提醒</span></td></tr>
+          <tr><td><input type="checkbox"></td><td class="mono">TC-009</td>
+            <td>退出后旧 token 应失效
+              <div style="font-size:11px;margin-top:3px;color:#dc2626">URL 与来源端点对不上（模型写成
+                <span class="mono">/api/auth/signout</span>）——
+                <a style="text-decoration:underline;cursor:pointer">改回 /api/auth/logout</a> 或
+                <a style="text-decoration:underline;cursor:pointer">就地编辑</a></div></td>
+            <td><span class="tag bad">1 处待修</span></td></tr>
+        </tbody></table></div>
+      <div style="font-size:11.5px;color:var(--muted-fg);margin-top:8px">
+        三个控件的分工：<b>补断言</b>=一键加一条建议断言；<b>改回</b>=一键采纳系统给的正确值；
+        <b>就地编辑</b>=打开编辑器自己写。前两个是"我知道该改成什么"，第三个是"让我自己来"。
+      </div>
+    </div>
+  </div>
+
+  <div class="screen" style="margin-top:12px">
+    <div class="hd">采纳后（已入库批次）· 编辑器与留痕</div>
+    <div class="bd">
+      <div class="kv">
+        <span class="k">方法与地址</span><span><select style="width:88px"><option>POST</option></select>
+          <input class="mono" value="{{baseUrl}}/api/auth/logout" style="width:auto;display:inline-block;min-width:240px"></span>
+      </div>
+      <div style="font-size:11.5px;color:var(--muted-fg);margin-top:10px">断言</div>
+      <div class="tw" style="margin-top:5px"><table>
+        <thead><tr><th style="width:110px">类型</th><th>路径</th><th style="width:110px">期望</th><th style="width:44px"></th></tr></thead>
+        <tbody>
+          <tr><td><select><option>status</option></select></td><td class="mono">—</td>
+            <td><input class="mono" value="401"></td><td><button class="btn sm">删</button></td></tr>
+          <tr><td><select><option>json_path</option></select></td>
+            <td><input class="mono" value="$.code"></td><td><input class="mono" value="40101"></td>
+            <td><button class="btn sm">删</button></td></tr>
+        </tbody></table></div>
+      <div class="miss" style="border-color:rgba(239,68,68,.45);background:rgba(239,68,68,.08)">
+        <b>存不下去</b>：<span class="mono">json_path</span> 类型必须给路径，第 2 行的路径是空的。
+        <span style="color:var(--muted-fg)">——保存时就地校验，不让坏用例进库。</span>
+      </div>
+      <div class="act"><span class="grow"></span>
+        <button class="btn">取消</button><button class="btn pri">保存这条</button></div>
+    </div>
+  </div>
+
+  <div class="screen" style="margin-top:12px">
+    <div class="hd">改完之后：列表上留痕</div>
+    <div class="bd">
+      <div class="tw"><table>
+        <thead><tr><th style="width:28px"><input type="checkbox"></th><th style="width:62px">编号</th>
+          <th>用例</th><th style="width:92px">来源</th></tr></thead>
+        <tbody>
+          <tr><td><input type="checkbox" checked></td><td class="mono">TC-001</td>
+            <td>正确账号密码应登录成功</td><td><span class="tag">AI 生成</span></td></tr>
+          <tr><td><input type="checkbox" checked></td><td class="mono">TC-009</td>
+            <td>退出后旧 token 应失效</td>
+            <td><span class="tag edited">人工修改</span></td></tr>
+        </tbody></table></div>
+      <div style="font-size:11.5px;color:var(--muted-fg);margin-top:8px">
+        「来源」这一列只回答一个问题：<b>这条是 AI 写的还是人动过的</b>。
+        不做版本历史、不做回滚——那是另一个量级的功能，本次明确不做。
+      </div>
+    </div>
+  </div>
+  <div class="why"><b>为什么采纳后也能改，却不破坏"勾选是入库唯一闸门"</b>：
+    那道闸管的是<b>进不进库</b>，不是进库后能不能维护。用例是要长期用的资产，
+    发现一个错字只能整批重生成，不现实。</div>
+</section>
+
+<!-- E 空态 -->
+<section class="step" id="s6">
+  <h2><i>E</i>空态：可选项为零时，说清楚为什么</h2>
+  <p class="k">旁支。用户原话：「点击用例左上角全选没有任何作用」。</p>
+  <div class="screen">
+    <div class="hd">一个没有任何可执行用例的批次</div>
+    <div class="bd">
+      <div class="tw"><table>
+        <thead><tr><th style="width:28px"><input type="checkbox" disabled></th><th style="width:62px">编号</th>
+          <th>用例</th><th style="width:84px">状态</th></tr></thead>
+        <tbody>
+          <tr><td><input type="checkbox" disabled></td><td class="mono">TC-001</td>
+            <td>人工核对对账单
+              <div style="font-size:11px;color:var(--muted-fg);margin-top:2px">没有可执行的请求块——请人工执行后回填结论</div></td>
+            <td><span class="tag">人工执行</span></td></tr>
+        </tbody></table></div>
+      <div class="miss">
+        <b>这批用例都不能自动执行</b>（10 条全部没有请求块或断言），所以全选和执行都用不了。
+        <div style="margin-top:6px;color:var(--muted-fg)">它们仍然可以导出成用例表拿去评审——
+          <b>不能跑 ≠ 没有价值</b>。</div>
+        <div style="margin-top:7px"><button class="btn sm">导出这批用例</button></div>
+      </div>
+      <div class="act">
+        <span style="font-size:12px;color:var(--muted-fg)">没有可执行的用例</span>
+        <span class="grow"></span>
+        <button class="btn" disabled>执行</button></div>
+    </div>
+  </div>
+  <div class="why"><b>禁用 + 一句解释 + 一条还能走的路</b>，三件缺一不可。
+    只禁用不解释，用户仍然以为坏了；解释了不给路，等于告诉他"你白来了"。</div>
+</section>
+
+<!-- 附：判据对照 -->
+<section class="step" id="s7">
+  <h2><i>附</i>这一稿对应哪几条判据</h2>
+  <p class="k">对齐卡里的九条判据，逐条指到这稿的哪一屏——验收时照着走。</p>
+  <div class="screen"><div class="bd">
+    <div class="tw"><table>
+      <thead><tr><th style="width:56px">判据</th><th>内容</th><th style="width:120px">看这一屏</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">AC-0</td><td>样张前置闸：本稿先过你眼，认可后才进实现</td><td>就是这份稿子</td></tr>
+        <tr><td class="mono">AC-1</td><td>能看到方法/地址/请求头/请求体/全部断言</td><td>A 看得见</td></tr>
+        <tr><td class="mono">AC-2</td><td>标出缺哪些变量，并给去配置的入口</td><td>B1 用例侧</td></tr>
+        <tr><td class="mono">AC-3</td><td>配上变量后能看到用例变为可执行</td><td>B2 环境侧</td></tr>
+        <tr><td class="mono">AC-4</td><td>生成中切走再回来能找回任务</td><td>C 回得来</td></tr>
+        <tr><td class="mono">AC-5</td><td>采纳前三个出路控件都可用</td><td>D 第一屏</td></tr>
+        <tr><td class="mono">AC-6</td><td>已采纳用例可编辑、有标记、改后立即重校验</td><td>D 第二、三屏</td></tr>
+        <tr><td class="mono">AC-7</td><td>可选项为零时禁用并说明原因</td><td>E 空态</td></tr>
+        <tr><td class="mono">AC-8</td><td>界面任何位置都不显示变量真值</td><td>A / B1 / B2 三屏都守着</td></tr>
+      </tbody></table></div>
+  </div></div>
+  <div class="fix"><b>本稿没有画的东西</b>：用例版本历史与回滚、编辑后自动重跑执行、
+    十一屏各自形态的任何改动、任何新的配置入口。这些在对齐卡第六节明确划在范围外。</div>
+</section>
+
+</div>
+
+<script>
+document.getElementById('th').onclick=e=>{const b=e.target.closest('button');if(!b)return;
+  [...e.currentTarget.children].forEach(x=>x.removeAttribute('data-on'));b.dataset.on='';
+  const r=document.documentElement;r.className='';const t=b.dataset.t;
+  if(t==='dark')r.className='dark';if(t==='snow')r.className='theme-snow';
+  if(t==='glass')r.className='dark theme-glass'};
+</script>

@@ -133,3 +133,99 @@ def test_missing_file_is_a_named_error(root):
     with pytest.raises(WorkbenchError) as err:
         workbench.delivery_file_path(batch, "nope.xlsx", root)
     assert err.value.code == "FILE_NOT_FOUND"
+
+
+# ── 闭环三件套：required_vars / 变量反查 / 用例编辑（决策 0012）────────────
+
+def test_required_vars_lists_referenced_variables_but_not_base_url(root):
+    """baseUrl 来自环境的地址栏，不是变量表里的一项——混进去会让用户
+    以为自己还差配一个变量。"""
+    got = workbench.required_vars({
+        "url": "{{baseUrl}}/api/u/{{uid}}",
+        "headers": [{"key": "Authorization", "value": "Bearer {{token}}"}],
+        "body": {"mode": "raw", "raw": '{"n":"{{name}}"}'},
+    })
+    assert got == ["uid", "token", "name"]
+    assert "baseUrl" not in got
+
+
+def test_required_vars_matches_the_execution_layer_gate(root):
+    """与执行层判「变量缺失不发请求」用同一个实现——两处若各写各的，
+    界面说齐了而执行说缺就成了必然。"""
+    from server import execute
+
+    request = {"url": "{{baseUrl}}/x/{{a}}", "headers": [], "assertions": []}
+    assert workbench.required_vars(request) == [
+        v for v in execute.missing_vars("{{baseUrl}}/x/{{a}}", {})
+        if v != execute.BASE_URL_VAR]
+
+
+def test_case_row_carries_required_vars_and_origin(root):
+    batch = make_batch(root)
+    row = workbench.read_delivery(batch, root)["cases"][0]
+    assert "required_vars" in row
+    assert row["origin"] == "ai", "没有 origin 字段的旧批次按 AI 生成处理"
+
+
+def test_variable_usage_answers_who_uses_this_variable(root):
+    # 本文件顶部的 CASES 刻意不带变量（它们服务导出用例），这里另造带变量的一批
+    with_vars = [dict(CASES[0], **{"编号": "TC-100", "request": {
+        "method": "GET", "url": "{{baseUrl}}/api/v1/orders",
+        "headers": [{"key": "Authorization", "value": "Bearer {{token}}"}],
+        "assertions": [{"type": "status", "expected": 200}]}})]
+    saved = delivery.save_delivery(with_vars, fmt="csv", title="带变量的批次")
+    batch = os.path.basename(saved["delivery_dir"])
+
+    usage = workbench.variable_usage(root)["usage"]
+    assert "token" in usage
+    assert usage["token"]["case_count"] >= 1
+    entry = next(d for d in usage["token"]["deliveries"] if d["id"] == batch)
+    assert "TC-100" in entry["case_ids"]
+    assert "baseUrl" not in usage, "baseUrl 不是变量表里的项，不该出现在反查表里"
+
+
+def test_variable_usage_is_empty_not_an_error_when_no_batches(tmp_path):
+    assert workbench.variable_usage(str(tmp_path / "nope"))["usage"] == {}
+
+
+def test_editing_a_case_marks_it_human_and_persists(root):
+    batch = make_batch(root)
+    result = workbench.update_case(batch, "TC-001", {"title": "改过的标题"}, root)
+    assert result["case"]["origin"] == "human"
+    # 复读一次：改动真落盘了，不是只改了返回值
+    row = workbench.read_delivery(batch, root)["cases"][0]
+    assert row["title"] == "改过的标题" and row["origin"] == "human"
+
+
+def test_identity_fields_cannot_be_edited(root):
+    batch = make_batch(root)
+    with pytest.raises(WorkbenchError) as err:
+        workbench.update_case(batch, "TC-001", {"case_id": "TC-999"}, root)
+    assert err.value.code == "FIELD_NOT_EDITABLE"
+
+
+def test_an_edit_that_breaks_the_case_is_refused_and_nothing_is_written(root):
+    """0010 硬约束二的延伸：没有理由允许合格的用例被改成不合格之后留在库里。"""
+    batch = make_batch(root)
+    before = workbench.read_delivery(batch, root)["cases"][0]["title"]
+    with pytest.raises(WorkbenchError) as err:
+        workbench.update_case(batch, "TC-001", {"request": {
+            "method": "POST", "url": "{{baseUrl}}/a",
+            "assertions": [{"type": "json_path", "path": "", "expected": 1}]}}, root)
+    assert err.value.code == "CASE_INVALID"
+    assert workbench.read_delivery(batch, root)["cases"][0]["title"] == before
+
+
+def test_editing_an_unknown_case_is_a_named_error(root):
+    batch = make_batch(root)
+    with pytest.raises(WorkbenchError) as err:
+        workbench.update_case(batch, "TC-404", {"title": "x"}, root)
+    assert err.value.code == "CASE_NOT_FOUND"
+
+
+def test_editing_a_legacy_batch_degrades_out_loud(root):
+    name = "20260101-090000-旧批次"
+    os.makedirs(os.path.join(root, name))
+    with pytest.raises(WorkbenchError) as err:
+        workbench.update_case(name, "TC-001", {"title": "x"}, root)
+    assert err.value.code == "NO_CASES_JSON"
