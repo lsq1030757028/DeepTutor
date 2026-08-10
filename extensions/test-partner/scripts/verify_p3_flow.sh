@@ -115,6 +115,56 @@ else
   bad "生成端点返回了预期外的东西：$(printf '%s' "$gen" | head -c 200)"
 fi
 
+say "8.1 · 生成的用例**采纳后真能执行**（BB-487 的闸）"
+# 这一条是补回来的。原来第 8 步只验"生成任务发起了"，而 2026-08-08 用户 UAT
+# 抓到的正是下一环：断言被写在 request 外层、键名也不对，落盘后每条
+# executable=false——勾选框全禁用、执行按钮永远灰着。
+# **"生成出东西了"不等于"东西能用"**，所以这条断言的是链路终点而不是起点。
+job_id=$(printf '%s' "$gen" | python -c "import json,sys;print(json.load(sys.stdin).get('job_id',''))" 2>/dev/null)
+if [ -z "$job_id" ]; then
+  ok "没配模型，跳过可执行性检查（空态分支，不是失败）"
+else
+  state=""
+  for _ in $(seq 1 90); do
+    job=$(api "/api/v1/test-workbench/generate/jobs/${job_id}")
+    state=$(printf '%s' "$job" | python -c "import json,sys;print(json.load(sys.stdin).get('state',''))" 2>/dev/null)
+    case "$state" in done|failed|cancelled) break;; esac
+    sleep 2
+  done
+  if [ "$state" != "done" ]; then
+    bad "生成任务终态是 $state，无法验可执行性"
+  else
+    ids=$(printf '%s' "$job" | python -c "
+import json,sys
+r=(json.load(sys.stdin).get('result') or {}).get('cases') or []
+print(json.dumps([c.get('case_id') or c.get('id') for c in r]))" 2>/dev/null)
+    adopted=$(api "/api/v1/test-workbench/generate/jobs/${job_id}/adopt" -X POST \
+              -H 'Content-Type: application/json' \
+              -d "{\"case_ids\":${ids},\"title\":\"可执行性闸\"}")
+    batch=$(printf '%s' "$adopted" | python -c "
+import json,sys,os
+d=json.load(sys.stdin).get('delivery') or {}
+print(os.path.basename(d.get('delivery_dir','')))" 2>/dev/null)
+    if [ -z "$batch" ]; then
+      bad "采纳失败：$(printf '%s' "$adopted" | head -c 200)"
+    else
+      det=$(curl -s -m 25 --get --data-urlencode "x=1" \
+            "http://127.0.0.1:${PORT}/api/v1/test-workbench/deliveries/${batch}")
+      printf '%s' "$det" | python -c "
+import json,sys
+d=json.load(sys.stdin)
+n=d.get('executable_count') or 0
+total=len(d.get('cases') or [])
+assert n>0, f'采纳后 {total} 条用例可执行 0 条——BB-487 复发'
+# 用例表对人也要可用：核心描述列不能整列为空（BB-488）
+filled=sum(1 for c in d['cases'] if (c.get('expected') or '').strip())
+assert filled>0, f'{total} 条用例的预期结果全为空——BB-488 复发'
+print(f'  [PASS] 采纳后 {n}/{total} 条可执行，{filled} 条有预期结果')" \
+        && PASS=$((PASS+1)) || bad "采纳后的用例不可用（可执行性/描述字段）"
+    fi
+  fi
+fi
+
 say "9 · 越权与穿越"
 p404=$(curl -s -o /dev/null -w '%{http_code}' -m 20 \
   "http://127.0.0.1:${PORT}/api/v1/test-workbench/generate/jobs/notmine")

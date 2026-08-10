@@ -184,7 +184,16 @@ def detail_prompt(m: Material, scenario: str, cases: list[dict[str, Any]]) -> st
 
 ---
 
-为清单里的**每一条**补全请求与断言。
+为清单里的**每一条**补全请求、断言，以及给人读的那几段描述。
+
+描述纪律（这几段决定导出的用例表能不能用）：
+- `preconditions`（前置条件）：跑这条用例之前必须成立的状态，一句话。没有就写"无"。
+- `steps`（用例步骤）：字符串数组，按操作顺序写，一步一条。
+- `expected`（预期结果）：这条用例算通过的判据，用人话写，与断言对应。
+- `test_data`（测试数据）：这条用例用到的关键数据。没有特别数据就留空字符串。
+
+这四段不许套话。写"预期返回成功"这种等于没写——
+导出的用例表要交给人评审，空话会让整张表失去价值。
 
 字段纪律（最重要）：
 - 请求里出现的字段名，**只能来自上面端点清单的 sample_body 与 query_keys**。
@@ -203,16 +212,24 @@ def detail_prompt(m: Material, scenario: str, cases: list[dict[str, Any]]) -> st
 
 {_JSON_ONLY}
 
-输出格式：
+输出格式（**断言写在 request 里面**，键名就是 `type` 与 `expected`，别用别的写法）：
 {{
   "cases": [
-    {{"id": "TC-001", "title": "...", "intent": "正常",
+    {{"case_id": "TC-001", "title": "...",
+      "preconditions": "已有一个状态为待支付的订单",
+      "steps": ["调用 POST /api/order/create，提交 skuId 与数量"],
+      "expected": "返回 200，响应体里带新订单号",
+      "test_data": "skuId=SKU-1001，数量=2",
       "request": {{"method": "POST", "url": "/api/order/create",
                   "headers": [{{"name": "Authorization", "value": "Bearer {{{{token}}}}"}}],
-                  "body": {{}}}},
-      "assertions": [
-        {{"kind": "status", "expect": 200}},
-        {{"kind": "json_path", "path": "$.data.orderId", "op": "exists"}}
-      ]}}
+                  "body": {{}},
+                  "assertions": [
+                    {{"type": "status", "expected": 200}},
+                    {{"type": "json_path", "path": "$.data.orderId", "expected": null}}
+                  ]}}
+    }}
   ]
-}}"""
+}}
+
+`type` 只能是 `status`、`json_path`、`body_contains` 三者之一。
+`json_path` 必须给 `path`；只验字段存在就把 `expected` 写成 `null`。"""

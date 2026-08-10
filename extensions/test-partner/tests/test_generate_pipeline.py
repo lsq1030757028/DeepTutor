@@ -154,7 +154,9 @@ def test_one_bad_batch_does_not_kill_the_rest(material):
     cases = [{"id": f"TC-{i:03d}"} for i in range(1, 5)]
     fake = FakeModel("坏输出", "还是坏输出", _detail(["TC-003", "TC-004"]))
     out, notes = run(fill_details(fake, material, "s", cases, batch_size=2))
-    assert [c["id"] for c in out] == ["TC-003", "TC-004"]
+    # 出口是 `case_id` 不是 `id`——管线出口已经规整成消费侧的规范形状（BB-487）。
+    # 这条断言的位置正好在那道规整之后，所以它同时钉住了"出口形状不会退回去"。
+    assert [c["case_id"] for c in out] == ["TC-003", "TC-004"]
     assert any("TC-001" in n for n in notes), "没成的那批要点名"
 
 
