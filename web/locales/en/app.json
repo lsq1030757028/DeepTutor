@@ -2988,5 +2988,8 @@
   "Remove variable": "Remove variable",
   "Reserved names {{names}}: set all three to enable \"re-login for a fresh token\" when running.": "Reserved names {{names}}: set all three to enable \"re-login for a fresh token\" when running.",
   "Save environment": "Save environment",
-  "Runs reference an environment by name; values are resolved server-side and never enter chat or results.": "Runs reference an environment by name; values are resolved server-side and never enter chat or results."
+  "Runs reference an environment by name; values are resolved server-side and never enter chat or results.": "Runs reference an environment by name; values are resolved server-side and never enter chat or results.",
+  "Replace personal info with placeholders in exported files": "Replace personal info with placeholders in exported files",
+  "Covers ID numbers, phones, emails, cards. Names inside free-form text are not detected — check before sharing.": "Covers ID numbers, phones, emails, cards. Names inside free-form text are not detected — check before sharing.",
+  "Replaced in exports:": "Replaced in exports:"
 }

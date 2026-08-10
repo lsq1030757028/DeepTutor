@@ -30,6 +30,17 @@ BB-424 描述的风险是「PII 留在本地报告与交付产物里」。**本�
 本模块主要按**值的形态**匹配（正则），只有姓名这一类不得不借助键名
 （中文姓名没有可靠的形态特征），并且在下面明确标注了它的局限。
 
+## 序列化 JSON 要先解开再脱敏（BB-465）
+
+HAR 把请求体与响应体存成**字符串**（`postData.text`、`content.text`），
+里面是一整份序列化 JSON。若只把它当普通字符串走值形态正则，
+**依赖键名的姓名规则就永远不会触发**——实测 `{"realName": "张三"}` 序列化后
+原样出境，而手机号、身份证因为有形态特征反而被挡住了，问题因此长期被掩盖。
+
+所以遇到"看起来是 JSON 的字符串"先解开、按结构脱敏、再序列化回去
+（见 `_scrub_json_string`）。代价是格式被规范化（缩进与键序按 `json.dumps` 重排），
+对 prompt 素材与交付产物都无影响；解不开就原样退回走文本规则，不会丢内容。
+
 ## 覆盖面与已知局限（如实写，不吹）
 
 覆盖：中国大陆身份证、手机号、邮箱、银行卡号、IPv4、长不透明 id、
@@ -41,6 +52,7 @@ BB-424 描述的风险是「PII 留在本地报告与交付产物里」。**本�
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -92,11 +104,53 @@ def scrub_text(text: str) -> tuple[str, dict[str, int]]:
     return out, hits
 
 
-def scrub_payload(node: Any, _key: str = "") -> tuple[Any, dict[str, int]]:
+#: 序列化 JSON 的嵌套解包上限。HAR 里出现过 body 套 body（网关转发原文），
+#: 但再深就该怀疑是构造的数据了——给个界，免得畸形输入把栈吃穿。
+_MAX_JSON_UNWRAP_DEPTH = 3
+
+
+def _looks_like_json(text: str) -> bool:
+    """便宜的预筛：只有像对象/数组的才值得试着解析。
+
+    不用 try-parse 打头是因为绝大多数字符串都不是 JSON，
+    每个都进一次异常处理在报告规模上是可观的浪费。
+    """
+    s = text.lstrip()
+    return s[:1] in ("{", "[") and len(s) >= 2
+
+
+def _scrub_json_string(text: str, depth: int) -> tuple[str, dict[str, int]] | None:
+    """字符串若是序列化 JSON，解开按结构脱敏再序列化回去。
+
+    返回 None 表示"这不是能解开的 JSON"，调用方退回走文本规则。
+    只接受解析结果是 dict/list 的情形——`"123"` 也是合法 JSON 但会解成 int，
+    换回去就把字符串变成了数字，那是改数据不是脱敏。
+    """
+    if depth >= _MAX_JSON_UNWRAP_DEPTH or not _looks_like_json(text):
+        return None
+    try:
+        parsed = json.loads(text)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(parsed, (dict, list)):
+        return None
+    cleaned, hits = scrub_payload(parsed, _depth=depth + 1)
+    if not hits:
+        # **没命中就原样退回，一个字节都不改。** 重新序列化会规范化空格与键序，
+        # 而请求体的字节形态不是无所谓的：HMAC 签名类接口对 body 逐字节取摘要，
+        # 把 `{"a":1}` 写成 `{"a": 1}` 就会验签失败。命中时才改是可以的——
+        # 那时 body 反正已经因为脱敏而变了，签名本来就不再成立。
+        return None
+    return json.dumps(cleaned, ensure_ascii=False), hits
+
+
+def scrub_payload(node: Any, _key: str = "", _depth: int = 0) -> tuple[Any, dict[str, int]]:
     """递归脱敏任意 JSON 结构（报告、样例、请求体都走这里）。
 
-    字符串走 :func:`scrub_text`；此外当**键名像姓名**且值是 2-4 个汉字时，
-    额外替换成 ``<姓名>``——这一条是启发式，见模块 docstring 的局限说明。
+    字符串先试着当序列化 JSON 解开（BB-465：HAR 的 body 就是这个形态，
+    不解开则依赖键名的姓名规则永远不触发），解不开再走 :func:`scrub_text`；
+    此外当**键名像姓名**且值是 2-4 个汉字时，额外替换成 ``<姓名>``——
+    这一条是启发式，见模块 docstring 的局限说明。
     """
     total: dict[str, int] = {}
 
@@ -107,6 +161,10 @@ def scrub_payload(node: Any, _key: str = "") -> tuple[Any, dict[str, int]]:
     if isinstance(node, str):
         if _key and _looks_like_name_key(_key) and _CJK_NAME.match(node):
             return PLACEHOLDER.format("姓名"), {"姓名": 1}
+        nested = _scrub_json_string(node, _depth)
+        if nested is not None:
+            merge(nested[1])
+            return nested[0], total
         cleaned, hits = scrub_text(node)
         merge(hits)
         return cleaned, total
@@ -114,7 +172,7 @@ def scrub_payload(node: Any, _key: str = "") -> tuple[Any, dict[str, int]]:
     if isinstance(node, dict):
         out_d: dict[Any, Any] = {}
         for k, v in node.items():
-            cleaned, hits = scrub_payload(v, str(k))
+            cleaned, hits = scrub_payload(v, str(k), _depth)
             merge(hits)
             out_d[k] = cleaned
         return out_d, total
@@ -122,7 +180,7 @@ def scrub_payload(node: Any, _key: str = "") -> tuple[Any, dict[str, int]]:
     if isinstance(node, list):
         out_l = []
         for item in node:
-            cleaned, hits = scrub_payload(item, _key)
+            cleaned, hits = scrub_payload(item, _key, _depth)
             merge(hits)
             out_l.append(cleaned)
         return out_l, total

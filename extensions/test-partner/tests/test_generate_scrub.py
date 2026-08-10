@@ -137,3 +137,73 @@ def test_real_report_pii_does_not_survive_the_egress_gate():
     for real in ("440305199001011234", "13800138000", "real.person@corp.com"):
         assert real not in after, f"{real} 出境了"
     assert hits, "命中数要能说得出，不能静默处理"
+
+
+# ── 序列化 JSON body（BB-465）────────────────────────────────────────────────
+#
+# 上面那条 test_real_report_pii_does_not_survive_the_egress_gate 断言了身份证/
+# 手机号/邮箱，**独独没断言姓名**——漏洞就藏在这个缺口里：姓名规则靠键名触发，
+# 而 HAR 把 body 存成序列化字符串，里头没有 dict 键，规则永远不触发。
+# 手机号那几类有形态特征所以照样被挡住，问题因此被掩盖了很久。
+
+def test_name_inside_serialized_json_body_is_scrubbed():
+    """HAR 的 postData.text 形态：整份 JSON 是一个字符串。"""
+    body = json.dumps({"realName": "张三", "city": "深圳"}, ensure_ascii=False)
+    cleaned, hits = scrub_for_prompt({"text": body})
+    assert "张三" not in json.dumps(cleaned, ensure_ascii=False)
+    assert hits.get("姓名") == 1
+    assert "深圳" in json.dumps(cleaned, ensure_ascii=False), "非姓名字段不该被误伤"
+
+
+def test_serialized_body_nested_one_more_level_is_still_scrubbed():
+    """网关转发原文时出现过 body 套 body。"""
+    inner = json.dumps({"receiver": "李四"}, ensure_ascii=False)
+    cleaned, _ = scrub_for_prompt({"text": json.dumps({"inner": inner}, ensure_ascii=False)})
+    assert "李四" not in json.dumps(cleaned, ensure_ascii=False)
+
+
+def test_a_string_that_is_json_scalar_keeps_its_type():
+    """`"123"` 是合法 JSON 但解出来是 int——换回去就把字符串变成了数字。"""
+    cleaned, _ = scrub_for_prompt({"text": "123"})
+    assert cleaned["text"] == "123" and isinstance(cleaned["text"], str)
+
+
+def test_broken_json_falls_back_to_text_rules_without_losing_content():
+    """解不开就退回文本规则，内容一个字节都不能丢。"""
+    broken = '{"mobile":"13800138000" 这里坏了'
+    cleaned, hits = scrub_for_prompt({"text": broken})
+    assert "13800138000" not in cleaned["text"]
+    assert "这里坏了" in cleaned["text"]
+    assert hits.get("手机号") == 1
+
+
+def test_the_real_har_path_scrubs_the_name_too():
+    """把上面那条测试漏掉的断言补上——同一份 HAR，这次连姓名一起验。"""
+    body = json.dumps({"realName": "张三", "mobile": "13800138000"}, ensure_ascii=False)
+    har = {"log": {"entries": [{
+        "startedDateTime": "2026-08-04T09:00:00.000Z", "time": 10,
+        "request": {"method": "POST", "url": "https://api.x.com/api/user/register",
+                    "headers": [], "queryString": [],
+                    "postData": {"mimeType": "application/json", "text": body}},
+        "response": {"status": 200,
+                     "content": {"mimeType": "application/json", "text": "{}"}},
+    }]}}
+    from server.har_parse import build_report
+
+    cleaned, _ = scrub_for_prompt(build_report(har, {"kind": "inline"}))
+    after = json.dumps(cleaned, ensure_ascii=False)
+    assert "张三" not in after, "BB-465：真实 HAR 形态下姓名曾原样出境"
+    assert "13800138000" not in after
+
+
+def test_a_clean_json_body_is_returned_byte_for_byte():
+    """没命中就一个字节都不能改。
+
+    重新序列化会规范化空格与键序，而请求体的字节形态不是无所谓的：
+    HMAC 签名类接口对 body 逐字节取摘要，把 `{"a":1}` 写成 `{"a": 1}` 就验签失败。
+    这条不变量比"顺手统一格式"重要得多，所以单独立一条测试钉住它。
+    """
+    compact = '{"skuId":"SKU-1","qty":1,"nested":{"a":[1,2]}}'
+    cleaned, hits = scrub_for_prompt({"raw": compact})
+    assert cleaned["raw"] == compact, "无 PII 的 body 被改写了字节形态"
+    assert not hits

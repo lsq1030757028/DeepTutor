@@ -350,7 +350,8 @@ EXPORT_FORMATS = ("xlsx", "csv", "markdown", "postman")
 
 
 def export_delivery(delivery_id: str, formats: Any,
-                    root: str | None = None) -> dict[str, Any]:
+                    root: str | None = None,
+                    redact_pii: bool = True) -> dict[str, Any]:
     """把批次的结构化用例（重新）写成所选格式，落在**批次目录内**。
 
     与 `save_delivery` 的分工：那边是"采纳时建批次"（新目录 + 收据），
@@ -380,7 +381,11 @@ def export_delivery(delivery_id: str, formats: Any,
     title = str(meta.get("title") or describe_delivery(dir_path)["title"])
     source_fingerprint = str(meta.get("source_fingerprint") or "")
 
-    rows, index = delivery.to_rows(cases)
+    # 与 save_delivery 同一条纪律：导出产物脱敏，cases.json 原样不动（BB-424）。
+    # 这里的输入就是 cases.json 的原文，所以脱敏只影响本次写出的产物。
+    export_cases, pii_hits = (delivery.scrub_cases_for_export(cases) if redact_pii
+                              else (list(cases), {}))
+    rows, index = delivery.to_rows(export_cases)
     if not rows:
         raise WorkbenchError("这批用例没有一条能落成表格行，无可导出内容。",
                              code="CASES_ALL_INVALID")
@@ -401,7 +406,8 @@ def export_delivery(delivery_id: str, formats: Any,
             delivery._write_markdown(product, rows, index, title, generated_at,
                                      source_fingerprint)
         else:
-            stats = delivery._write_postman(product, cases, title, source_fingerprint)
+            stats = delivery._write_postman(product, export_cases, title,
+                                            source_fingerprint)
             if stats.get("placeholder_count"):
                 warnings.append(
                     f"{stats['placeholder_count']}/{stats['item_count']} "
@@ -413,10 +419,12 @@ def export_delivery(delivery_id: str, formats: Any,
         files.append({"name": filenames[one], "path": os.path.abspath(product),
                       "bytes": os.path.getsize(product)})
 
-    log.info("workbench: 批次 %s 导出 %s（%d 条用例）",
-             safe_id, "+".join(wanted), len(rows))
+    log.info("workbench: 批次 %s 导出 %s（%d 条用例，脱敏 %s）",
+             safe_id, "+".join(wanted), len(rows), "开" if redact_pii else "关")
     return {"ok": True, "format": "+".join(wanted), "case_count": len(rows),
-            "files": files, "warnings": warnings}
+            "files": files, "warnings": warnings,
+            # 命中数一路回传到界面：静默替换会让用户以为产物里还是原值
+            "pii_redaction": {"applied": bool(redact_pii), "hits": pii_hits}}
 
 
 def delivery_file_path(delivery_id: str, filename: str,
@@ -451,9 +459,19 @@ class RunRegistry:
     要看历史就去看报告。
     """
 
-    def __init__(self, executor: Any = None, deliveries_root_dir: str | None = None):
-        #: 注入点：测试用假执行器，不发任何真实请求
-        self._executor = executor if executor is not None else execute.execute_cases
+    def __init__(self, executor: Any, deliveries_root_dir: str | None = None):
+        #: 注入点：测试用假执行器不发真实请求；宿主线传的是已绑好**当前用户金库**的
+        #: `partial(execute_cases, env_store=...)`。
+        #:
+        #: **executor 必填，没有默认值。** 曾经默认取裸的 `execute.execute_cases`，
+        #: 那条路径不带 env_store，执行时会回落到进程级全局配置根——在多用户形态下
+        #: 就是 A 的执行读了全机共用的凭据表。所有调用点本来就都显式传了，
+        #: 这个默认值只是个等人踩的坑，去掉它零成本。
+        if executor is None:
+            raise ValueError(
+                "RunRegistry 需要显式的 executor：宿主线必须传绑好当前用户金库的执行器，"
+                "否则环境解析会回落到全局配置根（决策 0009 的隔离就是假的）。")
+        self._executor = executor
         self._root = deliveries_root_dir
         self._runs: dict[str, dict[str, Any]] = {}
         self._order: list[str] = []

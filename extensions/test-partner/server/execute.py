@@ -61,6 +61,7 @@ HAR 里录的 token 会过期，靠用户手工维护环境变量里的 token �
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -73,6 +74,8 @@ except ImportError:         # pragma: no cover - 只装了经典 httpx 的环境
     import httpx            # type: ignore[no-redef]
 
 from server import args_tolerance, case_validate
+
+log = logging.getLogger("test-partner.execute")
 
 SCHEMA = "test-partner.case-execution/v1"
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -226,10 +229,21 @@ def normalize_base_url(base_url: Any) -> str:
 # ── 测试环境解析（凭据的正门） ──────────────────────────────────────────────
 
 def _environment_store(store: Any = None) -> Any:
-    """拿到配置中心。`store` 是给测试注入临时配置目录用的，不在工具面上暴露。"""
+    """拿到配置中心。`store` 是同进程注入口，不在工具面上暴露。
+
+    回退到进程级全局配置根**只对单机形态合法**（MCP 工具线：一台机器一个人，
+    没有 DeepTutor 用户身份可言）。多用户形态（工作台 HTTP 面）必须显式注入
+    当前用户的金库——不注入就等于所有人共用一张凭据表，决策 0009 的隔离是假的。
+
+    所以回退这条路留着但**出声**：容器里本来就没有 `extensions/test-partner/config/`，
+    真走到这里意味着有人漏接了金库，日志里要看得见，而不是静默新建一个全局目录。
+    """
     if store is not None:
         return store
     from server.gateway.config import default_config   # 局部导入：解析 env 时才需要
+    log.warning(
+        "execute: 未注入 env_store，回落到进程级全局配置根。"
+        "这只在单机 MCP 形态下正确；多用户形态下说明调用点漏传了当前用户的金库。")
     return default_config()
 
 

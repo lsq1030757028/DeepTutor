@@ -49,6 +49,10 @@ import time
 from typing import Any
 
 from server import args_tolerance, case_validate, postman
+# 导出侧的 PII 脱敏复用出境闸那一套（BB-424 修复）。方向安全：`server/generate/`
+# 不反向 import 本模块，不成环。刻意不另造一套词表——BB-424 的成因就是
+# "第二套脱敏规则漏了一整类"，再造第三套只会重演。
+from server.generate.scrub import scrub_payload
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DELIVERIES_DIR = os.path.join(REPO_ROOT, "deliveries")
@@ -149,6 +153,29 @@ def to_case_records(cases: Any) -> list:
             row.pop("request")          # 人执行用例：没有请求块就不写这个键
         out.append(row)
     return out
+
+
+def scrub_cases_for_export(cases: Any) -> tuple[list, dict]:
+    """导出产物专用：把用例里的个人信息换成保形占位符（BB-424）。
+
+    **只作用于要交出去的产物**（xlsx / csv / markdown / postman），
+    不碰 `cases.json`——那份是本地执行用的边车，值被换掉会让执行发出
+    `<手机号>` 这种字面量。两份的分工是刻意的：
+
+    | 文件 | 谁看 | 脱敏 |
+    |---|---|---|
+    | cases.json | 只有本人，执行层读它 | 否 |
+    | xlsx/csv/md/postman | **导出给别人**（评审、导入 Postman、贴文档） | 是 |
+
+    这正是 BB-424 的暴露面：产物是拿来分享的，而分享出去的东西里不该带
+    真实身份证号。脱敏是**保形**的（`13800138000` → `<手机号>`），
+    用例作为文档反而更正确——测试用例本来就不该硬编码真人信息。
+
+    返回 `(脱敏后的用例, {类型: 命中数})`。命中数要一路回传到界面：
+    静默替换会让用户以为产物里还是原值，拿去执行时才发现对不上。
+    """
+    cleaned, hits = scrub_payload(list(cases) if isinstance(cases, (list, tuple)) else cases)
+    return (cleaned if isinstance(cleaned, list) else list(cases)), hits
 
 
 def coerce_login_request(value: Any) -> dict | None:
@@ -289,7 +316,7 @@ def normalize_format(fmt: str) -> str:
 
 def save_delivery(cases: Any, fmt: str = DEFAULT_FORMAT, title: str = "",
                   source_fingerprint: str = "", login_request: Any = None,
-                  out_root: str = "") -> dict:
+                  out_root: str = "", redact_pii: bool = True) -> dict:
     """落盘交付产物 + 收据。出错返回带 error 字段的可读结果，不抛裸异常。
 
     `out_root` 留空时落在仓库根的 `deliveries/`（MCP 工具那条线的既有行为，
@@ -314,7 +341,10 @@ def save_delivery(cases: Any, fmt: str = DEFAULT_FORMAT, title: str = "",
         if not isinstance(cases, (list, tuple)) or not cases:
             raise DeliveryError("CASES_EMPTY", "cases 必须是非空的用例数组")
 
-        rows, index = to_rows(cases)
+        # 导出产物走脱敏副本，cases.json 仍用原文（见 scrub_cases_for_export）。
+        export_cases, pii_hits = (scrub_cases_for_export(cases) if redact_pii
+                                  else (list(cases), {}))
+        rows, index = to_rows(export_cases)
         if not rows:
             raise DeliveryError("CASES_ALL_INVALID",
                                 "没有任何一条用例是合法对象，无可落盘内容")
@@ -345,7 +375,7 @@ def save_delivery(cases: Any, fmt: str = DEFAULT_FORMAT, title: str = "",
                 _write_markdown(product, rows, index, title, generated_at,
                                 source_fingerprint)
             else:
-                postman_stats = _write_postman(product, cases, title,
+                postman_stats = _write_postman(product, export_cases, title,
                                                source_fingerprint)
                 postman_path = product
             products.append(product)
@@ -409,6 +439,20 @@ def save_delivery(cases: Any, fmt: str = DEFAULT_FORMAT, title: str = "",
                 # 只记"带没带"这个事实，登录端点与字段名都在 cases.json 里，不重复
                 "login_request": bool(login_plan),
             },
+            # 导出侧脱敏的留痕（BB-424）。**无论有没有命中都写这一段**——
+            # 只在命中时才写，会让"没这段"同时意味着"没 PII"和"闸没开"，读的人分不清。
+            "pii_redaction": {
+                "applied": bool(redact_pii),
+                "scope": "导出产物（xlsx/csv/markdown/postman）；cases.json 保留原值供本地执行",
+                "hits": pii_hits,
+                "note": ("按形态识别的个人信息已换成保形占位符：身份证、手机号、邮箱、"
+                         "银行卡、IP、长标识，以及**键名像姓名的字段**里的中文姓名。"
+                         "抓不到的：自由文本里的姓名（「收件人张三，手机…」这种句子——"
+                         "中文姓名没有形态特征，只能靠键名缩小范围）、住址、生日、护照号、车牌。"
+                         "**所以这不等于产物已无个人信息，对外发之前仍请自行过一眼。**"
+                         if redact_pii else
+                         "本次导出未做个人信息脱敏（调用方显式关闭）。"),
+            },
             "generator": {"server": "test-partner", "tool": "save_delivery"},
             "governance": "轻量治理：无哈希链、无装箱关；收据只记指纹/时间/校验摘要/产物哈希。",
         }
@@ -434,6 +478,7 @@ def save_delivery(cases: Any, fmt: str = DEFAULT_FORMAT, title: str = "",
             "format": fmt,
             "case_count": len(rows),
             "validation_ok": validation["ok"],
+            "pii_redaction": receipt["pii_redaction"],
             "receipt": receipt,
         }
         if postman_path:

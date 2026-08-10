@@ -188,13 +188,16 @@ async def inspect_har(file: UploadFile = File(...)) -> dict[str, Any]:
         "draft_id": draft_id,
         "source_name": file.filename,
         "report": report,
-        # 界面上必须如实说，不许写成"已全部脱敏"——凭证换成了占位，但身份证/手机号/
-        # 邮箱这类个人信息不在脱敏词表范围内（缺陷 BB-424，open）。
+        # 界面上必须如实说，不许写成"已全部脱敏"。三层分开讲，因为它们的口径真的不同：
+        # 凭证在解析时就换成了占位；PII 在**这份报告里仍是原值**（执行要用真值，
+        # 而报告只落在你自己的目录里）；出境给模型与导出给别人这两条路各有一道闸。
         "redaction_notice": {
             "credentials_redacted": True,
-            "pii_redacted": False,
-            "defect": "BB-424",
-            "message": "凭证已换成变量占位；身份证、手机号、邮箱这类个人信息暂不在脱敏范围内，分享产物前请自行检查。",
+            "pii_redacted_in_report": False,
+            "pii_redacted_on_export": True,
+            "message": ("凭证已换成变量占位。身份证、手机号、邮箱这类个人信息在本报告里"
+                        "保留原值（执行时要用），但**发给模型和导出成产物时都会换成占位符**。"
+                        "自由文本里的姓名抓不到，对外发之前仍请自行过一眼。"),
         },
     }
 

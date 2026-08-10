@@ -2988,5 +2988,8 @@
   "Remove variable": "删掉这个变量",
   "Reserved names {{names}}: set all three to enable \"re-login for a fresh token\" when running.": "保留变量名 {{names}}：三个配齐，执行时就能选「登录换新」。",
   "Save environment": "保存环境",
-  "Runs reference an environment by name; values are resolved server-side and never enter chat or results.": "执行时按环境名引用，值在服务端解析，不经过聊天也不进结果。"
+  "Runs reference an environment by name; values are resolved server-side and never enter chat or results.": "执行时按环境名引用，值在服务端解析，不经过聊天也不进结果。",
+  "Replace personal info with placeholders in exported files": "导出的文件里把个人信息换成占位符",
+  "Covers ID numbers, phones, emails, cards. Names inside free-form text are not detected — check before sharing.": "覆盖身份证、手机号、邮箱、银行卡；自由文本里的姓名抓不到——对外发之前请自己过一眼。",
+  "Replaced in exports:": "导出时替换了："
 }

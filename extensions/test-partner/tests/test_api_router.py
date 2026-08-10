@@ -184,10 +184,14 @@ def test_inspect_har_never_writes_the_original(tmp_path, monkeypatch):
 
     out = asyncio.run(tw.inspect_har(_upload(har)))
     assert out["draft_id"].startswith("har-")
-    # 界面文案不许宣称已全部脱敏——PII 不在范围内（BB-424）
-    assert out["redaction_notice"]["credentials_redacted"] is True
-    assert out["redaction_notice"]["pii_redacted"] is False
-    assert out["redaction_notice"]["defect"] == "BB-424"
+    # 界面文案不许宣称已全部脱敏。BB-424 修复后口径分三层，各自的真话不一样：
+    # 凭证在解析时就换掉；PII 在**报告里仍是原值**（执行要用真值，且报告只落在
+    # 用户自己的目录）；出境给模型与导出给别人这两条路各有一道闸。
+    notice = out["redaction_notice"]
+    assert notice["credentials_redacted"] is True
+    assert notice["pii_redacted_in_report"] is False, "报告要留真值供执行"
+    assert notice["pii_redacted_on_export"] is True, "导出产物必须脱敏（BB-424）"
+    assert "自行过一眼" in notice["message"], "局限要写在给用户看的文案里"
 
     leaked = [p for p in tmp_path.rglob("*") if p.is_file()
               and secret in p.read_text(encoding="utf-8", errors="ignore")]

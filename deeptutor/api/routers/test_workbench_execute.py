@@ -222,6 +222,9 @@ def active_run(delivery_id: str) -> dict[str, Any]:
 class ExportBody(BaseModel):
     #: 页面四张卡的多选结果，如 ["xlsx", "postman"]。
     formats: list[str] = Field(..., min_length=1)
+    #: 导出产物里的个人信息换成保形占位符（BB-424）。**默认开**——
+    #: 安全默认不该要求用户先知道有这么个开关；要带真实测试数据的可显式关。
+    redact_pii: bool = True
 
 
 @router.post("/deliveries/{delivery_id}/export")
@@ -229,7 +232,8 @@ def export_delivery(delivery_id: str, body: ExportBody) -> dict[str, Any]:
     """把批次（重新）写成所选格式，产物落在批次目录内，返回文件清单。"""
     wb = _require_extension()
     try:
-        return wb.export_delivery(delivery_id, body.formats, _deliveries_root())
+        return wb.export_delivery(delivery_id, body.formats, _deliveries_root(),
+                                  redact_pii=body.redact_pii)
     except wb.WorkbenchError as exc:
         raise _wb_error(exc) from exc
 

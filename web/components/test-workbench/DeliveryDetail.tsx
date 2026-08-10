@@ -121,6 +121,9 @@ export default function DeliveryDetail({ deliveryId, onBack, onOpenEnvironments 
   const [exporting, setExporting] = useState(false);
   const [exported, setExported] = useState<{ name: string; bytes: number }[] | null>(null);
   const [exportWarnings, setExportWarnings] = useState<string[]>([]);
+  // 导出产物脱敏（BB-424）。默认开——安全默认不该要求用户先知道有这个开关。
+  const [redactPii, setRedactPii] = useState(true);
+  const [redactionHits, setRedactionHits] = useState<Record<string, number> | null>(null);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stopPolling = useCallback(() => {
@@ -229,18 +232,19 @@ export default function DeliveryDetail({ deliveryId, onBack, onOpenEnvironments 
       const res = await apiFetch(apiUrl(`${BASE}/deliveries/${deliveryId}/export`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ formats: Array.from(formats) }),
+        body: JSON.stringify({ formats: Array.from(formats), redact_pii: redactPii }),
       });
       if (!res.ok) throw new Error(await readError(res));
       const data = await res.json();
       setExported(Array.isArray(data.files) ? data.files : []);
       setExportWarnings(Array.isArray(data.warnings) ? data.warnings : []);
+      setRedactionHits(data.pii_redaction?.hits ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setExporting(false);
     }
-  }, [deliveryId, formats]);
+  }, [deliveryId, formats, redactPii]);
 
   const running = run?.state === "running";
   const cases = detail?.cases || [];
@@ -568,6 +572,24 @@ export default function DeliveryDetail({ deliveryId, onBack, onOpenEnvironments 
                     );
                   })}
                 </div>
+                {/* 脱敏开关（BB-424）。默认勾上，说明文字如实标出抓不到的那一类 */}
+                <label className="mt-2.5 flex cursor-pointer items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={redactPii}
+                    onChange={(e) => setRedactPii(e.target.checked)}
+                    className="mt-0.5 h-3.5 w-3.5 accent-[var(--primary)]"
+                  />
+                  <span>
+                    <span className="block text-[12px] text-[var(--foreground)]">
+                      {t("Replace personal info with placeholders in exported files")}
+                    </span>
+                    <span className="block text-[11px] text-[var(--muted-foreground)]">
+                      {t("Covers ID numbers, phones, emails, cards. Names inside free-form text are not detected — check before sharing.")}
+                    </span>
+                  </span>
+                </label>
+
                 <div className="mt-2.5 flex items-center gap-2">
                   <span className="text-[11.5px] text-[var(--muted-foreground)]">
                     {t("{{n}} formats selected", { n: formats.size })}
@@ -586,6 +608,15 @@ export default function DeliveryDetail({ deliveryId, onBack, onOpenEnvironments 
 
                 {exported && (
                   <div className="mt-2.5 border-t border-[var(--border)] pt-2.5">
+                    {/* 替换了什么、几处，明说——静默替换会让用户以为产物里还是原值 */}
+                    {redactionHits && Object.keys(redactionHits).length > 0 && (
+                      <p className="mb-2 text-[11.5px] text-[var(--muted-foreground)]">
+                        {t("Replaced in exports:")}{" "}
+                        {Object.entries(redactionHits)
+                          .map(([kind, n]) => `${kind}×${n}`)
+                          .join("、")}
+                      </p>
+                    )}
                     <ul className="flex flex-col gap-1.5">
                       {exported.map((f) => (
                         <li key={f.name} className="flex items-center gap-2">
