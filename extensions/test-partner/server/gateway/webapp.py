@@ -586,6 +586,8 @@ async def _read_json(request: Request) -> dict[str, Any]:
 def create_app(**kwargs: Any) -> Starlette:
     """造配置页的 ASGI 应用。kwargs 透传给 `GatewayApp`。"""
     gateway = GatewayApp(**kwargs)
+    from server.gateway.journey_console import JourneyConsole
+    _journey = JourneyConsole()
 
     routes = [
         Route("/", gateway.index, methods=["GET"]),
@@ -607,6 +609,13 @@ def create_app(**kwargs: Any) -> Starlette:
         Route("/api/deliveries/{delivery_id}/execute", gateway.api_delivery_execute,
               methods=["POST"]),
         Route("/api/runs/{run_id}", gateway.api_run, methods=["GET"]),
+        # M1 批次工作台（journey 线）：批次是唯一状态对象，本组是其工作台投影。
+        # 挂 gateway（extensions 侧，0 上游触点）；(workspace) 批次页以此为数据后端。
+        Route("/journey", _journey.page, methods=["GET"]),
+        Route("/api/journey/batches", _journey.api_batches, methods=["GET"]),
+        Route("/api/journey/batches/{batch_id}", _journey.api_batch, methods=["GET"]),
+        Route("/api/journey/runs/{run_id}/trace-open", _journey.api_trace_open,
+              methods=["POST"]),
     ]
 
     async def guard(request: Request, call_next):  # type: ignore[no-untyped-def]
