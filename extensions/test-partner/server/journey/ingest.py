@@ -50,7 +50,7 @@ def probe_target(base_url: str, timeout_s: int = 10) -> dict[str, Any]:
         "reachable": True,
         "status": status,
         "page_title": (title_m.group(1).strip() if title_m else ""),
-        "body_head_sha256": hashlib.sha256(body).hexdigest()[:16],
+        "body_head_sha256": hashlib.sha256(body).hexdigest(),
     }
 
 

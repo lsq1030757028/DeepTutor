@@ -29,6 +29,10 @@ TOKEN = re.compile(r"[A-Za-z0-9+/=_\-]{20,}")
 HEX_RE = re.compile(r"^[0-9a-fA-F]{32,}$")
 SHA_PREFIXED = re.compile(r"^sha256:[0-9a-f]{64}$")
 PLACEHOLDER = re.compile(r"^\{\{[A-Za-z_][A-Za-z0-9_]*\}\}$")
+# journey 公开标识符（非凭据）：批次/run/caseset id 与其带前缀词的粘连形态。
+# acs-/b-/r- + 8 位日期 + 短随机 hex 是设计内可见 id，不构成泄密面。
+ID_FORM = re.compile(
+    r"^(?:[a-z_]+=)?(?:acs|b|r)-[0-9]{8}-[0-9a-f]{6,}$")
 ENTROPY_THRESHOLD = 3.8   # bits/char；base64 随机串 ~6，英文单词 ~2-3
 MIN_SECRET_LEN = 4
 
@@ -45,7 +49,7 @@ def shannon_entropy(s: str) -> float:
 
 def _is_allowlisted(token: str) -> bool:
     return bool(SHA_PREFIXED.match(token) or HEX_RE.match(token)
-                or PLACEHOLDER.match(token))
+                or PLACEHOLDER.match(token) or ID_FORM.match(token))
 
 
 def _iter_files(root: str):
@@ -56,16 +60,21 @@ def _iter_files(root: str):
 
 
 def scan_tree(root: str, known_secrets: list[str] | None = None,
-              allowlist: list[str] | None = None) -> dict[str, Any]:
+              allowlist: list[str] | None = None,
+              skip_rel: list[str] | None = None) -> dict[str, Any]:
     """扫描目录树。返回 {ok, known_hits, entropy_hits, scanned_files}。
 
     known_secrets：已知凭据值清单（值本身，不落盘本报告——命中只记文件与偏移）。
     allowlist：额外放行的具体 token（须由复核人逐条给出，fail-closed）。
+    skip_rel：豁免的相对路径（如 bundle 内嵌的确定性运行时源码——其完整性由
+      manifest 里登记的 sha256 保证，长标识符不是凭据）；known_secrets 仍全量扫，
+      只对高熵启发式豁免。
     ok = 无 known 命中 且 无未放行的高熵命中。
     """
     secrets = [s for s in (known_secrets or []) if s and len(s) >= MIN_SECRET_LEN]
     secret_bytes = [s.encode("utf-8") for s in secrets]
     allowed = set(allowlist or [])
+    skip_set = set(skip_rel or [])
     known_hits: list[dict[str, Any]] = []
     entropy_hits: list[dict[str, Any]] = []
     scanned = 0
@@ -87,6 +96,8 @@ def scan_tree(root: str, known_secrets: list[str] | None = None,
                     "secret_index": i,           # 只记序号，不回显值（红线 3）
                     "secret_len": len(secrets[i]),
                 })
+        if rel in skip_set:
+            continue
         ext = os.path.splitext(path)[1].lower()
         if ext not in TEXT_EXT:
             continue
@@ -100,10 +111,15 @@ def scan_tree(root: str, known_secrets: list[str] | None = None,
             if token in seen or token in allowed or _is_allowlisted(token):
                 continue
             seen.add(token)
+            # URL 路径形态排除：含 `/` 且有字母词段（如 58975/api/secret-echo）
+            # ——路径不是凭据；真凭据（known-secret）由上面的精确匹配兜底(DoD 7 强保证)。
+            if "/" in token and any(
+                    seg.isalpha() and len(seg) >= 3 for seg in token.split("/")):
+                continue
             # 密钥形态判据：字母+数字混排，或带 base64 专有符号——纯字母驼峰散文不算
             has_digit = any(c.isdigit() for c in token)
             has_alpha = any(c.isalpha() for c in token)
-            b64ish = any(c in "+/=" for c in token)
+            b64ish = any(c in "+=" for c in token)
             if not ((has_digit and has_alpha) or b64ish):
                 continue
             ent = shannon_entropy(token)
