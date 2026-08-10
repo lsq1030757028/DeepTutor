@@ -77,6 +77,7 @@ class CaseRunner:
         self.observations: list[str] = []
         self.aborted_requests: list[str] = []
         self.http_transcript: list[dict[str, Any]] = []
+        self._cookies: dict[str, str] = {}   # per-case cookie jar（一个 case = 一个会话）
         self.status = "executed"  # executed|skipped|blocked
         self.skip_reason = ""
         cid = meta["case_id"]
@@ -203,9 +204,8 @@ class CaseRunner:
         elif a.get("body_json") is not None:
             data = self._render(json.dumps(a["body_json"], ensure_ascii=False)).encode()
             headers["Content-Type"] = "application/json"
-        cookie = self.ctx["variables"].get("session_cookie", "")
-        if cookie:
-            headers["Cookie"] = self._render("{{session_cookie}}")
+        if self._cookies:
+            headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in self._cookies.items())
 
         class _NoRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, *args, **kw):  # noqa: D102
@@ -218,11 +218,18 @@ class CaseRunner:
             with opener.open(req, timeout=15) as resp:
                 status = resp.status
                 body = resp.read(65536).decode("utf-8", "replace")
+                set_cookies = resp.headers.get_all("Set-Cookie") or []
         except urllib.error.HTTPError as exc:
             status = exc.code
             body = (exc.read(65536) or b"").decode("utf-8", "replace")
+            set_cookies = exc.headers.get_all("Set-Cookie") or [] if exc.headers else []
         except (urllib.error.URLError, OSError) as exc:
             raise CaseBlocked(self._scrub(f"请求失败:{exc}"))
+        for sc in set_cookies:  # 会话内 cookie 持久（红线 3：cookie 值不落盘、不回显）
+            kv = sc.split(";", 1)[0].strip()
+            if "=" in kv:
+                k, v = kv.split("=", 1)
+                self._cookies[k] = v
         self.last_response = {"status": status, "body": body}
         self.http_transcript.append({
             "method": method,
