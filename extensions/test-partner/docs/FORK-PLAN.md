@@ -145,9 +145,13 @@ P1 顺带拆掉两个首发雷（上游 `pypi-release.yml` 会往 PyPI 发包、
 
 ## P5 · 上游同步演练（半天）
 
-- [ ] `git fetch upstream`，走一次完整 merge 流程
-- [ ] 量化冲突面，核对 `UPSTREAM-TOUCHPOINTS.md` 是否准确
-- [ ] 把流程写成 `docs/UPSTREAM-SYNC.md`（下次照着做即可）
+- [x] `git fetch upstream`，走一次完整 merge 流程（2026-08-08，`ut1.5.8-base` → **v1.5.10**）
+- [x] 量化冲突面：**0 文本冲突**；上游改 4454 文件，其中 4322 是误提交的构建产物，
+      真源码 132；我们 3 处触点全部自动合并成功。`UPSTREAM-TOUCHPOINTS.md` 经此验证**准确**
+- [x] 把流程写成 [UPSTREAM-SYNC.md](UPSTREAM-SYNC.md)（含两个必踩的坑与最小验证断言）
+
+演练在独立 worktree（分支 `drill/upstream-sync-v1510`）完成，**未合入任何共享分支**——
+真同步等 P3 合 main 之后再做，届时照手册走一遍即可。
 
 **验收**：登记表与实际冲突点吻合；同步流程可重复。
 **人闸**：无。
