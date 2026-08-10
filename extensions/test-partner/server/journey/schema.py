@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
-"""schema — ApprovedCaseSet 结构校验（工作基线：approved-caseset-schema-draft.json v0.1.0-draft）。
+"""schema — ApprovedCaseSet 结构校验（v1.0.0，已冻结）。
 
-schema 暂未冻结（决策 0015：首条用例走通采纳链后由 manager 自决冻结）。字段级变更须记
-run 目录 schema-changelog.md；digest 规则/禁反写等语义级变更禁自改（上浮 manager）。
+冻结：2026-08-10 manager 代拍（0015 二次补充授权，标 self-derived-pending-audit），
+首条用例走通采纳链后锁定。冻结后规则：任何字段/序列化/哈希规则变更必须升
+schema_version 并给迁移说明，禁原地改语义（0015 原文）。变更历史见 run 目录
+schema-changelog.md。含 automation.recipe（编译器确定性输入）与第三摘要
+source.content_digest（防需求正文出处漂移）两项已随冻结确认。
 
 依赖纪律：零第三方（无 jsonschema），手写校验与仓内 case_validate.py 同风格。
 错误码族 S01-S99（S=schema），与 validate_cases 的 E/W 族不冲突。
@@ -12,7 +15,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-SCHEMA_VERSION = "0.1.0-draft"
+SCHEMA_VERSION = "1.0.0"
 
 CASESET_ID_RE = re.compile(r"^acs-[0-9]{8}-[a-z0-9]{6,}$")
 CASE_ID_RE = re.compile(r"^[a-z0-9-]+/R[0-9]+-C[0-9]{3}$")

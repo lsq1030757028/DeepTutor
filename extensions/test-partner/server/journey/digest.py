@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """digest — RFC 8785 (JCS) 规范化序列化 + SHA-256 摘要。
 
-schema 草案 digestRules（approved-caseset-schema-draft.json $defs.digestRules）的可运行件：
+schema digestRules（approved-caseset-schema.json v1.0.0 $defs.digestRules）的可运行件：
 
 - 哈希算法：SHA-256，输出 ``sha256:`` + 64 位小写十六进制。
 - 规范化序列化：RFC 8785 JSON Canonicalization Scheme——对象键按 UTF-16 码元升序、
