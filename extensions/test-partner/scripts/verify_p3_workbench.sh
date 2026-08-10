@@ -28,9 +28,12 @@ say "0 · 现役实例保护自证"
 
 say "1 · 起自建镜像（副本卷 + 独立端口）"
 docker rm -f "$NAME" >/dev/null 2>&1
-docker run -d --name "$NAME" -p 127.0.0.1:${PORT}:3782 \
+# --restart unless-stopped：这个容器验证完还要留着给用户做 UAT，而 Docker Desktop
+# 重启会把没有重启策略的容器停掉（实测踩过：UAT 实例静默死了 44 小时，
+# 用户点开链接才发现）。现役 deeptutor 有策略所以活着，这个当时没有。
+docker run -d --name "$NAME" --restart unless-stopped -p 127.0.0.1:${PORT}:3782 \
   -v deeptutor-data-verify:/app/data "$IMAGE" >/dev/null 2>&1 \
-  && ok "容器已启动（端口 ${PORT}）" || bad "容器启动失败"
+  && ok "容器已启动（端口 ${PORT}，带重启策略）" || bad "容器启动失败"
 printf '  等待健康检查'
 for _ in $(seq 1 90); do
   [ "$(docker inspect -f '{{.State.Health.Status}}' "$NAME" 2>/dev/null)" = "healthy" ] && break
