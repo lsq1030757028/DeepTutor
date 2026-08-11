@@ -137,7 +137,12 @@ class FakeDeepTutorPartners:
             "language": payload.get("language", ""),
             "emoji": payload.get("emoji", ""), "color": "", "avatar": "",
             "soul_origin": {"type": "custom", "id": ""},
-            "enabled_tools": None, "builtin_tools": None,
+            "enabled_tools": None,
+            # 实机的 create 是收 builtin_tools 的（`services/partners/manager.py:390`
+            # 从 data 里读它、`:430-431` 落盘）。替身此前硬写 None，等于假装这个键
+            # 会被服务端丢掉——于是"创建时就收窄内置面"这条路在测试里永远走不通，
+            # 而 repair 每次都要再补一次，看起来像不幂等。BB-502 修复时对齐。
+            "builtin_tools": payload.get("builtin_tools"),
             "mcp_tools": payload.get("mcp_tools", []),
             "llm_selection": None, "backup_llm_selection": None, "model": None,
             "channels": [], "running": bool(payload.get("start")),
@@ -317,7 +322,10 @@ def test_repair_never_renames_or_deletes(soul_file):
     ensure_partner(client=client, name="测试伙伴", partner_id="test-guy",
                    soul_path=soul_file)
     assert client.rows["test-guy"]["name"] == "test guy"      # 名字没被动
-    assert set(client.patches[0][1]) <= {"mcp_tools", "language"}
+    # 白名单而不是"随便改"：repair 只碰这三个键。
+    # `builtin_tools` 是 BB-502 加进来的——把 ask_user 从既有伙伴的内置面上摘掉，
+    # 只在新建路径收窄等于把隐患留给所有已建出来的伙伴。它仍是"补配置"不是"改身份"。
+    assert set(client.patches[0][1]) <= {"mcp_tools", "language", "builtin_tools"}
     assert "name" not in client.patches[0][1]
     assert set(DEFAULT_WORKSPACE_SKILLS) <= set(client.skills["test-guy"])  # 原技能还在
 
