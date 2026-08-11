@@ -21,6 +21,7 @@ from typing import Any
 from server.journey import artifacts
 from server.journey import process_registry as preg
 from server.journey.gates import credential_scan
+from server.journey.gates import track_purity as _track_purity
 from server.journey.pw_harness import case_slug
 
 #: assertion_layers.required_evidence 词表 → run 目录证据文件映射
@@ -74,18 +75,27 @@ def _instance_fingerprint(base_url: str, probe: dict[str, Any]) -> str:
 
 
 #: UI 轨才有的 op。bundle 里出现任何一个就说明生成侧越轨了（E22 / DoD#4b）。
-UI_TRACK_OPS = ("goto", "fill", "click", "expect_visible", "expect_text",
-                "expect_title_contains", "expect_url_contains")
+#:
+#: **单一真相在 `gates/track_purity.py`**，这里只是转出去。原先这是一份手抄清单，
+#: 实测漏了 `wait_load` 与 `expect_hidden` 两个（两者都要 `self.page`，铁定 UI 轨）——
+#: 一份只用这两个 op 的 UI 用例，反推结果会是 "api"。手抄清单与运行时之间没有闸，
+#: 就一定会漂；track_purity 那边与 `pw_runtime` 的 `_op_*` 方法逐个对拍。
+UI_TRACK_OPS = tuple(sorted(_track_purity.UI_OPS))
 
-#: API 轨不可能产出的证据类型。要求了必然缺证（DoD#4b 第二半）。
-UI_ONLY_EVIDENCE = ("playwright_trace", "screenshot")
+#: API 轨不可能产出的证据类型。要求了必然缺证（DoD#4b 第二半）。同样转出。
+UI_ONLY_EVIDENCE = tuple(sorted(_track_purity.UI_ONLY_EVIDENCE))
 
 
 def detect_track(manifest: dict[str, Any]) -> str:
     """从 bundle 反推本趟走的是哪条轨。
 
     判据是 op 集合而不是配置项：配置说的是"打算走哪条"，op 说的是"实际会发生什么"。
-    两者不一致时，以实际为准并让 E22 去拦——**这里不负责拦，只负责如实说**。
+    两者不一致时，以实际为准——**这里不负责拦，只负责如实说**；
+    拦在编译期，见 `gates/track_purity.py`（E22）。
+
+    留一句给后人：本函数的 else 分支（「没命中 UI 清单就是 api」）是个**静默默认值**。
+    它今天安全，只因为清单与运行时之间有了对拍闸。**别把清单改回手抄的**，
+    否则运行时每新增一个 UI op，这里都会悄悄多放行一种越轨。
     """
     for case in manifest.get("cases", []) or []:
         for action in case.get("actions", []) or []:

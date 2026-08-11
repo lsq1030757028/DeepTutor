@@ -94,10 +94,23 @@ def test_one_ui_op_is_enough_to_mark_the_run_ui():
 
 
 def test_ui_op_vocabulary_is_complete():
-    """漏一个 op 就漏一条越轨路径。逐个对 pw_runtime 的实现列表。"""
-    assert set(execute_run.UI_TRACK_OPS) == {
-        "goto", "fill", "click", "expect_visible", "expect_text",
-        "expect_title_contains", "expect_url_contains"}
+    """漏一个 op 就漏一条越轨路径。**真的**逐个对 pw_runtime 的实现列表。
+
+    本条 2026-08-11 重写。旧版的文档串写着「逐个对 pw_runtime 的实现列表」，
+    身子却是跟一份**手打的 7 项字面量**比相等——而 `pw_runtime.CaseRunner` 当时
+    已经有 9 个 UI op（多出 `wait_load` 与 `expect_hidden`）。
+
+    也就是说：**这条本该防漂的测试自己把漂锁死了**。它不是没抓到，是抓反了——
+    谁要是把词表补全，反而会被它判红，于是补全会被当成"改坏了"退回去。
+    与「文件级扣除」「测试落在闸够不到的地方」同族：机制在，作用域是错的。
+
+    现在的判据是与运行时现算的集合比，词表怎么变都不用回来改这条。
+    """
+    from server.journey.gates import track_purity
+
+    gaps = track_purity.vocabulary_gaps()
+    assert gaps == {"runtime_only": [], "vocab_only": []}, gaps
+    assert set(execute_run.UI_TRACK_OPS) == set(track_purity.UI_OPS)
 
 
 def test_api_track_forbidden_evidence_kinds_declared():

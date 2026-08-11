@@ -4,6 +4,9 @@
 输入：ApprovedCaseSet → 输出 `AutomationBundle`（批次目录 bundle/，自包含 pytest 工程）。
 牙（挂产物）：compile-gate 最小版（architecture-analysis §3 工序 6）：
   1 schema：输入 caseset 全量校验 + 双 digest 重算比对（禁反写复算，任一不一致 BLOCK）
+  1b 轨道纯度（E22，DoD#4b / 0023 裁定 2）：声明的 track 与 op 实际隐含的轨必须一致、
+     一份 caseset 不许混轨、API 轨用例不许要 UI-only 证据、未知 op 判红不默认放行。
+     **排在建目录之前**：它的判据是「零产物落盘」，先 mkdir 再校验就留了一地半成品。
   2 静态检查：生成的 .py 全部 py_compile 过
   3 collect：pytest --collect-only 收得到且条数 = 可自动化 case 数
   4 case 映射：collected 测试名 ↔ bundle.json 映射一一对应（带 digest 回指）
@@ -26,7 +29,7 @@ import sys
 from typing import Any
 
 from server.journey import artifacts, digest, schema
-from server.journey.gates import credential_scan
+from server.journey.gates import credential_scan, track_purity
 from server.journey.pw_harness import case_slug
 
 COMPILER_VERSION = "m1.1"
@@ -164,6 +167,14 @@ def compile_bundle(batch_id: str) -> dict[str, Any]:
             problems.append(f"digest 复算不一致 {c.get('case_id')}: {e}")
     if problems:
         return {"ok": False, "gate": "compile-gate#1-schema", "problems": problems}
+
+    # 闸 1b：轨道纯度（E22，DoD#4b）。**在建目录之前**——与门票闸同理，
+    # 拒绝的判据是「零产物落盘」，先 mkdir 再校验就等于留了一地半成品。
+    purity = track_purity.check_caseset(caseset)
+    if not purity["ok"]:
+        return {"ok": False, "gate": "compile-gate#1b-track-purity",
+                "problems": [f"{p['code']} {p['where']}: {p['problem']}"
+                             for p in purity["problems"]]}
 
     bundle_dir = os.path.join(artifacts.batch_dir(batch_id), "bundle")
     if os.path.isdir(bundle_dir):
