@@ -46,6 +46,11 @@ PROMPT_AGENT = "test_journey"
 #: （`prompt_blocks.py:52` 的 `f"## {block.name}"`）。
 JOURNEY_BLOCK_NAME = "test_journey"
 
+#: yaml 里哪几段拼进纪律块，**顺序即拼接顺序**。
+#: 单列成常量是因为「写了一段提示词但忘了挂进来」与 BB-508 是同一个形状的错
+#: （内容有、通道没接上），所以判据直接遍历这个列表逐段验，加一段自动带一条断言。
+JOURNEY_PROMPT_KEYS = ("journey_discipline", "human_gates", "workbench_pointer")
+
 
 def journey_system_block(language: str = "zh") -> str:
     """旅程纪律系统块。加载失败**如实返回空串**，不塞一段兜底文案。
@@ -58,8 +63,7 @@ def journey_system_block(language: str = "zh") -> str:
             PROMPT_MODULE, PROMPT_AGENT, language=language)
     except Exception:  # noqa: BLE001 - 提示词读不到不该让整轮崩
         return ""
-    parts = [str(prompts.get(key) or "").strip()
-             for key in ("journey_discipline", "workbench_pointer")]
+    parts = [str(prompts.get(key) or "").strip() for key in JOURNEY_PROMPT_KEYS]
     return "\n\n".join(p for p in parts if p)
 
 

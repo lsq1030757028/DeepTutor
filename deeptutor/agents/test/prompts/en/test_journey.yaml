@@ -66,6 +66,49 @@ journey_discipline: |-
   `E_ORACLE_BODY_EMPTY` the requirement genuinely has no body (talk to the author) /
   `E_ORACLE_DRIFT` the requirement changed (re-clarify; there is no "carry on anyway").
 
+human_gates: |-
+  ## Four human gates: when you must stop and ask
+
+  Always ask through `ask_user`. **Do not flatten the question into a statement
+  of intent** — that ends the turn with nothing for the user to click and no
+  answer coming back to you.
+
+  **1. Depth tier (ask BEFORE `journey_ingest`)**
+  The tier decides how many cases get written and how deep the assertions go:
+  checklist (list the points, do not execute) / standard (main path + permission
+  counter-cases) / deep (adds boundaries and concurrency).
+  Once the user picks, pass `tier` together with
+  `tier_confirmed_via="chat_ask_user"` to `journey_ingest`.
+  **The tier is frozen into intake_profile at intake and there is no tool to
+  change it afterwards**, so do not ingest first and ask later — that card's
+  answer would have nowhere to go.
+
+  **2. Clarify (before `journey_clarify`)**
+  One genuine ambiguity at a time; write the resolutions into `clarifications`.
+  Anything the user cannot answer gets `probing=true` — do not decide it for them.
+
+  **3. Adoption hand-off (before `journey_adopt`)**
+  Per-case selection happens in the workbench; you only hand off — say where to
+  go and that this step is the freeze point. **Never adopt on the user's behalf.**
+  Call `journey_adopt` after the user says they are done, and set `confirmed_by`
+  to where that statement came from.
+
+  **4. Write confirmation (before touching data in the system under test)**
+  List every case that will change target data — what it does, what it affects —
+  then ask. **Nothing is pre-selected.** The other three gates cost a redo when
+  wrong; this one changes data in the system under test, and a pre-ticked "all"
+  turns "I didn't read it" into "I agree". Silence is not consent: no answer,
+  no run.
+
+  ⚠ **Current implementation limit — state it plainly, do not blur it**: write
+  authorization has to land as a `write_confirm` event in the batch's
+  `events.jsonl`, and **no production writer exists for it today** (no chat tool,
+  none in the workbench either). So even when the user answers "allow", those
+  write cases are refused at runtime ("write case is not authorised"). Ask
+  anyway, but **never claim it is authorised** — tell the user this run can only
+  cover the read-only cases. Delete this paragraph once the write-confirm tool
+  ships.
+
 workbench_pointer: |-
   Batch ids, ledger progress, per-case verdicts and evidence live in the workbench
   (sidebar → "Test Journey"). Chat carries judgement and conclusions;

@@ -85,6 +85,59 @@ def test_prompt_constants_match_the_on_disk_module_layout() -> None:
     assert PROMPT_MODULE in PromptManager.MODULES
 
 
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_every_declared_prompt_section_reaches_the_rendered_prompt(language: str) -> None:
+    """写了一段提示词但忘了挂进拼接列表 —— 与 BB-508 同一个形状（内容有、通道没接上）。
+
+    **遍历的是 yaml 里实际有哪些段，不是代码里声明了哪些段**：遍历
+    `JOURNEY_PROMPT_KEYS` 只能发现"声明了但没渲染"，发现不了"写了但没声明"，
+    而后者才是这个坑的常见形态。真相在 yaml，判据就得从 yaml 出发。
+    """
+    from deeptutor.agents.test.pipeline import (
+        JOURNEY_PROMPT_KEYS,
+        PROMPT_AGENT,
+        PROMPT_MODULE,
+        TestJourneyPipeline,
+    )
+
+    prompts = PromptManager().load_prompts(PROMPT_MODULE, PROMPT_AGENT, language=language)
+    rendered = _rendered_system_prompt(TestJourneyPipeline, language)
+    # `labels` 不是提示词正文，是前端阶段名，本来就不该进 system prompt。
+    sections = {k: v for k, v in prompts.items() if k != "labels" and isinstance(v, str)}
+    assert sections, f"{language} 一段提示词都没读到"
+    for key, raw in sections.items():
+        section = raw.strip()
+        assert section, f"{language}/{key} 在 yaml 里是空的"
+        assert key in JOURNEY_PROMPT_KEYS, (
+            f"{language}/{key} 写在 yaml 里但没进 JOURNEY_PROMPT_KEYS —— 模型收不到它"
+        )
+        # 取首行当锚：整段全等会因为 yaml 折行与渲染缩进的差异误红。
+        head = section.splitlines()[0].strip()
+        assert head in rendered, f"{language}/{key} 没进 system prompt"
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_all_four_human_gates_are_prompted(language: str) -> None:
+    """四道人闸（定档 / 澄清 / 采纳流转 / 写确认）都得在提示词里。
+
+    锚全部选**接口身份**不选人话：四道闸各自对应的工具参数与事件类型。
+    文案怎么润色它们都在；真消失了说明闸接的东西变了，那时候就该红。
+    """
+    from deeptutor.agents.test.pipeline import PROMPT_AGENT, PROMPT_MODULE
+
+    prompts = PromptManager().load_prompts(PROMPT_MODULE, PROMPT_AGENT, language=language)
+    gates = str(prompts.get("human_gates") or "")
+    for anchor in (
+        "ask_user",              # 四道闸统一的提问机制
+        "tier_confirmed_via",    # 闸 1 定档：ingest 的记录参数
+        "journey_ingest",        # 闸 1 的时序：定档必须在接入之前
+        "clarifications",        # 闸 2 澄清：clarify 的记录参数
+        "confirmed_by",          # 闸 3 采纳：adopt 的记录参数
+        "write_confirm",         # 闸 4 写确认：events.jsonl 里的事件类型
+    ):
+        assert anchor in gates, f"{language} 人闸段缺锚 {anchor}"
+
+
 def test_journey_prompt_loads_in_both_languages() -> None:
     """注册了还要真能**经 PromptManager 读出来**。
 
