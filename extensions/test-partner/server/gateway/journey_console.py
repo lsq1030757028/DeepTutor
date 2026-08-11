@@ -116,16 +116,22 @@ def open_trace(run_id: str, trace_rel: str) -> dict[str, Any]:
         return {"ok": False, "error": "trace 文件不存在"}
     command = f'python -m playwright show-trace "{abspath}"'
     started = False
+    spawn_error = ""
     try:
         proc = subprocess.Popen(
             [sys.executable, "-m", "playwright", "show-trace", abspath],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as exc:  # viewer 起不来不致命，用户走降级命令
+        spawn_error = str(exc)
+    else:
+        # 登记必须在 Popen 之后**立刻**发生，且失败要看得见。
+        # BB-501 现场教训：此处原先是一个大 `except Exception`，
+        # 而 `preg.register_pid` 当时根本不存在 —— AttributeError 被吞掉，
+        # 于是"起了进程但从未登记"，泄漏无从追。别把这个 except 再放宽。
         preg.register_pid(rd, proc.pid, "trace-viewer")
         started = True
-    except Exception:  # noqa: BLE001 - viewer 起不来不致命，用户走降级命令
-        started = False
     return {"ok": True, "started": started, "command": command,
-            "trace_path": abspath}
+            "trace_path": abspath, "spawn_error": spawn_error}
 
 
 # ── 页面 ────────────────────────────────────────────────────────────────────
@@ -154,11 +160,15 @@ _PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <header>测试伙伴 · 批次工作台 <span class="muted" style="color:#cfe0ff">SSOT 单一状态双视图 · 工作台投影</span></header>
 <main id="app">加载中…</main>
 <script>
-const S=['intake_profile','business_frame','test_analysis','case_draft','approved_caseset','automation_bundle','coverage_ledger'];
-const LBL={intake_profile:'接入',business_frame:'澄清',test_analysis:'分析',case_draft:'用例',approved_caseset:'采纳',automation_bundle:'编译',coverage_ledger:'覆盖'};
+// 第二真相已删（设计稿 §9 第 3 条）：格数、顺序与展示名一律由服务端 stepper 给，
+// 前端不再各持一份常量。此前这里内嵌 7 项、服务端 9 项，两边永远对不上。
 const app=document.getElementById('app');
 const q=new URLSearchParams(location.search);
-function stepper(st){return S.map(k=>{const s=(st||[]).find(x=>x.artifact===k);return `<span class="step ${s&&s.present?'on':''}">${LBL[k]||k}</span>`}).join('')}
+function stepper(st){return (st||[]).map(s=>{
+ const why=s.present?'':(s.missing_prereq?('缺前置：'+s.missing_prereq):(s.blocked_reason||'尚未产出'));
+ const anchor=s.run_id?(' @'+s.run_id):'';
+ return `<span class="step ${s.present?'on':''}" title="${esc(why)}${esc(anchor)}">${esc(s.label||s.artifact)}</span>`
+}).join('')}
 async function jget(u){const r=await fetch(u,{headers:{'Cache-Control':'no-store'}});return r.json()}
 async function listView(){
  const d=await jget('/api/journey/batches');

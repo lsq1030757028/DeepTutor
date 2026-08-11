@@ -267,6 +267,162 @@ def execute_cases(cases: CasesArg, base_url: str = "", variables: Any = None,
                                  auth_token_variable=auth_token_variable)
 
 
+# ── req 旅程调用面（M2 第 0 号施工项，ADR-M2-01）────────────────────────────
+#
+# M1 交付的九原子工具此前**没有任何对外调用面**——闭环能跑，但没人能从 DT 侧调它。
+# M2 的三件主事（TAPD 全链 / 薄壳 / 聊天人闸）全压在这条面上，故它先于其余一切。
+#
+# 形态约束（ADR-M2-01）：
+#   · 工具是**原子**的，这里没有"一键跑全流程"——默认组合由聊天 agent 按档位决定；
+#   · 返回体首字段固定 `{ok, code, ...}`，消费方靠约定解析（MCP 传的是字符串）；
+#   · `journey_ingest` 是唯一能建批次的工具且**fail-closed 于门票**，其余一律要求既存
+#     batch_id。这是"被调也造不出后果"的硬层——可见性层只能是软约束（0025 §2）。
+#
+# 工具数与 `server/journey/tools.py:TOOL_NAMES` 对拍（G2），漂移即 CI 红。
+
+
+@mcp.tool()
+def journey_issue_gate_token(session_ref: str = "") -> dict[str, Any]:
+    """下发一张旅程门票（gate_token），journey_ingest 必须带它才能创建批次。
+
+    由「测试」模式在开旅程时调。普通聊天轮没有门票，因此调 journey_ingest 会被拒。
+    """
+    from server.journey import tools as _jt
+    return _jt.issue_gate_token(session_ref=session_ref, caller_surface="capability")
+
+
+@mcp.tool()
+def journey_ingest(title: str, base_url: str, gate_token: str,
+                   workspace_id: str = "", story_id: str = "",
+                   requirement_text: str = "", source_kind: str = "tapd",
+                   source_ref: str = "", environment_ref: str = "",
+                   tier: str = "", tier_confirmed_via: str = "",
+                   caller_surface: str = "unknown") -> dict[str, Any]:
+    """接入 + 定档：建批次并落 intake_profile。**需要门票**。
+
+    oracle 二选一：给 TAPD 需求号（workspace_id + story_id，服务端直接取原文并冻结
+    快照 + digest），或给本地需求正文 requirement_text。两个都不给不建批次。
+    tier 不给时只回档位确认卡数据（人闸未走完就没有这个产物）。
+    """
+    from server.journey import tools as _jt
+    return _jt.ingest(title=title, base_url=base_url, source_kind=source_kind,
+                      source_ref=source_ref, gate_token=gate_token,
+                      workspace_id=workspace_id, story_id=story_id,
+                      requirement_text=requirement_text,
+                      environment_ref=environment_ref, tier=tier,
+                      tier_confirmed_via=tier_confirmed_via,
+                      caller_surface=caller_surface)
+
+
+@mcp.tool()
+def journey_clarify(batch_id: str, rules: Any, confirmed_facts_md: str,
+                    clarifications: Any = None,
+                    caller_surface: str = "unknown") -> dict[str, Any]:
+    """澄清：落 business_frame（R 规则 + confirmed_facts，过 sot_gate）。
+
+    rules 每条 {rule_id, statement, source_quote?, probing?}。非探测性规则必须带
+    source_quote（需求原文引句）——需求正文撑不住的预期标 probing=true，不进 PASS 判据。
+    """
+    from server.journey import tools as _jt
+    return _jt.clarify(batch_id=batch_id, rules=rules or [],
+                       confirmed_facts_md=confirmed_facts_md,
+                       clarifications=clarifications, caller_surface=caller_surface)
+
+
+@mcp.tool()
+def journey_analyze(batch_id: str, example_map: Any, analysis_md: str,
+                    caller_surface: str = "unknown") -> dict[str, Any]:
+    """分析：落 test_analysis（Example Map + 消费面盘点，过 downstream_gate）。"""
+    from server.journey import tools as _jt
+    return _jt.analyze(batch_id=batch_id, example_map=example_map or [],
+                       analysis_md=analysis_md, caller_surface=caller_surface)
+
+
+@mcp.tool()
+def journey_draft_cases(batch_id: str, cases: Any, uncovered_rules: Any = None,
+                        caller_surface: str = "unknown") -> dict[str, Any]:
+    """用例草稿：落 case_draft。未覆盖的规则要在 uncovered_rules 里显式声明原因。"""
+    from server.journey import tools as _jt
+    return _jt.draft_cases(batch_id=batch_id, cases=cases or [],
+                           uncovered_rules=uncovered_rules,
+                           caller_surface=caller_surface)
+
+
+@mcp.tool()
+def journey_adopt(batch_id: str, selected_draft_ids: Any, caseset_slug: str = "",
+                  adopted_via: str = "workbench_selection", confirmed_by: str = "",
+                  idempotency_key: str = "",
+                  caller_surface: str = "unknown") -> dict[str, Any]:
+    """采纳冻结：落 ApprovedCaseSet（双 digest）。
+
+    采纳前会**重取一次 TAPD 原文比对 digest**：需求变了就阻断采纳并要求重新澄清。
+    这条没有绕过开关。
+    """
+    from server.journey import tools as _jt
+    return _jt.adopt(batch_id=batch_id, selected_draft_ids=selected_draft_ids or [],
+                     caseset_slug=caseset_slug, adopted_via=adopted_via,
+                     confirmed_by=confirmed_by, idempotency_key=idempotency_key,
+                     caller_surface=caller_surface)
+
+
+@mcp.tool()
+def journey_compile(batch_id: str, idempotency_key: str = "",
+                    caller_surface: str = "unknown") -> dict[str, Any]:
+    """编译：把采纳集编成 pytest+Playwright 工程（AutomationBundle），过 compile-gate。"""
+    from server.journey import tools as _jt
+    return _jt.compile_bundle(batch_id=batch_id, idempotency_key=idempotency_key,
+                              caller_surface=caller_surface)
+
+
+@mcp.tool()
+def journey_execute(batch_id: str, variables: Any = None, case_ids: Any = None,
+                    base_url_override: str = "", resume_run_id: str = "",
+                    timeout_s: int = 900, idempotency_key: str = "",
+                    triggered_by: str = "fresh",
+                    caller_surface: str = "unknown") -> dict[str, Any]:
+    """执行：跑 bundle 并产 run_receipt 与证据素材（五条红线在运行时兜底）。
+
+    同一批输入重复调用不会产生第二个 run（幂等），返回上次结果并标 replayed=true。
+    写用例仍受写确认闸约束，重放不跳过人闸。
+    """
+    from server.journey import tools as _jt
+    return _jt.execute(batch_id=batch_id, variables=variables, case_ids=case_ids,
+                       base_url_override=base_url_override,
+                       resume_run_id=resume_run_id, timeout_s=timeout_s,
+                       idempotency_key=idempotency_key, triggered_by=triggered_by,
+                       caller_surface=caller_surface)
+
+
+@mcp.tool()
+def journey_project(run_id: str, caller_surface: str = "unknown") -> dict[str, Any]:
+    """投影：run 证据 → verdicts.jsonl（唯一投影器，过 evidence_gate + mechanical_check）。"""
+    from server.journey import tools as _jt
+    return _jt.project(run_id=run_id, caller_surface=caller_surface)
+
+
+@mcp.tool()
+def journey_coverage(batch_id: str, run_id: str = "",
+                     caller_surface: str = "unknown") -> dict[str, Any]:
+    """覆盖收口：落 coverage_ledger。gap 没有解释就不 done。"""
+    from server.journey import tools as _jt
+    return _jt.coverage(batch_id=batch_id, run_id=run_id,
+                        caller_surface=caller_surface)
+
+
+@mcp.tool()
+def journey_list_batches(owner: str = "") -> dict[str, Any]:
+    """列批次（含九格产物账本与账本的完整定义）。薄壳列表页的数据来源。"""
+    from server.journey import tools as _jt
+    return _jt.list_batches(owner=owner)
+
+
+@mcp.tool()
+def journey_get_batch(batch_id: str) -> dict[str, Any]:
+    """批次详情：元信息 + 九格账本 + 已产出的产物 + 各 run 的收据与结论 + 事件流。"""
+    from server.journey import tools as _jt
+    return _jt.get_batch(batch_id=batch_id)
+
+
 def start_gateway() -> str:
     """先把配置面拉起来，返回它的地址（起不来时返回空串，不拦 MCP 面）。
 

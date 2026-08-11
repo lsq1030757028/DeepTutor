@@ -17,6 +17,28 @@ def store(tmp_path, monkeypatch):
     return artifacts
 
 
+@pytest.fixture(autouse=True)
+def no_real_gui_subprocess(monkeypatch):
+    """BB-501：测试里**绝不真起 GUI 子进程**。
+
+    原 `test_trace_open_returns_downgrade_command` 直接调真 `jc.open_trace()`，
+    于是每跑一次测试套就起一个 `playwright show-trace` 窗口进程；再叠加
+    "run 目录被 pytest 清掉后 PID 无人回收"，实测遗留 9 个 chromium 主进程。
+    这个 autouse 桩把整条测试文件的这条路堵死，并把"起了几次"记下来供断言。
+    """
+    calls: list[list[str]] = []
+
+    class _FakeProc:
+        pid = 990001
+
+    def _fake_popen(cmd, **kwargs):
+        calls.append(list(cmd))
+        return _FakeProc()
+
+    monkeypatch.setattr(jc.subprocess, "Popen", _fake_popen)
+    return calls
+
+
 def test_list_empty(store):
     assert jc.list_batches_payload() == {"ok": True, "batches": []}
 
@@ -80,7 +102,7 @@ def test_trace_open_missing_file(store):
     assert not r["ok"] and "不存在" in r["error"]
 
 
-def test_trace_open_returns_downgrade_command(store):
+def test_trace_open_returns_downgrade_command(store, no_real_gui_subprocess):
     run_id = store.new_run_id()
     rd = store.run_dir(run_id, create=True)
     os.makedirs(os.path.join(rd, "bysms__r1__c001"))
@@ -92,6 +114,18 @@ def test_trace_open_returns_downgrade_command(store):
     # 降级路径：始终给可复制命令（ADR-M1-02 §2.3 路径2）
     assert "playwright show-trace" in r["command"]
     assert r["command"].endswith('trace.zip"')
+    # BB-501 断言：起的是桩，**真 Popen 调用数 == 0**
+    assert len(no_real_gui_subprocess) == 1
+    assert "show-trace" in no_real_gui_subprocess[0]
+
+
+def test_open_trace_never_spawns_when_file_missing(store, no_real_gui_subprocess):
+    """文件不在就该在起进程**之前**返回——起了再发现没文件等于白漏一个进程。"""
+    run_id = store.new_run_id()
+    store.run_dir(run_id, create=True)
+    r = jc.open_trace(run_id, "nope/trace.zip")
+    assert not r["ok"]
+    assert no_real_gui_subprocess == []
 
 
 def test_page_served():
