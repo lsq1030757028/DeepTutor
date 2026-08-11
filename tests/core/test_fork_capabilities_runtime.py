@@ -13,8 +13,17 @@ deeptutor.config.settings` 拉到 `pydantic_settings` —— 宿主 python 没�
 放这儿还有个附带好处：它就躺在 `test_capabilities_runtime.py` 旁边，
 而后者那条全等断言正是本 fork 具名扣除掉的那条 —— 让出去的和补回来的相邻可见。
 
-结构层（常量表在册 / MODULES 在册 / i18n 成对 / 提示词文件可解析）见
-`extensions/test-partner/tests/test_fork_capabilities.py`，闸第 1 层每次必跑。
+## 本文件是 fork 断言的**唯一落点**
+
+上游 `tests/` 根那份 `test_fork_capabilities.py` 已删（它躺在回归闸够不到的
+路径上，当时并没有在保护任何东西——**假保护比没保护更危险，因为它让人以为有**）；
+扩展层也不留（扩展 venv 刻意不依赖 DT 运行时，放进去等于把扩展测试环境绑上
+DT 依赖集）。所以五个登记触点（#7 常量表 / #8 MODULES / #9 picker /
+#10 富卡 / #11 i18n）里凡能在 python 侧断的，都在这里断，没有第二处。
+
+#9 picker 与 #10 富卡在前端：#10 的判据是
+`web/tests/test-journey-cards.test.ts`；**#9 目前无机械守**——picker 的
+CAPABILITIES 表写在 page 组件内部、未导出，断不到。这是已知缺口，不粉饰。
 """
 
 from __future__ import annotations
@@ -26,10 +35,45 @@ from deeptutor.services.prompt.manager import PromptManager
 
 
 def test_capability_manifest_name_matches_registry_key() -> None:
+    """触点 #7。不在册则 picker 选中后服务端无实现可派。"""
     from deeptutor.agents.test.capability import TestCapability
 
     assert TestCapability.manifest.name == "test"
-    assert BUILTIN_CAPABILITY_CLASSES["test"].endswith(":TestCapability")
+    assert (
+        BUILTIN_CAPABILITY_CLASSES["test"]
+        == "deeptutor.agents.test.capability:TestCapability"
+    )
+
+
+def test_capability_description_is_reachable_in_both_languages() -> None:
+    """触点 #11。picker 那一行显示的就是这两句，缺了那一行没文案。
+
+    **不断私有表、断公开取数口**：`capability_description_i18n` 对查不到的
+    名字返回 `{"en": fallback, "zh": fallback}` —— 又一个静默回落。只断
+    `_CAPABILITY_DESCRIPTIONS["test"]` 有值，证明不了 picker 真取得到；
+    用一个不可能与真文案相同的哨兵当 fallback，取回来还等于哨兵就是没接上。
+    """
+    from deeptutor.i18n.metadata_i18n import (
+        _CAPABILITY_DESCRIPTIONS,
+        capability_description_i18n,
+    )
+
+    sentinel = "<<unreached>>"
+    # 探测器的探测器：先证明这套哨兵法真能认出「没接上」，
+    # 否则下面那圈断言可能只是恰好通过。
+    assert capability_description_i18n("no-such-capability", sentinel) == {
+        "en": sentinel,
+        "zh": sentinel,
+    }
+    entry = capability_description_i18n("test", sentinel)
+    for language in ("en", "zh"):
+        value = str(entry.get(language) or "").strip()
+        assert value, f"{language} 文案为空"
+        assert value != sentinel, f"{language} 走到了 fallback —— 取数口没接上这一项"
+    # 中英不得是同一串：两边填一样等于有一个语种其实没写，而非空检查看不出来。
+    assert entry["en"] != entry["zh"]
+    # 取数口给的就是表里那份，不是复制品漂移后的另一份。
+    assert entry == dict(_CAPABILITY_DESCRIPTIONS["test"])
 
 
 def test_prompt_constants_match_the_on_disk_module_layout() -> None:
