@@ -10,19 +10,25 @@
 # 用法：bash extensions/test-partner/scripts/regression_gate.sh [镜像名]
 # 镜像默认 deeptutor:p3-full。
 #
-# 已知基线扣除（都是上游/环境问题，不是我们的；扣已知、其余任何红都算真红）：
-# - 第 3 层：4 个测试文件因上游测试构建的 ESM/CJS 混用而载入即炸
-#   （dist 里 code-block-themes.js 带 export 却被 require；这 4 个文件在我们
-#   分支 diff 里零命中，2026-08-08 实测归因）。
-# - 第 4 层：test_cors_settings 2 例在纯上游基线镜像同样红
-#   （见 BUILD-NOTES"两条红的归因"），文件级 --deselect。
+# 已知基线扣除：**具名扣除清单是 scripts/known-deductions.json**（机械可读单一真相）。
+# 每条带三段——为什么红 / 什么时候该消失 / 谁复核——缺一段 deductions.py 判红。
+# 本闸每次运行都会打印「本次扣除 N 条」并列出清单：**扣除本身必须可见**，
+# 否则它就变成了另一种静默（与「不许假绿」是同一族问题的镜像：红久了没人看，
+# 真红混进来谁也认不出）。看到条数变多就要问为什么。
+# 扣已知、其余任何红都算真红。
 
 set -uo pipefail
 IMAGE="${1:-deeptutor:p3-full}"
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 FAIL=0
+DEDUCT="$ROOT/extensions/test-partner/scripts/deductions.py"
 say(){ printf '\n=== %s ===\n' "$1"; }
 verdict(){ if [ "$1" -eq 0 ]; then printf '  [PASS] %s\n' "$2"; else printf '  [FAIL] %s\n' "$2"; FAIL=1; fi }
+
+say "0/4 具名扣除清单"
+python "$DEDUCT" --validate >/dev/null 2>&1
+verdict $? "known-deductions.json 三段式完整（为什么红/何时删/谁复核）"
+python "$DEDUCT" --print
 
 say "1/4 扩展层 pytest 全量"
 ( cd "$ROOT/extensions/test-partner" && python -m pytest -q --no-header 2>&1 | tail -2 )
@@ -34,7 +40,7 @@ say "2/4 i18n 硬闸"
 verdict $? "i18n parity"
 
 say "3/4 前端 node 测试 + eslint"
-KNOWN_BROKEN_NODE_TESTS="appearance-settings-page|code-block-themes|provider-trace-row|rich-code-block"
+KNOWN_BROKEN_NODE_TESTS=$(python "$DEDUCT" --layer web-node-tests --format grep-pattern)
 if [ ! -d "$ROOT/web/node_modules" ]; then
   printf '  [FAIL] web/node_modules 未安装。先跑：cd web && npm ci\n'
   FAIL=1
@@ -57,11 +63,12 @@ say "4/4 上游 tests/api（镜像内挂仓跑；镜像不带 pytest，先装）
 # Git Bash 下 /d/... 形式的挂载路径会被改写，用 Windows 形式（pwd -W）；
 # 容器内不接 tail——管道会把 pytest 的退出码换成 tail 的 0。
 WIN_ROOT="$(cd "$ROOT" && pwd -W 2>/dev/null || pwd)"
+UPSTREAM_DESELECT=$(python "$DEDUCT" --layer upstream-tests --format pytest-deselect)
 docker run --rm -v "$WIN_ROOT:/repo" --entrypoint sh "$IMAGE" -c \
   "pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple pytest pytest-asyncio >/dev/null 2>&1; \
-   cd /repo && python -m pytest tests/api -q --no-header --tb=no \
-     --deselect tests/api/test_cors_settings.py" 2>&1 | tail -3
-verdict "${PIPESTATUS[0]}" "upstream tests/api（已排除基线镜像同红的 cors 2 例）"
+   cd /repo && python -m pytest tests/api tests/core -q --no-header --tb=no \
+     $UPSTREAM_DESELECT" 2>&1 | tail -3
+verdict "${PIPESTATUS[0]}" "upstream tests/api+core（按具名清单扣除）"
 
 say "结果"
 if [ "$FAIL" -eq 0 ]; then

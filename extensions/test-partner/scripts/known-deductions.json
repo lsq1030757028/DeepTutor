@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0",
+  "_doc": [
+    "回归闸的具名扣除清单 —— 机械可读的唯一真相。",
+    "",
+    "为什么要有这个文件：闸里散落着 grep 模式与 --deselect 参数，谁也说不清",
+    "「现在到底扣了几条、每条为什么扣、什么时候该扣不动了」。扣除本身如果不可见，",
+    "它就变成了另一种静默 —— 与「不许假绿」是同一族问题的镜像。",
+    "",
+    "每条必须带三段，缺一条 deductions.py 判红：",
+    "  why_red                  为什么它红（归因，不是「已知问题」四个字）",
+    "  when_it_should_disappear 什么条件下这条扣除该被删掉（有到期条件，不是永久豁免）",
+    "  reviewer                 谁负责复核它还该不该留着",
+    "",
+    "闸每次运行都会打印「本次扣除 N 条」并列出清单。看到条数变多要问为什么。"
+  ],
+  "deductions": [
+    {
+      "id": "upstream-capability-set-assertion",
+      "layer": "upstream-tests",
+      "selector": "tests/core/test_capabilities_runtime.py::test_builtin_capability_registry_covers_documented_capabilities",
+      "why_red": "该用例是**全等集合断言**（assert set(BUILTIN_CAPABILITY_CLASSES) == {7 个字面量}）。fork 注册了额外的「测试」capability，集合多一项，断言必然失败。这是 fork 与上游的结构性差异，不是缺陷。",
+      "when_it_should_disappear": "上游自己新增/调整 capability 并改写这条断言时，同步后按上游原样取，重新评估本条扣除是否还需要；若上游改成子集断言或改用其他形态，本条立即删除。fork 停止注册自有 capability 时同样立即删除。",
+      "reviewer": "P3 线（test-partner）——每次上游同步时随触点清单一并复核",
+      "notes": "刻意**不改上游那条断言**（改了每次同步必撞，且要吃掉最后 1 行硬余量）。正向断言由我方 tests/test_fork_capabilities.py 守（断言 \"test\" in BUILTIN_CAPABILITY_CLASSES），反向的全等断言让给上游。"
+    },
+    {
+      "id": "upstream-cors-settings",
+      "layer": "upstream-tests",
+      "selector": "tests/api/test_cors_settings.py",
+      "why_red": "在**纯上游基线镜像**里同样红（归因见 BUILD-NOTES「两条红的归因」），与 fork 改动无关。",
+      "when_it_should_disappear": "上游修掉它之后。每次同步时用基线镜像复跑一次确认它仍在红——若基线已绿而我方红，说明是我们弄坏的，本条扣除立即失效。",
+      "reviewer": "P3 线（test-partner）"
+    },
+    {
+      "id": "upstream-node-esm-cjs",
+      "layer": "web-node-tests",
+      "selector": "appearance-settings-page|code-block-themes|provider-trace-row|rich-code-block",
+      "selector_kind": "grep-pattern",
+      "why_red": "上游测试构建的 ESM/CJS 混用导致这 4 个文件载入即炸（dist 里 code-block-themes.js 带 export 却被 require）。2026-08-08 实测归因：这 4 个文件在我方分支 diff 里**零命中**。",
+      "when_it_should_disappear": "上游修好构建配置后。复核方式：在纯上游基线上跑 npm run test:node，若这 4 个已绿则本条立即删除。",
+      "reviewer": "P3 线（test-partner）"
+    }
+  ]
+}
