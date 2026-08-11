@@ -238,9 +238,13 @@ def test_execute_write_confirmed_runs(store, target):
     cases = [api_case("dw", writes=True)]
     bid = build_batch(store, target, cases)
     assert compile_bundle.compile_bundle(bid)["ok"]
-    artifacts.append_event(bid, {"type": "write_confirm",
-                                 "case_ids": ["exectest/R1-C001"],
-                                 "by": "manager(self-derived-pending-audit)"})
+    # 走**生产写入口**，不再手搓事件（2026-08-11，0028）。
+    # 手搓的那份当年测的是一条生产代码根本产不出的事件形态——
+    # 它绿着，而真实链路上写确认压根没有写入口，卡答完照样被拦。
+    from server.journey import tools as _jt
+    assert _jt.write_confirm(batch_id=bid, case_ids=["exectest/R1-C001"],
+                             decided_by="manager(self-derived-pending-audit)",
+                             caller_surface="capability")["ok"]
     r = execute_run.execute(bid)
     assert r["receipt"]["counts"] == {"passed": 1}
 

@@ -34,15 +34,64 @@ EVIDENCE_FILES = {
 }
 
 
+def write_authorization(batch_id: str, root: str | None = None) -> dict[str, Any]:
+    """本批次当前**有效**的写确认。返回 {authorized, dropped}。
+
+    ## 为什么一条确认会「失效」
+
+    写确认是对**具体一批用例内容**的同意，不是对一串 id 的同意。
+    用户在卡上看到「TC-005 新建一笔订单」才点的允许；如果之后 caseset 被重新采纳、
+    TC-005 变成了「删除全部订单」，那张旧确认**不该继续生效**——id 一样，同意的
+    东西已经不是同一个了。设计稿 §5.2 第 2 条要的「写确认不因重生成而复用上一次
+    的确认」，机制落点就在这里。
+
+    判据是 `source_case_digest` 逐条比对：确认事件里记的 digest 与当前 caseset 里
+    该用例的 digest 不同 → 这条授权作废，进 `dropped`。
+
+    ## 失效必须说出口
+
+    `dropped` 不是内部细节：一条被作废的授权，症状是执行时
+    `SKIP_WRITE_UNCONFIRMED`——与「用户压根没确认」长得一模一样。
+    两者要分开说（0021 红线六「成对错误态分开说」），所以这里把作废原因带出去，
+    由 run 收据落账。
+
+    没有 `digests` 的确认事件一律**不授权**：认不出它同意的是什么内容，
+    就不能拿它当同意。这个方向是刻意的——失败方向是少给。
+    """
+    caseset: dict[str, Any] = {}
+    if artifacts.has_artifact(batch_id, "approved_caseset", root=root):
+        caseset = artifacts.load_artifact(batch_id, "approved_caseset", root=root)
+    current = {c.get("case_id"): c.get("source_case_digest")
+               for c in caseset.get("cases") or []}
+
+    authorized: set[str] = set()
+    dropped: list[dict[str, str]] = []
+    for e in artifacts.read_events(batch_id, root=root):
+        if e.get("type") != "write_confirm":
+            continue
+        digests = e.get("digests") or {}
+        claimed = list(e.get("case_ids") or [])
+        if e.get("case_id"):
+            claimed.append(e["case_id"])
+        for cid in claimed:
+            recorded = digests.get(cid)
+            if not recorded:
+                dropped.append({"case_id": cid, "at": str(e.get("at", "")),
+                                "reason": "确认事件没记 digest，认不出它同意的是什么内容"})
+            elif cid not in current:
+                dropped.append({"case_id": cid, "at": str(e.get("at", "")),
+                                "reason": "该用例已不在当前采纳集里"})
+            elif current[cid] != recorded:
+                dropped.append({"case_id": cid, "at": str(e.get("at", "")),
+                                "reason": "用例内容已变（digest 不符）——旧确认同意的不是"
+                                          "现在这条，须重新确认"})
+            else:
+                authorized.add(cid)
+    return {"authorized": authorized, "dropped": dropped}
+
+
 def _write_authorized_ids(batch_id: str) -> set[str]:
-    ids: set[str] = set()
-    for e in artifacts.read_events(batch_id):
-        if e.get("type") == "write_confirm":
-            if e.get("case_id"):
-                ids.add(e["case_id"])
-            for c in e.get("case_ids") or []:
-                ids.add(c)
-    return ids
+    return write_authorization(batch_id)["authorized"]
 
 
 def _read_results(run_dir: str) -> list[dict[str, Any]]:
@@ -263,7 +312,8 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
         return slot
 
     variables = dict(variables or {})
-    write_ok = _write_authorized_ids(batch_id)
+    write_auth = write_authorization(batch_id)
+    write_ok = write_auth["authorized"]
     selected = case_ids or [m["case_id"] for m in manifest["cases"]]
     test_names = [m["test_name"] for m in manifest["cases"]
                   if m["case_id"] in selected]
@@ -359,6 +409,9 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
         "pytest_returncode": pytest_rc,
         "pytest_tail": pytest_tail,
         "credential_scan_ok": scan["ok"],
+        # 被作废的写确认要落账：作废后的症状是 SKIP_WRITE_UNCONFIRMED，
+        # 与「用户压根没确认」长得一模一样，不写出来就无从区分（0021 红线六）。
+        "write_confirm_dropped": write_auth["dropped"],
         "reap": reap,
         "conclusion_count": len(evidence_bundle["conclusions"]),
     }

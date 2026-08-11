@@ -349,6 +349,24 @@ def journey_draft_cases(batch_id: str, cases: Any, uncovered_rules: Any = None,
 
 
 @mcp.tool()
+def journey_write_confirm(batch_id: str, case_ids: Any = None,
+                          decided_by: str = "", confirmed_via: str = "ask_user_card",
+                          caller_surface: str = "unknown") -> dict[str, Any]:
+    """写确认落账：把「哪几条写用例获准执行」写进批次 events.jsonl。
+
+    人闸卡四（写确认）答完后调这一次。**不调它，写用例执行时一律
+    SKIP_WRITE_UNCONFIRMED**——卡弹过、用户答过，都不算数。
+
+    `case_ids` 传空数组是**合法答案**（对应卡上「都跳过，只跑只读的」），
+    会落一条显式的「一条都不授权」，与「这道闸还没走」在账本上可区分。
+    """
+    from server.journey import tools as _jt
+    return _jt.write_confirm(batch_id=batch_id, case_ids=list(case_ids or []),
+                             decided_by=decided_by, confirmed_via=confirmed_via,
+                             caller_surface=caller_surface)
+
+
+@mcp.tool()
 def journey_adopt(batch_id: str, selected_draft_ids: Any, caseset_slug: str = "",
                   adopted_via: str = "workbench_selection", confirmed_by: str = "",
                   idempotency_key: str = "",

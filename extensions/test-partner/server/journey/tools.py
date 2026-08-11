@@ -51,9 +51,13 @@ READ_TOOLS = ("list_batches", "get_batch")
 #: 防「加了工具忘了挂 MCP 面」与「挂了未声明的工具」两向漂移。
 TOOL_NAMES: tuple[str, ...] = JUDGEMENT_TOOLS + MECHANICAL_TOOLS + READ_TOOLS
 
-#: 门票下发。不算业务工具，但确实挂在 MCP 面上，所以要在对拍集合里明说——
-#: 否则 G2 的断言会因为"多出一个没声明的工具"而红，或者被人顺手放宽成 `>=`。
-GATE_TOOLS: tuple[str, ...] = ("issue_gate_token",)
+#: 人闸类：门票下发与写确认落账。**不算九原子之一**——九原子是旅程的业务工序，
+#: 这两个是人闸的服务端半边（一个发票、一个记答案）。混进 JUDGEMENT_TOOLS 会让
+#: 「九原子一个都不能少」那条断言从"业务工序齐不齐"变成"工具总数对不对"，
+#: 而后者随便加个工具就会红，红几次就没人看了。
+#: 但它们确实挂在 MCP 面上，所以要在对拍集合里明说——否则 G2 的断言会因为
+#: "多出一个没声明的工具"而红，或者被人顺手放宽成 `>=`。
+GATE_TOOLS: tuple[str, ...] = ("issue_gate_token", "write_confirm")
 
 #: MCP 面上 `journey_*` 的**完整**集合。G2 断言的对象就是它。
 MCP_TOOL_NAMES: tuple[str, ...] = TOOL_NAMES + GATE_TOOLS
@@ -246,6 +250,74 @@ def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "
               cases_gate=r.get("cases_gate"), idempotency_key=key)
     idempotency.record(batch_id, key, "adopt", out, root=root)
     return out
+
+
+def write_confirm(*, batch_id: str, case_ids: list[str] | None = None,
+                  decided_by: str = "", confirmed_via: str = "ask_user_card",
+                  caller_surface: str = "unknown",
+                  root: str | None = None) -> dict[str, Any]:
+    """写确认落账（人闸卡四的服务端半边，0028）。
+
+    ## 这个工具为什么是补出来的
+
+    `pw_runtime.py:88` 在执行时查 `events.jsonl` 里该用例的 `write_confirm`，
+    查不到就 `SKIP_WRITE_UNCONFIRMED`。但生产侧**从来没有任何地方写过这种事件**
+    （只产出 adopt_confirm / tier_confirm / tool_call / gate_token_used 四种）。
+    即：卡能弹、用户能答「4 条都允许」，**写用例照样被拦**，且用户无感知。
+    与 BB-502 同形——挂载面与运行时能力面不一致，中间那段是哑的。
+
+    ## 三条落法上的取舍
+
+    1. **空选是合法答案，不是错误。** 交互稿卡四的默认就是一条都不勾，
+       「都跳过，只跑只读的 8 条」是三个选项之一。空选要落一条**显式的**
+       「什么都不授权」事件——它与「没答过」在账本上必须可分：前者是用户
+       看过并拒绝了，后者是这道闸还没走。
+    2. **只认写用例，且只认当前采纳集里的。** 给一个不写数据的用例授权是无意义的，
+       给一个不存在的 case_id 授权是拼错——两者都判红而不是静默忽略：
+       静默忽略的症状是「我明明点了允许，它还是跳过」，最难查的那一类。
+    3. **逐条记 `source_case_digest`。** 授权的是**这批用例的内容**，不是一串 id。
+       用例改了以后旧确认自动失效（判定在 `execute_run.write_authorization`），
+       这是设计稿 §5.2 第 2 条「写确认不因重生成而复用上一次的确认」的落点。
+    """
+    blocked = _guarded(batch_id, "write_confirm", caller_surface, root)
+    if blocked:
+        return blocked
+    if not artifacts.has_artifact(batch_id, "approved_caseset", root=root):
+        return _err("E_NO_CASESET",
+                    "还没有采纳集，写确认无从谈起——先采纳再确认写操作。")
+
+    caseset = artifacts.load_artifact(batch_id, "approved_caseset", root=root)
+    by_id = {c.get("case_id"): c for c in caseset.get("cases") or []}
+    write_ids = {cid for cid, c in by_id.items()
+                 if bool((c.get("side_effects") or {}).get("writes"))}
+
+    requested = list(dict.fromkeys(case_ids or []))   # 去重且保序
+    unknown = [c for c in requested if c not in by_id]
+    if unknown:
+        return _err("E_UNKNOWN_CASE",
+                    f"这些 case_id 不在当前采纳集里：{unknown}。"
+                    f"静默忽略会变成「我明明点了允许它还是跳过」，所以这里判红。")
+    non_write = [c for c in requested if c not in write_ids]
+    if non_write:
+        return _err("E_NOT_A_WRITE_CASE",
+                    f"这些用例不写数据，给它们写授权没有意义：{non_write}。"
+                    f"通常是卡上勾错了行，或 side_effects.writes 标错了。")
+
+    event = artifacts.append_event(batch_id, {
+        "type": "write_confirm",
+        "caseset_id": caseset.get("caseset_id", ""),
+        "case_ids": requested,
+        # 逐条记内容指纹：授权的是内容不是 id（见上文取舍 3）
+        "digests": {c: by_id[c].get("source_case_digest", "") for c in requested},
+        # 空选是显式答案：这一栏让「看过并拒绝」与「还没走这道闸」可分
+        "decision": "authorized_some" if requested else "authorized_none",
+        "declined": sorted(write_ids - set(requested)),
+        "via": confirmed_via,
+        "decided_by": decided_by,
+    }, root=root)
+    return _ok(event=event, authorized=requested,
+               declined=sorted(write_ids - set(requested)),
+               write_case_total=len(write_ids))
 
 
 # ── 6–9. 机械类 ─────────────────────────────────────────────────────────────
