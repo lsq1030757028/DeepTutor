@@ -27,6 +27,11 @@ _CAPABILITY_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "en": "Structured mastery-based learning with spaced repetition.",
         "zh": "结构化掌握式学习，结合间隔复习。",
     },
+    # [fork] 测试旅程载体（决策 0019）。picker 那一行显示的就是这两句。
+    "test": {
+        "en": "Drive one requirement through a full test journey: rules, cases, results.",
+        "zh": "把一条需求走完整条测试旅程：澄清规则、出用例、跑执行、看结论。",
+    },
     "visualize": {
         "en": "Create visual explanations such as SVG, charts, Mermaid, HTML, or Manim.",
         "zh": "生成 SVG、图表、Mermaid、HTML 或 Manim 等可视化讲解。",

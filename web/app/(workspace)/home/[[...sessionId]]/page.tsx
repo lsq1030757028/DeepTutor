@@ -15,6 +15,7 @@ import {
   BarChart3,
   BrainCircuit,
   Clapperboard,
+  ClipboardCheck,
   Code2,
   Compass,
   Database,
@@ -276,6 +277,18 @@ const CAPABILITIES: CapabilityDef[] = [
     allowedTools: ["web_search", "code_execution"],
     defaultTools: [],
     loopEngine: true,
+  },
+  {
+    // [fork] 测试旅程载体（决策 0019 案 B）。DT 没有意图路由——本模式**由用户显式
+    // 选中**，不会被自动识别，所以它必须在这张表里才存在。
+    // allowedTools 留空：旅程用的 journey_* 是 MCP 工具，走 build_tool_view 那条链，
+    // 不在这张内置工具表的管辖范围内。填进来只会让用户以为这里能开关它们。
+    value: "test",
+    label: "Test",
+    description: "Take one requirement from intake to sign-off",
+    icon: ClipboardCheck,
+    allowedTools: [],
+    defaultTools: [],
   },
 ];
 
