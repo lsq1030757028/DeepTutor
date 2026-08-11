@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from server.journey import artifacts
+from server.journey.gates import capability_ladder
 from server.journey.project_verdicts import read_verdicts
 
 
@@ -64,12 +65,21 @@ def build_coverage(batch_id: str, run_id: str = "") -> dict[str, Any]:
             "cases": cases,
         })
 
+    # 能力锁（设计稿 §6.1）：没授权的档位要在覆盖图上**有名有姓地缺席**，
+    # 而不是与"忘了测"混成同一个空格。声明授予却拿不出机检证据的，按未授予处理
+    # 并单列成 problem——那是唯一会骗到下游的形态（下游会以为守恒断言真跑过了）。
+    profile = (artifacts.load_artifact(batch_id, "intake_profile")
+               if artifacts.has_artifact(batch_id, "intake_profile") else {})
+    ladder = capability_ladder.summary(profile)
+    problems += ladder["problems"]
+
     n_pass = sum(1 for r in rows for c in r["cases"] if c["verdict"] == "PASS")
     n_official = sum(1 for r in rows for c in r["cases"]
                      if c["verdict"] in ("PASS", "FAIL"))
     ledger_payload = {
         "run_id": run_id,
         "rules": rows,
+        "capability_ladder": ladder,
         "summary": {
             "total_rules": len(rows),
             "covered": sum(1 for r in rows if r["status"] == "covered"),
