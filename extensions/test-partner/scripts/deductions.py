@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -37,6 +38,17 @@ DEFAULT_LIST = HERE / "known-deductions.json"
 
 #: 三段式必填字段。缺一即判红——见模块文档串「三段式是硬要求」。
 REQUIRED_FIELDS = ("why_red", "when_it_should_disappear", "reviewer")
+
+#: 第四段（2026-08-11 加）：**上次真跑确认它仍该扣是什么时候、怎么跑的**。
+#:
+#: 为什么它必须是必填而不是可选备注：没有这一段，「复核过」就只是口头的，
+#: 而 reviewer 字段只回答「谁负责」不回答「做没做」。本次收紧 cors 那条时
+#: 发现的正是这个洞——它的归因在文档里躺了三天，实测才知道那份归因里的
+#: **怀疑部分是错的**（怀疑是我方 data/ 播种导致，实测纯上游干净副本照样红）。
+VERIFY_FIELDS = ("verified_at", "verified_how")
+
+#: `verified_at` 必须是可核对的日期，不接受「最近」「上周」这类说法。
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def load(path: Path) -> tuple[list[dict], list[str]]:
@@ -72,6 +84,17 @@ def load(path: Path) -> tuple[list[dict], list[str]]:
                     f"E_ROW_{field.upper()}[{rid or i}]: 缺 {field}。"
                     "扣除必须回答「为什么红 / 什么时候该消失 / 谁复核」——"
                     "没有到期条件的扣除等于永久豁免。")
+        for field in VERIFY_FIELDS:
+            if not str(row.get(field) or "").strip():
+                errors.append(
+                    f"E_ROW_{field.upper()}[{rid or i}]: 缺 {field}。"
+                    "扣除还要回答「上次真跑确认是什么时候、怎么跑的」——"
+                    "只写 reviewer 是「谁负责」，不是「做没做」。")
+        stamp = str(row.get("verified_at") or "")
+        if stamp.strip() and not _DATE_RE.search(stamp):
+            errors.append(
+                f"E_ROW_VERIFIED_AT_FORMAT[{rid or i}]: verified_at 必须含 "
+                f"YYYY-MM-DD 的日期，实为 {stamp!r}。「最近复核过」不是日期。")
         rows.append(row)
     return rows, errors
 
@@ -104,6 +127,7 @@ def human(rows: list[dict]) -> str:
         lines.append(f"        为什么 : {r.get('why_red')}")
         lines.append(f"        何时删 : {r.get('when_it_should_disappear')}")
         lines.append(f"        复核人 : {r.get('reviewer')}")
+        lines.append(f"        上次核 : {r.get('verified_at')} — {r.get('verified_how')}")
     return "\n".join(lines)
 
 
