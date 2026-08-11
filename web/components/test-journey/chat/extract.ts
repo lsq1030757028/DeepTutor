@@ -226,6 +226,36 @@ function parseToolPayload(content: unknown): Record<string, unknown> | null {
   }
 }
 
+/**
+ * 批次号——四张卡页脚"去工作台"的跳转全靠它。
+ *
+ * **不能只看顶层 `batch_id`**：只有 `ingest` 把它放在顶层，其余工具的信封是
+ * `_ok(business_frame=…)` / `_ok(case_draft=…)` 这样，批次号盖在**产物信封里**
+ * （`artifacts.save_artifact` 给每份产物盖 `batch_id`）。只读顶层的后果是
+ * `batchId` 永远是空串、每张卡的按钮都渲染成灰的点不动——施工时真踩到了，
+ * 是渲染测试抓出来的：取数单测全绿也看不见这个，因为它们不看按钮。
+ */
+function pickBatchId(payload: Record<string, unknown>): string {
+  const direct = str(payload.batch_id);
+  if (direct) return direct;
+  for (const key of [
+    "business_frame",
+    "case_draft",
+    "test_analysis",
+    "approved_caseset",
+    "automation_bundle",
+    "coverage_ledger",
+    "receipt",
+    "intake_profile",
+    "batch",
+  ]) {
+    const nested = asRecord(payload[key]);
+    const id = str(nested?.batch_id);
+    if (id) return id;
+  }
+  return "";
+}
+
 interface Mutable {
   batchId: string;
   rules: RuleRow[];
@@ -376,7 +406,7 @@ function applyResult(m: Mutable, tool: JourneyTool, content: unknown): boolean {
     ];
     return true;
   }
-  const batchId = str(payload.batch_id);
+  const batchId = pickBatchId(payload);
   let changed = false;
   if (batchId && batchId !== m.batchId) {
     m.batchId = batchId;

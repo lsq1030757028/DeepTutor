@@ -12,6 +12,7 @@ import {
   extractJourneyState,
   journeyToolOf,
 } from "../components/test-journey/chat/extract";
+import { JOURNEY_CARD_COPY } from "../components/test-journey/chat/copy";
 import { extractStreamingQuizQuestions } from "../lib/quiz-types";
 
 type AnyEvent = Record<string, unknown>;
@@ -91,6 +92,8 @@ const EXECUTE_OK = {
   run_id: "r-20260811-1",
   triggered_by: "fresh",
   receipt: {
+    // 真收据把 batch_id 盖在信封里，不在工具返回的顶层（execute_run.py:331）。
+    batch_id: "b-1",
     run_id: "r-20260811-1",
     selected_case_count: 12,
     counts: { passed: 9, failed: 2, blocked: 1 },
@@ -138,6 +141,15 @@ test("工具名认的是 journey_ 之后那截，不认死服务器前缀", () =
   assert.equal(journeyToolOf("mcp_tapd_get_stories"), null);
   assert.equal(journeyToolOf("journey_not_a_tool"), null);
   assert.equal(journeyToolOf(undefined), null);
+});
+
+test("批次号从产物信封里取，不只看顶层——页脚跳转全靠它", () => {
+  // 只有 ingest 把 batch_id 放顶层；其余工具盖在产物信封里。只读顶层的后果是
+  // 每张卡的按钮都渲染成灰的点不动。这条是渲染测试抓出来后补的单测。
+  assert.equal(extract([toolResult("clarify", CLARIFY_OK)])?.batchId, "b-1");
+  assert.equal(extract([toolResult("draft_cases", DRAFT_OK)])?.batchId, "b-1");
+  assert.equal(extract([toolResult("execute", EXECUTE_OK)])?.batchId, "b-1");
+  assert.equal(extract([toolResult("coverage", COVERAGE_GAP)])?.batchId, "b-1");
 });
 
 test("卡一：澄清结果出规则清单，探测性标出来", () => {
@@ -394,4 +406,95 @@ test("性能回归：不慢于 quiz 那条既有流式路径的 2 倍", () => {
     ratio <= 2,
     `富卡取数 ${journeyMs.toFixed(2)}ms 超过 quiz 基准 ${baselineMs.toFixed(2)}ms 的 2 倍（${ratio.toFixed(2)}x）`,
   );
+});
+
+// ── ④ 真渲染：取数对了 ≠ 卡片会出现 ────────────────────────────────────────
+//
+// 上面三组全绿也只证明"数据取得对"。卡片会不会真长出来、页脚那句强制的边界
+// 说明在不在、探测项标没标——只有把组件渲染出来才知道。这里用
+// `react-dom/server` 渲成静态 HTML 断文本，不进浏览器也能守住这一层。
+//
+// 注意用 `createElement` 不写 JSX：本文件是 .ts，写 JSX 要改测试编译配置，
+// 那是为了测试改产线配置，不划算。
+
+test("真渲染：四张卡出得来，页脚的边界说明每张都在", async () => {
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { default: TestJourneyCards } = await import(
+    "../components/test-journey/chat/TestJourneyCards"
+  );
+
+  const state = extract([
+    toolResult("clarify", CLARIFY_OK),
+    toolResult("draft_cases", DRAFT_OK),
+    toolResult("execute", EXECUTE_OK),
+    toolResult("project", PROJECT_OK),
+    toolResult("coverage", COVERAGE_GAP),
+  ]);
+  assert.ok(state);
+  const html = renderToStaticMarkup(createElement(TestJourneyCards, { state }));
+
+  // 四张卡的标题各出现一次。
+  assert.match(html, /已澄清的规则/);
+  assert.match(html, /用例草稿写好了/);
+  assert.match(html, /执行完成/);
+  assert.match(html, /覆盖还差一点才能收口/);
+
+  // **页脚那句边界说明是强制的**——它回答"为什么这张卡不让我在这儿改"。
+  for (const boundary of [
+    JOURNEY_CARD_COPY.rules.boundary,
+    JOURNEY_CARD_COPY.draft.boundary,
+    JOURNEY_CARD_COPY.run.boundary,
+    JOURNEY_CARD_COPY.coverage.boundary,
+  ]) {
+    assert.ok(html.includes(boundary), `缺边界说明：${boundary}`);
+  }
+
+  // 页脚按钮指向这条旅程的工作台页，不是空 href。
+  assert.match(html, /href="\/test-journey\/b-1"/);
+  // 探测项标出来了，且规则行带原文依据。
+  assert.match(html, /探测/);
+  assert.match(html, /仅可见本人订单/);
+  // 结论分布上了卡面。
+  assert.match(html, /没过 2/);
+});
+
+test("真渲染：只有一步走完时只出那一张卡，不出空壳", async () => {
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { default: TestJourneyCards } = await import(
+    "../components/test-journey/chat/TestJourneyCards"
+  );
+
+  const state = extract([toolResult("clarify", CLARIFY_OK)]);
+  assert.ok(state);
+  const html = renderToStaticMarkup(createElement(TestJourneyCards, { state }));
+  assert.match(html, /已澄清的规则/);
+  // 断的是**卡标题**，不是随手挑的词：像"覆盖"这种词也出现在规则卡的边界说明
+  // （"不覆盖声明"）里，拿它当"覆盖卡没出现"的判据会假红。
+  for (const absent of [
+    JOURNEY_CARD_COPY.draft.titleDone,
+    JOURNEY_CARD_COPY.draft.titleLive,
+    JOURNEY_CARD_COPY.run.titleDone,
+    JOURNEY_CARD_COPY.coverage.titleGap,
+    JOURNEY_CARD_COPY.coverage.titleDone,
+  ]) {
+    assert.ok(!html.includes(absent), `不该出现：${absent}`);
+  }
+});
+
+test("真渲染：流式卡在工具还在飞时就出来，且采纳按钮点不动", async () => {
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { default: TestJourneyCards } = await import(
+    "../components/test-journey/chat/TestJourneyCards"
+  );
+
+  const state = extract([toolCall("draft_cases")]);
+  assert.ok(state, "工具在飞时就该有卡——这正是流式的价值：别让人盯着空屏等");
+  const html = renderToStaticMarkup(createElement(TestJourneyCards, { state }));
+  assert.match(html, /正在生成用例/);
+  // 生成完才能采纳：这时候按钮是死的，不是一个点了没反应的链接。
+  assert.ok(!html.includes('href="/test-journey/'), "生成中不该给可点的采纳链接");
+  assert.match(html, /生成完才能点/);
 });
