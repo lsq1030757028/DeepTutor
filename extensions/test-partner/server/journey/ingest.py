@@ -36,8 +36,10 @@ def probe_target(base_url: str, timeout_s: int = 10) -> dict[str, Any]:
             status = resp.status
             body = resp.read(4096)
             final_url = resp.geturl()
+            headers = dict(resp.headers)
     except HTTPError as exc:
         status, body, final_url = exc.code, exc.read(4096) if exc.fp else b"", url
+        headers = dict(exc.headers or {})
     except (URLError, OSError, ValueError) as exc:
         return {"reachable": False, "error": str(exc)}
     # 红线：探测期间若被重定向出等价类，如实报告（不算可达）
@@ -51,7 +53,31 @@ def probe_target(base_url: str, timeout_s: int = 10) -> dict[str, Any]:
         "status": status,
         "page_title": (title_m.group(1).strip() if title_m else ""),
         "body_head_sha256": hashlib.sha256(body).hexdigest(),
+        # ── API 轨的两维（M2 / 设计稿 §8.2）────────────────────────────────
+        # `page_title` 是 HTML 概念，在 JSON 后端上恒返空串——指纹少一维却不报警。
+        # 这两维替它在 API 轨上承担"后端是不是换了一个服务"的判别力。
+        # **只落键名与 Server 值，不落任何 header 的值**（凭据纪律）。
+        "service_banner": _service_banner(headers),
+        "content_type": (headers.get("Content-Type", "").split(";")[0].strip()
+                         or None),
     }
+
+
+def _service_banner(headers: dict[str, str]) -> str | None:
+    """`Server` 值 + 版本类头的**键名**（不是值）。取不到记 None。
+
+    键名足以判别"换了一个服务"，值可能带内网信息或版本细节，不落。
+    """
+    parts: list[str] = []
+    server = str(headers.get("Server") or "").strip()
+    if server:
+        parts.append(server)
+    for name in sorted(headers):
+        lowered = name.lower()
+        if lowered.startswith("x-") and (
+                "version" in lowered or lowered == "x-request-id"):
+            parts.append(f"+{name}")
+    return " ".join(parts) or None
 
 
 def propose_tier(requirement_text: str, writes_expected: bool | None = None) -> dict[str, Any]:

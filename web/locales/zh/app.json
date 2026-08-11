@@ -2911,6 +2911,8 @@
   "Reauthorize": "重新授权",
   "Test Workbench": "测试工作台",
   "Test Workbench tooltip": "从抓包生成接口用例，选好环境直接跑",
+  "Test Journey": "测试旅程",
+  "Test Journey tooltip": "一条需求从接入走到收口：规则、用例、结论",
   "Generate API test cases from a HAR capture, then run them against an environment.": "从抓包文件生成接口用例，选好环境直接跑。",
   "New batch": "新建批次",
   "Test extension is not loaded": "测试扩展没有加载",

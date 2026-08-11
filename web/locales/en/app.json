@@ -2911,6 +2911,8 @@
   "Reauthorize": "Reauthorize",
   "Test Workbench": "Test Workbench",
   "Test Workbench tooltip": "Turn a HAR capture into API test cases, then run them",
+  "Test Journey": "Test Journey",
+  "Test Journey tooltip": "Take one requirement from intake to sign-off: rules, cases, results",
   "Generate API test cases from a HAR capture, then run them against an environment.": "Generate API test cases from a HAR capture, then run them against an environment.",
   "New batch": "New batch",
   "Test extension is not loaded": "Test extension is not loaded",
