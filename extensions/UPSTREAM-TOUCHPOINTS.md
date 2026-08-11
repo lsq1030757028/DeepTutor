@@ -26,9 +26,9 @@
 | 2 | `.github/workflows/docker-release.yml` | `images:` 由 `ghcr.io/hkuds/deeptutor` 改为 `ghcr.io/lsq1030757028/deeptutor`。`GITHUB_TOKEN` 只对本仓 packages 有写权限，推上游命名空间必然 403；0008 七的回滚 digest 也从本仓命名空间取 | 保留改后的 `images:` 行，其余取上游 | **否**——同上 |
 
 | 3 | `deeptutor/api/main.py` | 注册测试工作台 router：import 块加 1 项 + 1 个 `include_router`（带 `dependencies=_auth`）。路由注册是集中式的，没有插件位 | 保留这两处，其余取上游。**`dependencies=_auth` 不可省**——裸挂会让落盘静默写进 admin 工作区（决策 0009） | **否** |
-| 4 | `Dockerfile` | 加 2 行 `COPY extensions/test-partner/{server,skills}/`。上游只 COPY `deeptutor/` `deeptutor_cli/` `scripts/`，**没有这两行镜像里就没有我们的代码**（P1 等价性验证时发现） | 保留这两行，其余取上游 | **否**——COPY 清单是集中式的 |
-| 5 | `web/components/sidebar/SidebarShell.tsx` | `SECONDARY_NAV` 加 1 个 `NavEntry`（工作台入口）。导航注册是集中式数组，无插件位 | 保留这一段，其余取上游 | **否** |
-| 6 | `web/locales/en/app.json` + `zh/app.json` | 成对追加工作台文案 key（P3 前端各屏）。`i18n:parity` 是硬闸，两边 key 集必须一致 | 追加行在文件尾部，merge 时保留我方追加段，其余取上游 | **否**——文案库是集中式的 |
+| 4 | `Dockerfile` | 加 2 行 `COPY extensions/test-partner/{server,skills}/`。上游只 COPY `deeptutor/` `deeptutor_cli/` `scripts/`，**没有这两行镜像里就没有我们的代码**（P1 等价性验证时发现）。<br>**⚠ 2026-08-11 性质加深（M2，0018 已批准，条件=独立成可整块删除的 fork 块）**：本行由「2 行 COPY」变成「**2 行 COPY + 装一套 TAPD MCP 运行时**」（uv 建 `/opt/tapd-mcp` venv、钉死 `mcp-server-tapd==8.0.80` + `mcp==1.29.0`）。按登记表自述，改构建配置属「架构在往内核里长」的第三类信号——**虽不新增登记行，但每次上游同步的冲突面与镜像体积都实打实变大**，故在此显式报备而非静默吞掉。fork 块带 `[fork] TAPD MCP 运行时` 起止标记，有测试守着它可整块删除 | 保留这两行，其余取上游 | **否**——COPY 清单是集中式的 |
+| 5 | `web/components/sidebar/SidebarShell.tsx` | `SECONDARY_NAV` 加 `NavEntry`。导航注册是集中式数组，无插件位。<br>**2026-08-11（M2）：由 1 项变 2 项**——新增「测试旅程」入口与既有「测试工作台」并列（0017 O1）。两者状态对象不同（交付件 vs 一条需求的过程），合成一个入口会互相盖住。<br>**机制约束**：`SECONDARY_NAV` 是模块级常量、`(workspace)` 与 `(utility)` 两组侧栏共用，**不存在「只给一组加一项」的写法**，故两个入口的文案必须能区分 | 保留这一段，其余取上游 | **否** |
+| 6 | `web/locales/en/app.json` + `zh/app.json` | 成对追加文案 key。`i18n:parity` 是硬闸，两边 key 集必须一致。<br>**2026-08-11（M2）：+2 键**（`Test Journey` / `Test Journey tooltip`）。<br>**⚠ 已知缺口，不当已完成**：M2 薄壳（`web/components/test-journey/**`）的 UI 文案**暂为中文硬编码，未走 `t()`**，eslint i18n 规则报 47 条 warning（warning 不拦闸，故不影响回归闸）。manager 2026-08-11 裁定：**UAT 可带中文硬编码，合 main 不可**——本条登记为**合 main 的阻断项**，定稿后一次性抽取约 50 个键 | 追加行在文件尾部，merge 时保留我方追加段，其余取上游 | **否**——文案库是集中式的 |
 
 勘察详见 `test-partner` 仓 `docs/recon-deeptutor-extension-points.md`。
 
