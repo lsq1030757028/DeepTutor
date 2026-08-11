@@ -174,6 +174,36 @@ COPY scripts/ ./scripts/
 # config/ 是每机一份且含凭据模板，运行时从数据卷取）。
 COPY extensions/test-partner/server/ ./extensions/test-partner/server/
 COPY extensions/test-partner/skills/ ./extensions/test-partner/skills/
+
+# ── [fork] TAPD MCP 运行时（决策 0012 的 B，0027 确认执行）────────────────────
+#
+# 整块可删：删掉本块 = 回到"容器里没有 TAPD 运行时"，其余一切照跑。
+# 这是 0018 批准 Dockerfile 触点加深时的附加条件（独立成可整块删除的 fork 块）。
+#
+# 为什么要装进容器：TAPD MCP 此前由宿主机的 test-partner 网关托管、以 HTTP 暴露在
+# 3795，容器经 host.docker.internal 去连。那个中间层没起来就是本周 TAPD 断链的
+# 直接原因。落进容器由平台以 stdio 拉起，中间层随之消失（0027 裁定 1）。
+#
+# 为什么用 uv 而不是 pip：镜像基底自带 /usr/bin/python3.13（官方包 Requires-Python
+# >=3.13 是硬门槛，pip 直接拒装），但 Debian 的 python3.13 是精简版、无 pip/ensurepip。
+# uv 能在没有 pip 的解释器上建 venv 并装包，且它已是本项目既有工具。
+#
+# 供应链纪律（extensions/test-partner/tapd-runtime/PINNED.md）：
+#   · 版本钉死 8.0.80，mcp 钉 1.29.0 —— **禁用 uvx 拉最新**；
+#   · 变更版本前重跑「仓库 vs 发布物 diff」并更新 PINNED.md 里的 sha256。
+# 这里刻意写 `uv pip install 包==版本` 而不是 `uvx`，就是这条纪律的落点。
+ARG TAPD_MCP_VERSION=8.0.80
+ARG TAPD_MCP_SDK_VERSION=1.29.0
+RUN set -eux; \
+    pip install --no-cache-dir uv; \
+    uv venv --python /usr/bin/python3.13 /opt/tapd-mcp; \
+    VIRTUAL_ENV=/opt/tapd-mcp uv pip install --no-cache \
+        "mcp-server-tapd==${TAPD_MCP_VERSION}" "mcp==${TAPD_MCP_SDK_VERSION}"; \
+    /opt/tapd-mcp/bin/mcp-server-tapd --help > /dev/null
+# 入口点路径固定在 /opt/tapd-mcp/bin/mcp-server-tapd —— mcp.json 的 stdio 条目
+# 用的就是这个绝对路径，改这里必须同步改注册脚本。
+# ── fork 块结束 ──────────────────────────────────────────────────────────────
+
 COPY pyproject.toml ./
 COPY requirements/ ./requirements/
 COPY requirements.txt ./
