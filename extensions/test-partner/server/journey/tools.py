@@ -35,6 +35,7 @@ from server.journey import (
 )
 from server.journey import (
     artifacts,
+    decision_auth,
     gate,
     idempotency,
     oracle,
@@ -60,6 +61,7 @@ from server.journey import (
 from server.journey import (
     project_verdicts as _project,
 )
+from server.journey import pw_runtime as _runtime
 from server.journey.digest import sha256_digest
 
 #: 判断类工具（聊天 agent 驱动）与机械类工具（薄壳 / 链式调用）的分工，
@@ -197,7 +199,14 @@ def _selected_authorized_write_risk(batch_id: str,
     return any(
         str(case.get("case_id") or "") in selected
         and str(case.get("case_id") or "") in authorized
-        and bool((case.get("side_effects") or {}).get("writes"))
+        and _runtime.effective_write_risk({
+            "writes": bool((case.get("side_effects") or {}).get("writes")),
+            "actions": list(
+                (((case.get("automation") or {}).get("recipe") or {}).get(
+                    "actions"
+                ) or [])
+            ),
+        })
         for case in caseset.get("cases") or [])
 
 
@@ -232,6 +241,8 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
            workspace_id: str = "", story_id: str = "",
            requirement_text: str = "", environment_ref: str = "",
            tier: str = "", tier_confirmed_via: str = "", owner: str = "",
+           requirement_entity: str = "",
+           requirement_entity_confirmed_via: str = "",
            caller_surface: str = "unknown",
            root: str | None = None) -> dict[str, Any]:
     """接入 + 定档。可信 bridge 已在 MCP wrapper 中先于本函数验完。"""
@@ -259,7 +270,11 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
                                 if story_id else ""),
                             requirement_text=text,
                             environment_ref=environment_ref, tier=tier,
-                            tier_confirmed_via=tier_confirmed_via, owner=owner)
+                            tier_confirmed_via=tier_confirmed_via,
+                            requirement_entity=requirement_entity,
+                            requirement_entity_confirmed_via=(
+                                requirement_entity_confirmed_via
+                            ), owner=owner)
     if not result.get("ok"):
         if result.get("need") == "tier_confirmation":
             return _ok("NEEDS_GATE", needs_gate="stage_tier", probe=result["probe"],
@@ -381,6 +396,7 @@ def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "
 @_serializes_batch_mutation
 def write_confirm(*, batch_id: str, case_ids: list[str] | None = None,
                   decided_by: str = "", confirmed_via: str = "ask_user_card",
+                  decision_context: str = "", _bridge_claims: Any = None,
                   caller_surface: str = "unknown",
                   root: str | None = None) -> dict[str, Any]:
     """写确认落账（人闸卡四的服务端半边，0028）。
@@ -416,7 +432,12 @@ def write_confirm(*, batch_id: str, case_ids: list[str] | None = None,
     caseset = artifacts.load_artifact(batch_id, "approved_caseset", root=root)
     by_id = {c.get("case_id"): c for c in caseset.get("cases") or []}
     write_ids = {cid for cid, c in by_id.items()
-                 if bool((c.get("side_effects") or {}).get("writes"))}
+                 if _runtime.effective_write_risk({
+                     "writes": bool((c.get("side_effects") or {}).get("writes")),
+                     "actions": list((
+                         ((c.get("automation") or {}).get("recipe") or {}).get(
+                             "actions") or [])),
+                 })}
 
     requested = list(dict.fromkeys(case_ids or []))   # 去重且保序
     unknown = [c for c in requested if c not in by_id]
@@ -430,6 +451,32 @@ def write_confirm(*, batch_id: str, case_ids: list[str] | None = None,
                     f"这些用例不写数据，给它们写授权没有意义：{non_write}。"
                     f"通常是卡上勾错了行，或 side_effects.writes 标错了。")
 
+    if _bridge_claims is None:
+        return _err("E_USER_DECISION_REQUIRED",
+                    "写授权必须来自同一 Test 会话内真实完成的交互确认卡。")
+    if str(getattr(_bridge_claims, "owner", "") or "") != _batch_partition(
+            batch_id, root):
+        return _err("E_USER_DECISION_INVALID",
+                    "用户决定不属于当前批次 owner。")
+    try:
+        decision = decision_auth.verify_decision_context(
+            decision_context,
+            bridge=_bridge_claims,
+            batch_id=batch_id,
+            caseset=caseset,
+            requested_case_ids=requested,
+        )
+    except decision_auth.DecisionAuthError as exc:
+        return _err("E_USER_DECISION_INVALID", str(exc))
+    prior_jtis = {
+        str(event.get("decision_jti") or "")
+        for event in artifacts.read_events(batch_id, root=root)
+        if event.get("type") == "write_confirm"
+    }
+    if decision["jti"] in prior_jtis:
+        return _err("E_USER_DECISION_REPLAYED",
+                    "这份用户决定已经消费过，不能重复授权。")
+
     event = artifacts.append_event(batch_id, {
         "type": "write_confirm",
         "caseset_id": caseset.get("caseset_id", ""),
@@ -441,6 +488,10 @@ def write_confirm(*, batch_id: str, case_ids: list[str] | None = None,
         "declined": sorted(write_ids - set(requested)),
         "via": confirmed_via,
         "decided_by": decided_by,
+        "decision_jti": decision["jti"],
+        "decision_session": decision["session"],
+        "decision_turn": decision["turn"],
+        "ask_user_tool_call_id": decision["ask_user_tool_call_id"],
     }, root=root)
     return _ok(event=event, authorized=requested,
                declined=sorted(write_ids - set(requested)),
@@ -499,13 +550,17 @@ def execute(*, batch_id: str, variables: dict[str, Any] | None = None,
     blocked = _guarded(batch_id, "execute", caller_surface, root)
     if blocked:
         return blocked
+    owner = _batch_partition(batch_id, root)
+    write_decision = _execute.write_authorization(
+        batch_id, owner=owner, root=root
+    )["decision_state"]
     params = {"case_ids": sorted(case_ids or []),
               "base_url_override": base_url_override,
               "resume_run_id": resume_run_id,
               "timeout_s": normalized_timeout,
               "variables_sha256": sha256_digest(variables or {}),
+              "write_decision_sha256": sha256_digest(write_decision),
               **_bundle_state(batch_id, root)}
-    owner = _batch_partition(batch_id, root)
     with idempotency.reservation(batch_id, "execute", params, idempotency_key,
                                  owner=owner, root=root) as (key, replay):
         if replay is not None:

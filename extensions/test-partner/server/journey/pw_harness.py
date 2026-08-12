@@ -29,6 +29,19 @@ def ctx() -> dict[str, Any]:
     return _CTX
 
 
+def visual_capture_allowed(context: dict[str, Any]) -> bool:
+    """Return false until visual redaction has a mechanically proven contract.
+
+    Text and archive members can be scrubbed/scanned deterministically. Pixels
+    cannot: a credential generated dynamically by the target can be rendered in
+    an input, canvas, or page body without appearing as UTF-8 bytes in the PNG.
+    Omit screenshots for every run and let the evidence gate keep any conclusion
+    that requires them non-final.  Re-enable only with browser-side masking plus
+    pixel/OCR acceptance tests; a byte scanner is not sufficient.
+    """
+    return False
+
+
 def case_slug(case_id: str) -> str:
     return re.sub(r"[^a-z0-9]+", "__", case_id.lower()).strip("_")
 
@@ -69,11 +82,14 @@ def _pytest_outcome(row: dict[str, Any]) -> None:
 
 def run_ui_case(browser: Any, meta: dict[str, Any]) -> None:
     c = ctx()
+    capture_visuals = visual_capture_allowed(c)
     slug = case_slug(meta["case_id"])
     case_dir = os.path.join(c["run_dir"], slug)
     os.makedirs(case_dir, exist_ok=True)
     context = browser.new_context()
-    context.tracing.start(screenshots=True, snapshots=True, sources=False)
+    context.tracing.start(
+        screenshots=capture_visuals, snapshots=True, sources=False
+    )
     page = context.new_page()
     row: dict[str, Any] = {}
     try:
@@ -106,8 +122,13 @@ def run_ui_case(browser: Any, meta: dict[str, Any]) -> None:
             with open(os.path.join(case_dir, "final_dom.html"), "w",
                       encoding="utf-8") as fh:
                 fh.write(str(runner._scrub(page.content())))
-            page.screenshot(path=os.path.join(case_dir, "final.png"),
-                            full_page=True)
+            if capture_visuals:
+                page.screenshot(path=os.path.join(case_dir, "final.png"),
+                                full_page=True)
+            else:
+                runner.observations.append(
+                    "visual evidence omitted: pixel-level credential redaction is not proven"
+                )
         except Exception:  # noqa: BLE001 - 页面已崩溃时证据尽力而为
             pass
         if runner.status == "skipped":

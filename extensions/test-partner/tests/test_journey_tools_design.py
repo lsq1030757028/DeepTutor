@@ -130,6 +130,31 @@ def test_ingest_creates_batch_with_profile(store, local_target):
     assert events[0]["type"] == "tier_confirm"
 
 
+def test_ingest_requires_entity_and_human_source_as_a_pair(store, local_target):
+    only_entity = ingest.ingest(
+        "t", local_target, source_kind="requirement_doc", source_ref="x",
+        requirement_text="新增客户", tier="standard", tier_confirmed_via="user",
+        requirement_entity="customer")
+    only_source = ingest.ingest(
+        "t", local_target, source_kind="requirement_doc", source_ref="x",
+        requirement_text="新增客户", tier="standard", tier_confirmed_via="user",
+        requirement_entity_confirmed_via="chat_ask_user")
+    assert only_entity["ok"] is False and only_source["ok"] is False
+    assert store.list_batches() == []
+
+
+def test_ingest_persists_human_confirmed_requirement_entity(store, local_target):
+    result = ingest.ingest(
+        "t", local_target, source_kind="requirement_doc", source_ref="x",
+        requirement_text="新增客户", tier="standard", tier_confirmed_via="user",
+        requirement_entity="customer",
+        requirement_entity_confirmed_via="chat_ask_user")
+    assert result["ok"], result
+    profile = store.load_artifact(result["batch_id"], "intake_profile")
+    assert profile["requirement_entity"] == "customer"
+    assert profile["requirement_entity_confirmed_via"] == "chat_ask_user"
+
+
 def test_tier_heuristic_splits():
     small = ingest.propose_tier("查一个页面标题")
     big = ingest.propose_tier("管理员新增客户、修改订单、删除药品、支付退款、"
@@ -246,10 +271,22 @@ def test_draft_uncovered_declaration_accepted(store, local_target):
 
 def test_draft_probing_warning_w06(store, local_target):
     bid = chain_to_analyze(store, local_target)
-    r = draft_cases.draft(bid, cases=[make_case("d1"),
+    frame = store.load_artifact(bid, "business_frame")
+    frame["rules"][0]["probing"] = True
+    frame["rules"][0].pop("source_quote", None)
+    store.save_artifact(bid, "business_frame", frame)
+    r = draft_cases.draft(bid, cases=[make_case("d1", probing=True),
                                       make_case("d2", probing=True)])
     assert r["ok"]
     assert any(w["code"] == "W06" for w in r["warnings"])
+
+
+def test_draft_rejects_case_that_self_downgrades_business_rule_to_probing(
+        store, local_target):
+    bid = chain_to_analyze(store, local_target)
+    r = draft_cases.draft(bid, cases=[make_case("d1", probing=True)])
+    assert not r["ok"]
+    assert any(e["code"] == "E20" for e in r["errors"])
 
 
 # ── adopt（schema+digest+cases_gate 挂产物）────────────────────────────────
@@ -283,12 +320,18 @@ def test_adopt_full_chain(store, local_target):
 
 def test_adopt_probing_materializes_probe_layer(store, local_target):
     bid = chain_to_analyze(store, local_target)
-    draft_cases.draft(bid, cases=[make_case("d1"), make_case("dp", probing=True)])
+    frame = store.load_artifact(bid, "business_frame")
+    frame["rules"][0]["probing"] = True
+    frame["rules"][0].pop("source_quote", None)
+    store.save_artifact(bid, "business_frame", frame)
+    drafted = draft_cases.draft(
+        bid, cases=[make_case("d1", probing=True), make_case("dp", probing=True)])
+    assert drafted["ok"], drafted
     r = adopt.adopt(bid, selected_draft_ids=["d1", "dp"])
     assert r["ok"], r
     with open(os.path.join(store.batch_dir(bid), "cases.md"), encoding="utf-8") as fh:
         md = fh.read()
-    assert "探测:" in md and "业务:" in md
+    assert "探测:" in md
 
 
 def test_adopt_empty_selection_rejected(store, local_target):

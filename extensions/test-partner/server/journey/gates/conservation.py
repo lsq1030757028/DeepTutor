@@ -69,15 +69,29 @@ def _is_mutating(action: dict[str, Any]) -> bool:
 def check_case(case: dict[str, Any], *, l3_granted: bool) -> list[dict[str, Any]]:
     """单条用例的守恒判据。非写用例恒过。"""
     se = case.get("side_effects") or {}
-    if not se.get("writes"):
-        return []
     where = str(case.get("case_id") or "?")
+    recipe = ((case.get("automation") or {}).get("recipe")) or {}
+    actions = list(recipe.get("actions") or [])
+    if not se.get("writes"):
+        mutating_methods = sorted({
+            str(action.get("method") or "GET").upper()
+            for action in actions
+            if str(action.get("op") or "") == "request"
+            and str(action.get("method") or "GET").upper() not in _SAFE_METHODS
+        })
+        if mutating_methods:
+            return [_err(
+                where,
+                "write_declaration_mismatch",
+                "配方包含会改变状态的 HTTP 方法"
+                f" {mutating_methods}，但 side_effects.writes=false。"
+                "写风险以真实动作判定，不能靠声明降级；请修正声明后重新确认。",
+            )]
+        return []
     if not l3_granted:
         return []          # 不判；账由 gap_notes_for 出
 
     problems: list[dict[str, Any]] = []
-    recipe = ((case.get("automation") or {}).get("recipe")) or {}
-    actions = list(recipe.get("actions") or [])
 
     mut_idx = [i for i, a in enumerate(actions) if _is_mutating(a)]
     if not mut_idx:

@@ -84,10 +84,18 @@ def build_coverage(batch_id: str, run_id: str = "") -> dict[str, Any]:
         for c in (caseset or {}).get("cases", []):
             if (c.get("source_anchor") or {}).get("rule_id") == rid:
                 v = verdicts.get(c["case_id"])
+                declared_probing = bool(
+                    (c.get("source_anchor") or {}).get("probing"))
+                authoritative_probing = bool(rule.get("probing"))
+                if declared_probing != authoritative_probing:
+                    problems.append(
+                        f"{c['case_id']} 的 probing={declared_probing} 与业务规则 "
+                        f"{rid} 的 probing={authoritative_probing} 不一致")
                 row = {
                     "case_id": c["case_id"],
                     "title": c.get("title", ""),
-                    "probing": bool((c.get("source_anchor") or {}).get("probing")),
+                    # 是否进入正式判据只能由业务规则决定，不能信任用例自报。
+                    "probing": authoritative_probing,
                     "verdict": (v or {}).get("verdict", "NOT_EXECUTED"),
                 }
                 if c["case_id"] in entity_bad:
@@ -152,10 +160,21 @@ def build_coverage(batch_id: str, run_id: str = "") -> dict[str, Any]:
                      if c["verdict"] not in ("PASS", "FAIL")]
     failed_cases = [c["case_id"] for c in decision_cases if c["verdict"] == "FAIL"]
     security_ok = receipt.get("credential_scan_ok") is True
+    incomplete_rules = [
+        r["rule_id"] for r in rows
+        if not r["probing_rule"] and r["status"] != "covered"
+    ]
+    coverage_complete = not incomplete_rules
     official_complete = bool(decision_cases) and not pending_cases
     if not security_ok:
         business_status = "BLOCKED"
         business_reason = "凭据零落盘扫描未通过或缺失"
+    elif not entity_report["ok"]:
+        business_status = "BLOCKED"
+        business_reason = "存在需求实体未落定或实际写入实体不符的用例"
+    elif not coverage_complete:
+        business_status = "PENDING"
+        business_reason = "仍有非探测业务规则未被正式用例覆盖"
     elif not official_complete:
         business_status = "PENDING"
         business_reason = "仍有决策用例没有正式 PASS/FAIL 结论"
@@ -199,6 +218,9 @@ def build_coverage(batch_id: str, run_id: str = "") -> dict[str, Any]:
             "pending_cases": pending_cases,
             "failed_cases": failed_cases,
             "credential_scan_ok": security_ok,
+            "entity_scope_ok": entity_report["ok"],
+            "coverage_complete": coverage_complete,
+            "incomplete_rules": incomplete_rules,
         },
         "done": not problems,
         "problems": problems,

@@ -157,6 +157,11 @@ def _collect_only(bundle_dir: str) -> tuple[list[str], str, int]:
 
 def compile_bundle(batch_id: str) -> dict[str, Any]:
     caseset = artifacts.load_artifact(batch_id, "approved_caseset")
+    frame = artifacts.load_artifact(batch_id, "business_frame")
+    rule_probing = {
+        str(rule.get("rule_id")): bool(rule.get("probing"))
+        for rule in frame.get("rules", [])
+    }
     problems: list[str] = []
     # 闸 1：schema + 禁反写复算
     check = schema.validate_caseset(caseset)
@@ -166,6 +171,16 @@ def compile_bundle(batch_id: str) -> dict[str, Any]:
     for c in caseset.get("cases", []):
         for e in digest.verify_case_digests(c):
             problems.append(f"digest 复算不一致 {c.get('case_id')}: {e}")
+        anchor = c.get("source_anchor") or {}
+        rid = str(anchor.get("rule_id") or "")
+        if rid not in rule_probing:
+            problems.append(
+                f"source_anchor 引用未知业务规则 {c.get('case_id')}: {rid!r}")
+        elif bool(anchor.get("probing")) != rule_probing[rid]:
+            problems.append(
+                f"probing 与业务规则不一致 {c.get('case_id')}: "
+                f"case={bool(anchor.get('probing'))}, rule={rule_probing[rid]}；"
+                "用例不得自行把正式规则降级为探测规则")
     if problems:
         return {"ok": False, "gate": "compile-gate#1-schema", "problems": problems}
 

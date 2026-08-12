@@ -13,6 +13,7 @@ from deeptutor.services.test_journey.trust import (
     TrustedJourneyContext,
     arguments_sha256,
     bind_trusted_journey_context,
+    record_resolved_user_decision,
     sign_bridge_context,
 )
 
@@ -58,11 +59,11 @@ class _Manager:
         return '{"ok":true,"code":"OK"}'
 
 
-def _adapter(manager: _Manager) -> MCPToolAdapter:
+def _adapter(manager: _Manager, tool: str = "journey_execute") -> MCPToolAdapter:
     return MCPToolAdapter(
         manager=manager,  # type: ignore[arg-type]
         server_name="test-partner",
-        original_name="journey_execute",
+        original_name=tool,
         description="execute",
         input_schema={
             "type": "object",
@@ -70,6 +71,7 @@ def _adapter(manager: _Manager) -> MCPToolAdapter:
                 "batch_id": {"type": "string"},
                 "timeout_s": {"type": "integer", "default": 900},
                 "bridge_context": {"type": "string", "default": ""},
+                "decision_context": {"type": "string", "default": ""},
             },
         },
         tool_timeout=5,
@@ -102,6 +104,47 @@ async def test_adapter_overwrites_reserved_identity_and_adds_signed_context(monk
     payload = _payload(args["bridge_context"])
     assert payload["owner_id"] == "user-a"
     assert payload["args_sha256"] == arguments_sha256({"batch_id": "b-1", "timeout_s": 900})
+
+
+def test_adapter_hides_reserved_trust_fields_from_model_schema() -> None:
+    definition = _adapter(_Manager(), "journey_write_confirm").get_definition()
+    properties = (definition.raw_parameters or {}).get("properties") or {}
+    assert "bridge_context" not in properties
+    assert "decision_context" not in properties
+
+
+@pytest.mark.asyncio
+async def test_write_confirm_requires_and_injects_a_real_resolved_user_decision(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("TEST_JOURNEY_BRIDGE_SECRET", SECRET)
+    manager = _Manager()
+    adapter = _adapter(manager, "journey_write_confirm")
+    trusted = TrustedJourneyContext(
+        owner_id="user-a", session_id="session-a", turn_id="turn-a",
+        capability="test", surface="capability")
+    question_id = "journey_write_confirm:b-20260813-abcdef:acs-1"
+    question = {
+        "id": question_id, "prompt": "Choose writes", "multi_select": True,
+        "allow_free_text": False,
+        "options": [{"label": "c/R1-C001", "description": "sha256:x | write"}],
+    }
+    with bind_trusted_journey_context(trusted):
+        denied = await adapter.execute(batch_id="b-20260813-abcdef", case_ids=[])
+        assert denied.success is False and manager.calls == []
+        assert record_resolved_user_decision(
+            ask_user_tool_call_id="ask-1",
+            ask_user_payload={"questions": [question]},
+            answers=[{"questionId": question_id, "text": "c/R1-C001"}],
+        )
+        allowed = await adapter.execute(
+            batch_id="b-20260813-abcdef", case_ids=["c/R1-C001"])
+    assert allowed.success is True and len(manager.calls) == 1
+    sent = manager.calls[0]["arguments"]
+    assert sent["decision_context"] and sent["bridge_context"]
+    decision_payload = _payload(sent["decision_context"])
+    assert decision_payload["answers"][0]["text"] == "c/R1-C001"
+    assert decision_payload["owner_id"] == "user-a"
 
 
 @pytest.mark.asyncio

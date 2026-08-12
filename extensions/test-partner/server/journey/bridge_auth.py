@@ -32,6 +32,7 @@ RESERVED_ARGUMENTS = frozenset(
         "gate_token",
         "session_ref",
         "_trusted_context",
+        "decision_context",
     }
 )
 READ_TOOLS = frozenset(

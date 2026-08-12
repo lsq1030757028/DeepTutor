@@ -11,8 +11,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from server.journey import (adopt, analyze, artifacts, clarify, compile_bundle,
-                            coverage, draft_cases, execute_run, ingest,
-                            project_verdicts)
+                            coverage, digest, draft_cases, execute_run, ingest,
+                            project_verdicts, pw_harness, pw_runtime)
 
 GOOD_FACTS = """# SOT
 ## 被测构建
@@ -84,6 +84,38 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(artifacts, "BATCHES_ROOT", str(tmp_path / "batches"))
     monkeypatch.setattr(artifacts, "RUNS_ROOT", str(tmp_path / "runs"))
     return artifacts
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+def test_runtime_derives_write_risk_from_mutating_http_method(method):
+    meta = {
+        "case_id": "C-risk",
+        "writes": False,
+        "actions": [{"op": "request", "method": method, "path": "/x"}],
+    }
+    assert pw_runtime.effective_write_risk(meta) is True
+    with pytest.raises(pw_runtime.CaseSkip) as caught:
+        pw_runtime.CaseRunner(
+            {"done_cases": set(), "write_authorized": set()}, meta
+        )
+    assert caught.value.code == "SKIP_WRITE_UNCONFIRMED"
+
+
+def test_runtime_keeps_get_and_ambiguous_click_read_only_when_declared_read_only():
+    for action in (
+        {"op": "request", "method": "GET", "path": "/x"},
+        {"op": "click", "selector": "#open-details"},
+    ):
+        assert pw_runtime.effective_write_risk(
+            {"writes": False, "actions": [action]}
+        ) is False
+
+
+def test_ui_visual_capture_is_disabled_even_for_dynamic_target_credentials():
+    assert pw_harness.visual_capture_allowed({"scrub_pairs": []}) is False
+    assert pw_harness.visual_capture_allowed(
+        {"scrub_pairs": [("known-secret", "{{password}}")]}
+    ) is False
 
 
 def api_case(draft_id, path="/api/ping", expect_status=200, json_path=None,
@@ -296,7 +328,7 @@ def test_execute_write_unconfirmed_skipped(store, target):
     assert skip["skip_code"] == "SKIP_WRITE_UNCONFIRMED"
 
 
-def test_execute_write_confirmed_runs(store, target):
+def test_execute_write_confirmed_runs(store, target, monkeypatch):
     cases = [api_case("dw", writes=True)]
     bid = build_batch(store, target, cases)
     assert compile_bundle.compile_bundle(bid)["ok"]
@@ -304,10 +336,15 @@ def test_execute_write_confirmed_runs(store, target):
     # 手搓的那份当年测的是一条生产代码根本产不出的事件形态——
     # 它绿着，而真实链路上写确认压根没有写入口，卡答完照样被拦。
     from server.journey import tools as _jt
+    from tests.journey_decision_helper import SECRET, decision_kwargs
+    monkeypatch.setenv("TEST_JOURNEY_BRIDGE_SECRET", SECRET)
     assert _jt.write_confirm(batch_id=bid, case_ids=["exectest/R1-C001"],
                              owner="unit-test-owner",
                              decided_by="manager(self-derived-pending-audit)",
-                             caller_surface="capability")["ok"]
+                             caller_surface="capability",
+                             **decision_kwargs(
+                                 bid, ["exectest/R1-C001"],
+                                 owner="unit-test-owner"))["ok"]
     r = execute_run.execute(bid)
     assert r["receipt"]["counts"] == {"passed": 1}
 
@@ -590,6 +627,57 @@ def test_coverage_design_done_does_not_masquerade_as_business_done(store, target
     assert ledger["business_result"]["ready_for_acceptance"] is False
 
 
+def test_coverage_declared_gap_cannot_masquerade_as_business_pass(store, target):
+    bid, run = executed_run(store, target)
+    assert project_verdicts.project(run["run_id"])["ok"]
+    frame = store.load_artifact(bid, "business_frame")
+    frame["rules"].append({
+        "rule_id": "R9", "statement": "关键退款规则", "source_quote": "退款原文"})
+    store.save_artifact(bid, "business_frame", frame)
+    draft = store.load_artifact(bid, "case_draft")
+    draft["uncovered_rules"] = [{
+        "rule_id": "R9", "reason": "由下一轮负责；否则退款错误会逃逸到验收"}]
+    store.save_artifact(bid, "case_draft", draft)
+
+    result = coverage.build_coverage(bid, run["run_id"])
+    assert result["ok"], result
+    business = store.load_artifact(bid, "coverage_ledger")["business_result"]
+    assert business["status"] == "PENDING"
+    assert business["coverage_complete"] is False
+    assert business["incomplete_rules"] == ["R9"]
+    assert business["ready_for_acceptance"] is False
+
+
+def test_coverage_blocks_when_write_entity_was_never_human_confirmed(store, target):
+    bid = build_batch(store, target, [api_case("dw", writes=True), api_case("dr")])
+    assert compile_bundle.compile_bundle(bid)["ok"]
+    run = execute_run.execute(bid)
+    assert run["ok"]
+    project_verdicts.project(run["run_id"])
+    result = coverage.build_coverage(bid, run["run_id"])
+    assert result["ok"], result
+    business = store.load_artifact(bid, "coverage_ledger")["business_result"]
+    assert business["status"] == "BLOCKED"
+    assert business["entity_scope_ok"] is False
+    assert business["ready_for_acceptance"] is False
+
+
+def test_compile_rejects_caseset_that_tampers_with_rule_probing(store, target):
+    bid = build_batch(store, target, [
+        api_case("d1", "/api/fake200", json_path="ret", equals=0),
+        api_case("d2"),
+    ])
+    caseset = store.load_artifact(bid, "approved_caseset")
+    caseset["cases"][0]["source_anchor"]["probing"] = True
+    caseset["cases"] = [digest.stamp_case_digests(c) for c in caseset["cases"]]
+    store.save_artifact(bid, "approved_caseset", caseset)
+    result = compile_bundle.compile_bundle(bid)
+    assert result["ok"] is False
+    assert result["gate"] == "compile-gate#1-schema"
+    assert any("probing 与业务规则不一致" in p for p in result["problems"])
+    assert not os.path.isdir(os.path.join(store.batch_dir(bid), "bundle"))
+
+
 def test_coverage_rejects_a_run_from_another_batch_without_writing(store, target):
     first, _first_run = executed_run(store, target)
     second, second_run = executed_run(store, target)
@@ -665,7 +753,9 @@ def test_ui_track_real_browser(store, target):
     assert rec["target_identity"]["page_title"].startswith("本地靶")
     slug_dir = os.path.join(r["run_dir"], "exectest__r1__c001")
     assert os.path.isfile(os.path.join(slug_dir, "trace.zip"))
-    assert os.path.isfile(os.path.join(slug_dir, "final.png"))
-    # 投影后 UI 结论为 PASS（live 证据 + 实例指纹锚）
+    assert not os.path.isfile(os.path.join(slug_dir, "final.png"))
+    # 没有可机械证明已去敏的像素证据时，不得把要求 screenshot 的 UI 结论投成正式 PASS。
     p = project_verdicts.project(r["run_id"])
-    assert p["ok"], p
+    assert p.get("projection"), p
+    verdicts = project_verdicts.read_verdicts(r["run_id"])
+    assert verdicts and all(row["verdict"] != "PASS" for row in verdicts)

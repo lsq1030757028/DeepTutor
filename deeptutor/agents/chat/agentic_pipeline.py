@@ -885,6 +885,13 @@ class AgenticChatPipeline:
         if raw_reply is None:
             return False
         reply_text, answers = _normalise_user_reply(raw_reply)
+        from deeptutor.services.test_journey.trust import record_resolved_user_decision
+
+        record_resolved_user_decision(
+            ask_user_tool_call_id=str(dispatch.pause_tool_call_id or ""),
+            ask_user_payload=ask_user,
+            answers=answers,
+        )
         body_text = _format_user_reply_body(
             reply_text,
             answers,

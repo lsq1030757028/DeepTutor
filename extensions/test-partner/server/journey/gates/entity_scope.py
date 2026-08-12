@@ -84,6 +84,21 @@ def check_case(case: dict[str, Any], requirement_entity: str) -> dict[str, Any]:
                 "problem": "intake_profile.requirement_entity 缺失——需求所指实体没落定，"
                            "无从判断本轮写对了没有。**缺省不放行**：这道闸一旦对缺失"
                            "默认过，就等于不存在。"}
+    if writes and not actual:
+        declared_scope = str(
+            (case.get("side_effects") or {}).get("write_scope") or ""
+        ).strip()
+        if not declared_scope:
+            return {
+                "case_id": cid,
+                "verdict": UNKNOWN,
+                "writes": True,
+                "requirement_entity": requirement_entity,
+                "actual_entities": [],
+                "problem": "写用例没有可观察的写请求，也没有明确 write_scope；"
+                "UI click 可能读也可能写，Y 为空不得默认 MATCH。",
+            }
+        actual = [declared_scope]
     if any(e is None for e in actual):
         return {"case_id": cid, "verdict": UNKNOWN, "writes": writes,
                 "requirement_entity": requirement_entity, "actual_entities": actual,

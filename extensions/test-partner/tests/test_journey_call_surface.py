@@ -306,6 +306,38 @@ def test_execute_tool_holds_reservation_across_real_side_effect_boundary(
     assert all(result["ok"] for result in results)
 
 
+def test_execution_intent_write_risk_is_derived_from_real_http_method(monkeypatch):
+    case = {
+        "case_id": "C-risk",
+        "side_effects": {"writes": False},
+        "automation": {
+            "recipe": {
+                "actions": [
+                    {"op": "request", "method": "POST", "path": "/x"}
+                ]
+            }
+        },
+    }
+    monkeypatch.setattr(
+        tools.artifacts,
+        "load_artifact",
+        lambda *_args, **_kwargs: {"cases": [case]},
+    )
+    monkeypatch.setattr(
+        tools._execute,
+        "write_authorization",
+        lambda *_args, **_kwargs: {"authorized": {"C-risk"}},
+    )
+
+    assert tools._selected_authorized_write_risk(
+        "batch", ["C-risk"], owner=TRUSTED_OWNER
+    ) is True
+    case["automation"]["recipe"]["actions"][0]["method"] = "GET"
+    assert tools._selected_authorized_write_risk(
+        "batch", ["C-risk"], owner=TRUSTED_OWNER
+    ) is False
+
+
 def test_write_execute_crash_requires_reconciliation_without_second_effect(
         store, monkeypatch):
     """A crash after the target boundary must never auto-repeat a write."""

@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import pytest
+
 from server.journey.gates import conservation
 
 
@@ -46,6 +48,37 @@ def test_read_only_case_is_never_judged():
         _case(writes=False, actions=[{"op": "request", "method": "GET", "path": "/x"}],
               layers={"api": {"assertions": ["a"], "required_evidence": ["http_transcript"]}}),
         l3_granted=True) == []
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+def test_read_only_declaration_cannot_hide_mutating_request(method):
+    """The HTTP method is the fact; a false ``writes`` flag cannot downgrade it."""
+    problems = conservation.check_case(
+        _case(
+            writes=False,
+            actions=[{"op": "request", "method": method, "path": "/x"}],
+            layers={
+                "api": {
+                    "assertions": ["a"],
+                    "required_evidence": ["http_transcript"],
+                }
+            },
+        ),
+        l3_granted=False,
+    )
+    assert "write_declaration_mismatch" in _subs(problems)
+
+
+def test_read_only_ui_click_is_not_automatically_classified_as_a_write():
+    """A click is ambiguous; the reverse gate must not make every click a write."""
+    assert conservation.check_case(
+        _case(
+            writes=False,
+            actions=[{"op": "click", "selector": "#open-details"}],
+            layers={"ui": {"assertions": ["a"], "required_evidence": ["trace"]}},
+        ),
+        l3_granted=True,
+    ) == []
 
 
 # ── 拦截面 ────────────────────────────────────────────────────────────────
@@ -213,6 +246,23 @@ def test_compile_blocks_a_status_only_write_case_when_l3_is_granted(store, targe
     assert r["gate"] == "compile-gate#1c-conservation"
     assert any("E19.missing_conservation" in p for p in r["problems"]), r["problems"]
     assert not os.path.exists(bundle_dir), "拒编译却留下了 bundle 目录"
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+def test_compile_blocks_mutating_request_mislabeled_read_only(
+    store, target, method
+):
+    case = api_case("d1", writes=False)
+    case["automation"]["recipe"]["actions"][0]["method"] = method
+    bid = build_batch(store, target, [case])
+    bundle_dir = os.path.join(store.batch_dir(bid), "bundle")
+
+    result = compile_bundle.compile_bundle(bid)
+
+    assert result["ok"] is False
+    assert result["gate"] == "compile-gate#1c-conservation"
+    assert any("E19.write_declaration_mismatch" in p for p in result["problems"])
+    assert not os.path.exists(bundle_dir)
 
 
 def test_compile_passes_the_same_write_case_when_l3_is_absent(store, target):

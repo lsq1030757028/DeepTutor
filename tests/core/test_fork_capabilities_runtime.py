@@ -161,11 +161,13 @@ def test_all_four_human_gates_are_prompted(language: str) -> None:
     for anchor in (
         "ask_user",  # 四道闸统一的提问机制
         "tier_confirmed_via",  # 闸 1 定档：ingest 的记录参数
+        "requirement_entity_confirmed_via",  # 写实体也必须由用户落定
         "journey_ingest",  # 闸 1 的时序：定档必须在接入之前
         "clarifications",  # 闸 2 澄清：clarify 的记录参数
         "confirmed_by",  # 闸 3 采纳：adopt 的记录参数
         "decided_by",  # 闸 4 写确认：write_confirm 的记录参数
         "write_confirm",  # 闸 4 写确认：events.jsonl 里的事件类型
+        "source_case_digest",  # 闸 4 决定收据绑定用例内容而非裸 id
     ):
         assert anchor in gates, f"{language} 人闸段缺锚 {anchor}"
 

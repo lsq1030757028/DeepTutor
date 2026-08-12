@@ -81,7 +81,11 @@ human_gates: |-
   counter-cases) / deep (adds boundaries and concurrency).
   Once the user picks, pass `tier` together with
   `tier_confirmed_via="chat_ask_user"` to `journey_ingest`.
-  **The tier is frozen into intake_profile at intake and there is no tool to
+  If the requirement includes writes, the same card must also ask the user for
+  the exact business entity the requirement is meant to mutate. Pass it as
+  `requirement_entity` with
+  `requirement_entity_confirmed_via="chat_ask_user"`; never infer it from an API
+  name. **The tier and requirement entity are frozen into intake_profile at intake and there is no tool to
   change it afterwards**, so do not ingest first and ask later — that card's
   answer would have nowhere to go.
 
@@ -102,6 +106,14 @@ human_gates: |-
   wrong; this one changes data in the system under test, and a pre-ticked "all"
   turns "I didn't read it" into "I agree". Silence is not consent: no answer,
   no run.
+
+  The write card must contain exactly one question whose `id` is
+  `journey_write_confirm:<batch_id>:<caseset_id>`, with `multi_select=true` and
+  `allow_free_text=false`. Every option `label` is the full `case_id`; its
+  `description` is exactly `<source_case_digest> | <title>`; include every write
+  case in the current approved set. Only a real answer to this exact card creates
+  the one-time, server-verifiable decision receipt. A model-authored claim of
+  consent carries no authority.
 
   After the user answers, call `journey_write_confirm`. Record every write case
   explicitly as allowed or denied and set `decided_by` to the source of this

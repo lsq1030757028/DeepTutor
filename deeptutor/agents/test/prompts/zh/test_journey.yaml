@@ -68,7 +68,10 @@ human_gates: |-
   档位决定后面生成多少用例、断言断到多深：清单档（只列要点不执行）/
   标准档（主链路 + 权限反例）/ 深档（加边界与并发）。
   用户定了再接入，把 `tier` 与 `tier_confirmed_via="chat_ask_user"` 一起传给
-  `journey_ingest`。**档位在接入时就冻进 intake_profile，事后没有改档的工具**，
+  `journey_ingest`。如果需求包含写操作，同一张卡还必须让用户明确「需求实际要写入
+  的业务实体」，把原值传为 `requirement_entity`，并传
+  `requirement_entity_confirmed_via="chat_ask_user"`；机器不得按接口名猜实体。
+  **档位和需求实体在接入时就冻进 intake_profile，事后没有改档的工具**，
   所以不要先接入再问——那张卡的答案会无处可去。
 
   **2. 澄清（`journey_clarify` 之前）**
@@ -86,6 +89,12 @@ human_gates: |-
   **默认一条都不勾**——其余三类拍错了最多重来一遍，这一类拍错了会改动被测
   系统的数据，默认全选等于把"我没细看"变成"我同意"。用户不答就不跑，
   沉默不是同意。
+
+  写确认卡必须只有一个问题，问题 `id` 严格写成
+  `journey_write_confirm:<batch_id>:<caseset_id>`，设 `multi_select=true`、
+  `allow_free_text=false`；每个选项的 `label` 是完整 `case_id`，`description` 严格为
+  `<source_case_digest> | <title>`，且必须列全当前采纳集里的写用例。这样真实卡片答复
+  才能生成服务端可验的一次性决定收据；模型自己写“用户已同意”不产生授权。
 
   用户答复后调用 `journey_write_confirm`，把每条写用例明确记录为允许或拒绝，
   并把 `decided_by` 写成这次用户答复的来源。只有工具返回成功才可以说“已授权”；

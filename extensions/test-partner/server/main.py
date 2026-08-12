@@ -299,6 +299,8 @@ def journey_ingest(title: str, base_url: str,
                    requirement_text: str = "", source_kind: str = "tapd",
                    source_ref: str = "", environment_ref: str = "",
                    tier: str = "", tier_confirmed_via: str = "",
+                   requirement_entity: str = "",
+                   requirement_entity_confirmed_via: str = "",
                    owner: str = "", caller_surface: str = "unknown",
                    bridge_context: str = "") -> dict[str, Any]:
     """接入 + 定档：只接受 DeepTutor Test capability 的可信桥接调用。
@@ -313,6 +315,8 @@ def journey_ingest(title: str, base_url: str,
         "source_kind": source_kind, "source_ref": source_ref,
         "environment_ref": environment_ref, "tier": tier,
         "tier_confirmed_via": tier_confirmed_via,
+        "requirement_entity": requirement_entity,
+        "requirement_entity_confirmed_via": requirement_entity_confirmed_via,
     }
     trusted = _journey_bridge("journey_ingest", bridge_context, effective)
     if isinstance(trusted, dict):
@@ -324,6 +328,10 @@ def journey_ingest(title: str, base_url: str,
                       requirement_text=requirement_text,
                       environment_ref=environment_ref, tier=tier,
                       tier_confirmed_via=tier_confirmed_via,
+                      requirement_entity=requirement_entity,
+                      requirement_entity_confirmed_via=(
+                          requirement_entity_confirmed_via
+                      ),
                       owner=trusted.owner, caller_surface=trusted.surface)
 
 
@@ -386,6 +394,7 @@ def journey_draft_cases(batch_id: str, cases: Any, uncovered_rules: Any = None,
 def journey_write_confirm(batch_id: str, case_ids: Any = None,
                           decided_by: str = "", confirmed_via: str = "ask_user_card",
                           owner: str = "", caller_surface: str = "unknown",
+                          decision_context: str = "",
                           bridge_context: str = "") -> dict[str, Any]:
     """写确认落账：把「哪几条写用例获准执行」写进批次 events.jsonl。
 
@@ -403,6 +412,8 @@ def journey_write_confirm(batch_id: str, case_ids: Any = None,
     from server.journey import tools as _jt
     return _jt.write_confirm(batch_id=batch_id, case_ids=list(case_ids or []),
                              decided_by=decided_by, confirmed_via=confirmed_via,
+                             decision_context=decision_context,
+                             _bridge_claims=trusted,
                              owner=trusted.owner, caller_surface=trusted.surface)
 
 

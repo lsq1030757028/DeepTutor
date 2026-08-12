@@ -18,7 +18,7 @@ import sys
 import time
 from typing import Any, Callable
 
-from server.journey import artifacts, redlines
+from server.journey import artifacts, pw_runtime, redlines
 from server.journey import process_registry as preg
 from server.journey.gates import credential_scan
 from server.journey.gates import track_purity as _track_purity
@@ -153,6 +153,15 @@ def write_authorization(batch_id: str, root: str | None = None, *,
     authorized: set[str] = set()
     dropped: list[dict[str, str]] = []
     caseset_id = str(caseset.get("caseset_id") or "")
+    write_case_ids = sorted(
+        str(case.get("case_id") or "")
+        for case in caseset.get("cases") or []
+        if pw_runtime.effective_write_risk({
+            "writes": bool((case.get("side_effects") or {}).get("writes")),
+            "actions": list((((case.get("automation") or {}).get("recipe") or {}).get(
+                "actions") or [])),
+        })
+    )
     all_events = [event for event in artifacts.read_events(
         batch_id, owner=owner, root=root)
         if event.get("type") == "write_confirm"]
@@ -170,7 +179,16 @@ def write_authorization(batch_id: str, root: str | None = None, *,
                     "at": str(event.get("at", "")),
                     "reason": "确认事件没记 digest 或 caseset_id，认不出它同意的是什么内容",
                 })
-        return {"authorized": authorized, "dropped": dropped}
+        return {
+            "authorized": authorized,
+            "dropped": dropped,
+            "decision_state": {
+                "caseset_id": caseset_id,
+                "decided": False,
+                "authorized": [],
+                "declined": write_case_ids,
+            },
+        }
     # Each confirmation is a complete decision for the current caseset.  The
     # latest serialized ledger row replaces the previous decision, so an empty
     # selection is a real revoke-all rather than a no-op.
@@ -191,7 +209,26 @@ def write_authorization(batch_id: str, root: str | None = None, *,
                                       "现在这条，须重新确认"})
         else:
             authorized.add(cid)
-    return {"authorized": authorized, "dropped": dropped}
+    return {
+        "authorized": authorized,
+        "dropped": dropped,
+        # This deliberately excludes timestamps and actor prose. Repeating the
+        # same complete decision is semantically idempotent, while confirm and
+        # revoke produce different execution identities.
+        "decision_state": {
+            "caseset_id": caseset_id,
+            "decided": True,
+            "authorized": sorted(authorized),
+            "declined": sorted(set(write_case_ids) - authorized),
+            "dropped": sorted(
+                (
+                    str(item.get("case_id") or ""),
+                    str(item.get("reason") or ""),
+                )
+                for item in dropped
+            ),
+        },
+    }
 
 
 def _write_authorized_ids(batch_id: str, *, owner: str | None = None,

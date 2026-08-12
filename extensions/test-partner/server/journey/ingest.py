@@ -131,6 +131,8 @@ def propose_tier(requirement_text: str, writes_expected: bool | None = None) -> 
 def ingest(title: str, base_url: str, *, source_kind: str, source_ref: str,
            requirement_text: str = "", environment_ref: str = "",
            tier: str = "", tier_confirmed_via: str = "",
+           requirement_entity: str = "",
+           requirement_entity_confirmed_via: str = "",
            owner: str = "") -> dict[str, Any]:
     """建批次 + 落 intake_profile。tier 未给时只回确认卡数据（不落产物——
     档位是 intake_profile 的必备字段，人闸没走完就没有这个产物）。"""
@@ -145,6 +147,15 @@ def ingest(title: str, base_url: str, *, source_kind: str, source_ref: str,
                 "probe": probe, **proposal}
     if tier not in TIERS:
         return {"ok": False, "error": f"tier 必须是 {TIERS} 之一，实为 {tier!r}"}
+    requirement_entity = str(requirement_entity or "").strip()
+    requirement_entity_confirmed_via = str(
+        requirement_entity_confirmed_via or ""
+    ).strip()
+    if bool(requirement_entity) != bool(requirement_entity_confirmed_via):
+        return {
+            "ok": False,
+            "error": "需求实体及其人工确认来源必须成对提供；机器不得自行猜测写入对象。",
+        }
     if not probe.get("reachable"):
         # 溯源/能力锁：终点不可达 = 不建批次（fail-closed，不能对空气接单）
         return {"ok": False, "error": "接入终点不可达，不建批次", "probe": probe}
@@ -180,6 +191,8 @@ def ingest(title: str, base_url: str, *, source_kind: str, source_ref: str,
         "tier": tier,
         "tier_proposal": {k: proposal[k] for k in ("proposed_tier", "score", "reasons")},
         "tier_confirmed_via": tier_confirmed_via or "unspecified",
+        "requirement_entity": requirement_entity,
+        "requirement_entity_confirmed_via": requirement_entity_confirmed_via,
     })
     artifacts.append_event(bid, {"type": "tier_confirm", "tier": tier,
                                  "via": tier_confirmed_via or "unspecified"})

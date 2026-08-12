@@ -34,6 +34,7 @@ RESERVED_ARGUMENTS = frozenset(
         "gate_token",
         "session_ref",
         "_trusted_context",
+        "decision_context",
     }
 )
 
@@ -51,8 +52,20 @@ class TrustedJourneyContext:
     surface: str = "capability"
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedUserDecision:
+    ask_user_tool_call_id: str
+    ask_user_payload: dict[str, Any]
+    answers: tuple[dict[str, str], ...]
+    resolved_at: int
+    jti: str
+
+
 _CURRENT_CONTEXT: ContextVar[TrustedJourneyContext | None] = ContextVar(
     "deeptutor_trusted_journey_context", default=None
+)
+_CURRENT_DECISION: ContextVar[ResolvedUserDecision | None] = ContextVar(
+    "deeptutor_resolved_user_decision", default=None
 )
 
 
@@ -61,14 +74,61 @@ def bind_trusted_journey_context(
     context: TrustedJourneyContext,
 ) -> Iterator[TrustedJourneyContext]:
     token = _CURRENT_CONTEXT.set(context)
+    decision_token = _CURRENT_DECISION.set(None)
     try:
         yield context
     finally:
+        _CURRENT_DECISION.reset(decision_token)
         _CURRENT_CONTEXT.reset(token)
 
 
 def current_trusted_journey_context() -> TrustedJourneyContext | None:
     return _CURRENT_CONTEXT.get()
+
+
+def record_resolved_user_decision(
+    *,
+    ask_user_tool_call_id: str,
+    ask_user_payload: Mapping[str, Any],
+    answers: list[dict[str, str]] | None,
+) -> bool:
+    """Remember only a structured Journey write decision from a real pause/resume.
+
+    Ordinary clarification replies are deliberately discarded: they must never
+    be repackaged as write authority by a later model tool call.
+    """
+    context = current_trusted_journey_context()
+    questions = ask_user_payload.get("questions")
+    if context is None or not isinstance(questions, list) or len(questions) != 1:
+        _CURRENT_DECISION.set(None)
+        return False
+    question = questions[0]
+    qid = str(question.get("id") or "") if isinstance(question, Mapping) else ""
+    matching = [
+        {"questionId": str(entry.get("questionId") or ""),
+         "text": str(entry.get("text") or "")}
+        for entry in (answers or [])
+        if str(entry.get("questionId") or "") == qid
+    ]
+    if not qid.startswith("journey_write_confirm:") or len(matching) != 1:
+        _CURRENT_DECISION.set(None)
+        return False
+    # JSON round-trip freezes a plain-data snapshot; no later model mutation can
+    # alter what the user actually saw.
+    payload = json.loads(json.dumps(
+        dict(ask_user_payload), ensure_ascii=False, allow_nan=False))
+    _CURRENT_DECISION.set(ResolvedUserDecision(
+        ask_user_tool_call_id=str(ask_user_tool_call_id or ""),
+        ask_user_payload=payload,
+        answers=tuple(matching),
+        resolved_at=int(time.time()),
+        jti=secrets.token_urlsafe(16),
+    ))
+    return True
+
+
+def current_resolved_user_decision() -> ResolvedUserDecision | None:
+    return _CURRENT_DECISION.get()
 
 
 def _secret() -> bytes:
@@ -161,6 +221,35 @@ def sign_bridge_context(
     return f"{_b64url(raw)}.{_b64url(signature)}"
 
 
+def sign_user_decision_context(
+    context: TrustedJourneyContext,
+    decision: ResolvedUserDecision,
+    *,
+    now: int | None = None,
+) -> str:
+    """Sign the exact card and answer produced by a real ``ask_user`` resume."""
+    issued = int(time.time()) if now is None else int(now)
+    if not decision.ask_user_tool_call_id or not decision.jti:
+        raise JourneyTrustError("resolved user decision is incomplete")
+    payload: dict[str, Any] = {
+        "v": 1,
+        "iss": "deeptutor",
+        "aud": "test-partner-user-decision",
+        **asdict(context),
+        "tool": "journey_write_confirm",
+        "ask_user_tool_call_id": decision.ask_user_tool_call_id,
+        "ask_user": decision.ask_user_payload,
+        "answers": list(decision.answers),
+        "resolved_at": decision.resolved_at,
+        "iat": issued,
+        "exp": issued + 300,
+        "jti": decision.jti,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                     separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return f"{_b64url(raw)}.{_b64url(hmac.new(_secret(), raw, hashlib.sha256).digest())}"
+
+
 def is_test_journey_tool(tool: Any) -> bool:
     """Identify the protected provider from adapter identity, not its display name."""
     return bool(
@@ -174,6 +263,7 @@ __all__ = [
     "BRIDGE_AUDIENCE",
     "BRIDGE_SECRET_ENV",
     "JourneyTrustError",
+    "ResolvedUserDecision",
     "RESERVED_ARGUMENTS",
     "TrustedJourneyContext",
     "arguments_sha256",
@@ -181,7 +271,10 @@ __all__ = [
     "bridge_configured",
     "canonical_arguments",
     "current_trusted_journey_context",
+    "current_resolved_user_decision",
     "effective_arguments",
     "is_test_journey_tool",
+    "record_resolved_user_decision",
     "sign_bridge_context",
+    "sign_user_decision_context",
 ]

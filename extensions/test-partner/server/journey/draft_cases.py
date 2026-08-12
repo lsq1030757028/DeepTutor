@@ -71,7 +71,8 @@ def _check_recipe(recipe: Any, where: str, errors: list[dict[str, Any]]) -> None
 
 def validate_draft(cases: list[dict[str, Any]],
                    example_map: list[dict[str, Any]],
-                   uncovered_rules: list[dict[str, Any]] | None = None
+                   uncovered_rules: list[dict[str, Any]] | None = None,
+                   rule_probing: dict[str, bool] | None = None,
                    ) -> dict[str, Any]:
     errors: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
@@ -89,6 +90,19 @@ def validate_draft(cases: list[dict[str, Any]],
                            "problem": f"引用未知 rule_id：{rid!r}（example_map 里没有）"})
         else:
             covered.setdefault(rid, []).append(did)
+            if rule_probing is not None:
+                declared_probing = bool(
+                    (c.get("source_anchor") or {}).get("probing"))
+                authoritative_probing = bool(rule_probing.get(rid, False))
+                if declared_probing != authoritative_probing:
+                    errors.append({
+                        "code": "E20",
+                        "where": f"{did}.source_anchor.probing",
+                        "problem": (
+                            f"探测属性与业务规则 {rid} 不一致："
+                            f"case={declared_probing}, rule={authoritative_probing}。"
+                            "用例不得自行把正式规则降级为探测规则。"),
+                    })
         # 格式族复用 schema.validate_case：盖占位 id/digest 后全量跑
         probe = dict(c)
         probe.pop("draft_id", None)
@@ -133,7 +147,13 @@ def validate_draft(cases: list[dict[str, Any]],
 def draft(batch_id: str, *, cases: list[dict[str, Any]],
           uncovered_rules: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     analysis = artifacts.load_artifact(batch_id, "test_analysis")
-    result = validate_draft(cases, analysis["example_map"], uncovered_rules)
+    frame = artifacts.load_artifact(batch_id, "business_frame")
+    rule_probing = {
+        str(rule.get("rule_id")): bool(rule.get("probing"))
+        for rule in frame.get("rules", [])
+    }
+    result = validate_draft(
+        cases, analysis["example_map"], uncovered_rules, rule_probing)
     if not result["ok"]:
         return {"ok": False, **result}
     art = artifacts.save_artifact(batch_id, "case_draft", {

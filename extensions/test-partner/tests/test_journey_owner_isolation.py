@@ -54,6 +54,8 @@ def _ingest_args(title: str) -> dict:
         "environment_ref": "",
         "tier": "standard",
         "tier_confirmed_via": "test",
+        "requirement_entity": "voice_character",
+        "requirement_entity_confirmed_via": "test",
     }
 
 

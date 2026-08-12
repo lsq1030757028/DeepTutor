@@ -10,6 +10,8 @@
 
 写确认：side_effects.writes=true 的 case 必须在 TP_WRITE_AUTHORIZED_IDS 里，
 否则 SKIP_WRITE_UNCONFIRMED（授权收据在批次 events.jsonl，由 execute 工具下发）。
+运行时会再从真实 HTTP 方法独立派生写风险；POST/PUT/PATCH/DELETE 等不能靠错误的
+``writes=false`` 声明绕过确认。UI click 本身有读写两义，不在这里粗暴推断。
 
 探测性（probing）case：只记录观测，恒不 pass/fail（判决权在产品——探测层语义）。
 
@@ -71,6 +73,21 @@ def load_context() -> dict[str, Any]:
     }
 
 
+_SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def effective_write_risk(meta: dict[str, Any]) -> bool:
+    """Derive write risk from executable facts, conservatively honoring declaration."""
+    if bool(meta.get("writes")):
+        return True
+    actions = list(meta.get("actions") or [])
+    return any(
+        str(action.get("op") or "") == "request"
+        and str(action.get("method") or "GET").upper() not in _SAFE_HTTP_METHODS
+        for action in actions
+    )
+
+
 class CaseRunner:
     """单 case 执行器。conftest 每 case 建一个，负责红线、断言计数与证据落盘。"""
 
@@ -91,7 +108,7 @@ class CaseRunner:
         cid = meta["case_id"]
         if cid in ctx["done_cases"]:
             raise CaseSkip("SKIP_RESUME_DONE", "上轮已完成，本轮续跑跳过")
-        if meta.get("writes") and cid not in ctx["write_authorized"]:
+        if effective_write_risk(meta) and cid not in ctx["write_authorized"]:
             raise CaseSkip("SKIP_WRITE_UNCONFIRMED",
                            "写用例未获写确认授权（批次 events.jsonl 无该 case 的 write_confirm）")
 

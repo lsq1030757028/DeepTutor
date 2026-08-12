@@ -15,17 +15,29 @@ adopt_confirm / tier_confirm / tool_call / gate_token_used 四种。
 """
 import pytest
 
-from server.journey import artifacts, execute_run, tools
+from server.journey import artifacts, digest, execute_run, tools
 from server.journey import compile_bundle
 
 from tests.test_journey_exec import (  # noqa: F401 - fixtures 经 import 生效
     api_case, build_batch, store, target)
+from tests.journey_decision_helper import SECRET, bridge_token, decision_kwargs
 
 TRUSTED_OWNER = "unit-test-owner"
 
 
+@pytest.fixture(autouse=True)
+def _decision_secret(monkeypatch):
+    monkeypatch.setenv("TEST_JOURNEY_BRIDGE_SECRET", SECRET)
+
+
 def _confirm(**kwargs):
-    return tools.write_confirm(owner=TRUSTED_OWNER, **kwargs)
+    batch_id = kwargs["batch_id"]
+    case_ids = list(kwargs.get("case_ids") or [])
+    return tools.write_confirm(
+        owner=TRUSTED_OWNER,
+        **decision_kwargs(batch_id, case_ids, owner=TRUSTED_OWNER),
+        **kwargs,
+    )
 
 
 def _batch_with_one_write_case(store, target):
@@ -69,6 +81,136 @@ def test_never_confirmed_and_explicitly_declined_are_distinguishable(store, targ
     assert [e for e in artifacts.read_events(bid) if e["type"] == "write_confirm"]
 
 
+def test_model_reported_confirmation_without_user_receipt_is_rejected(store, target):
+    bid = _batch_with_one_write_case(store, target)
+    out = tools.write_confirm(
+        batch_id=bid, case_ids=["exectest/R1-C001"], owner=TRUSTED_OWNER,
+        decided_by="model-says-user", confirmed_via="ask_user_card",
+        caller_surface="capability")
+    assert out["ok"] is False and out["code"] == "E_USER_DECISION_REQUIRED"
+    assert not [e for e in artifacts.read_events(bid) if e["type"] == "write_confirm"]
+
+
+def test_user_receipt_binds_exact_choice_and_is_consumed_once(store, target):
+    bid = _batch_with_one_write_case(store, target)
+    receipt = decision_kwargs(
+        bid, ["exectest/R1-C001"], owner=TRUSTED_OWNER)
+    tampered = tools.write_confirm(
+        batch_id=bid, case_ids=[], owner=TRUSTED_OWNER,
+        caller_surface="capability", **receipt)
+    assert tampered["ok"] is False and tampered["code"] == "E_USER_DECISION_INVALID"
+    assert not [e for e in artifacts.read_events(bid) if e["type"] == "write_confirm"]
+
+    first = tools.write_confirm(
+        batch_id=bid, case_ids=["exectest/R1-C001"], owner=TRUSTED_OWNER,
+        caller_surface="capability", **receipt)
+    replay = tools.write_confirm(
+        batch_id=bid, case_ids=["exectest/R1-C001"], owner=TRUSTED_OWNER,
+        caller_surface="capability", **receipt)
+    assert first["ok"] is True
+    assert replay["ok"] is False and replay["code"] == "E_USER_DECISION_REPLAYED"
+
+
+def test_user_receipt_from_another_owner_is_rejected(store, target):
+    bid = _batch_with_one_write_case(store, target)
+    receipt = decision_kwargs(bid, ["exectest/R1-C001"], owner="other-owner")
+    out = tools.write_confirm(
+        batch_id=bid, case_ids=["exectest/R1-C001"], owner=TRUSTED_OWNER,
+        caller_surface="capability", **receipt)
+    assert out["ok"] is False and out["code"] == "E_USER_DECISION_INVALID"
+    assert not [e for e in artifacts.read_events(bid) if e["type"] == "write_confirm"]
+
+
+def test_user_receipt_is_bound_to_current_case_content(store, target):
+    bid = _batch_with_one_write_case(store, target)
+    receipt = decision_kwargs(
+        bid, ["exectest/R1-C001"], owner=TRUSTED_OWNER)
+    caseset = artifacts.load_artifact(bid, "approved_caseset")
+    caseset["cases"][0]["title"] = "write behavior changed after the user saw the card"
+    caseset["cases"][0] = digest.stamp_case_digests(caseset["cases"][0])
+    artifacts.save_artifact(bid, "approved_caseset", caseset)
+    out = tools.write_confirm(
+        batch_id=bid, case_ids=["exectest/R1-C001"], owner=TRUSTED_OWNER,
+        caller_surface="capability", **receipt)
+    assert out["ok"] is False and out["code"] == "E_USER_DECISION_INVALID"
+    assert not [e for e in artifacts.read_events(bid) if e["type"] == "write_confirm"]
+
+
+def test_mcp_write_confirm_requires_real_receipt_then_accepts_matching_card(store, target):
+    import server.main as main
+
+    bid = _batch_with_one_write_case(store, target)
+    case_ids = ["exectest/R1-C001"]
+    effective = {
+        "batch_id": bid, "case_ids": case_ids,
+        "decided_by": "", "confirmed_via": "ask_user_card",
+    }
+    bridge = bridge_token("journey_write_confirm", effective, owner=TRUSTED_OWNER)
+    denied = main.journey_write_confirm(
+        batch_id=bid, case_ids=case_ids, bridge_context=bridge)
+    assert denied["ok"] is False and denied["code"] == "E_USER_DECISION_INVALID"
+    assert not [e for e in artifacts.read_events(bid) if e["type"] == "write_confirm"]
+
+    decision = decision_kwargs(bid, case_ids, owner=TRUSTED_OWNER)
+    allowed = main.journey_write_confirm(
+        batch_id=bid, case_ids=case_ids,
+        decision_context=decision["decision_context"], bridge_context=bridge)
+    assert allowed["ok"] is True
+
+
+def test_execute_recomputes_after_confirm_and_revoke(store, target, monkeypatch):
+    """A complete human decision is part of the execution's version identity."""
+    bid = _batch_with_one_write_case(store, target)
+    runs = []
+
+    monkeypatch.setattr(
+        tools,
+        "_bundle_state",
+        lambda *_args, **_kwargs: {
+            "bundle_sha256": "sha256:bundle",
+            "caseset_id": "exectest",
+            "compiler_version": "test",
+        },
+    )
+
+    def fake_execute(*_args, reserved_run_id="", **_kwargs):
+        authorized = execute_run.write_authorization(bid)["authorized"]
+        runs.append((reserved_run_id, tuple(sorted(authorized))))
+        return {
+            "ok": True,
+            "run_id": reserved_run_id,
+            "receipt": {
+                "run_id": reserved_run_id,
+                "batch_id": bid,
+                "verdict": "PASS" if authorized else "BLOCK",
+            },
+        }
+
+    monkeypatch.setattr(tools._execute, "execute", fake_execute)
+
+    before = tools.execute(batch_id=bid, owner=TRUSTED_OWNER)
+    assert before["ok"] and runs[-1][1] == ()
+
+    assert _confirm(
+        batch_id=bid,
+        case_ids=["exectest/R1-C001"],
+        caller_surface="capability",
+    )["ok"]
+    confirmed = tools.execute(batch_id=bid, owner=TRUSTED_OWNER)
+    replay_confirmed = tools.execute(batch_id=bid, owner=TRUSTED_OWNER)
+    assert confirmed["ok"] and runs[-1][1] == ("exectest/R1-C001",)
+    assert replay_confirmed["replayed"] is True
+
+    assert _confirm(
+        batch_id=bid, case_ids=[], caller_surface="capability"
+    )["ok"]
+    revoked = tools.execute(batch_id=bid, owner=TRUSTED_OWNER)
+    replay_revoked = tools.execute(batch_id=bid, owner=TRUSTED_OWNER)
+    assert revoked["ok"] and runs[-1][1] == ()
+    assert replay_revoked["replayed"] is True
+    assert len(runs) == 3, "never-confirmed, confirmed and revoked each run once"
+
+
 # ── 拼错与勾错：判红，不静默忽略 ───────────────────────────────────────────
 
 
@@ -97,14 +239,16 @@ def test_confirm_before_adoption_is_red(store, target):
                       source_ref="local", requirement_text="正文",
                       tier="standard", tier_confirmed_via="test",
                       owner=TRUSTED_OWNER)
-    out = _confirm(batch_id=r["batch_id"], case_ids=[],
-                              caller_surface="capability")
+    out = tools.write_confirm(
+        batch_id=r["batch_id"], case_ids=[], owner=TRUSTED_OWNER,
+        caller_surface="capability")
     assert not out["ok"] and out["code"] == "E_NO_CASESET"
 
 
 def test_confirm_requires_an_existing_batch(store):
-    out = _confirm(batch_id="b-does-not-exist", case_ids=[],
-                              caller_surface="capability")
+    out = tools.write_confirm(
+        batch_id="b-does-not-exist", case_ids=[], owner=TRUSTED_OWNER,
+        caller_surface="capability")
     assert not out["ok"] and out["code"] == "E_NO_BATCH"
 
 

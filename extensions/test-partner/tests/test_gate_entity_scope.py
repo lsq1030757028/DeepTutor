@@ -53,6 +53,37 @@ def test_unmapped_write_path_is_unknown_not_pass():
     assert r["verdict"] == es.UNKNOWN
 
 
+def test_ui_write_without_explicit_scope_is_unknown_not_match():
+    case = {
+        "case_id": "q/R5-C001",
+        "side_effects": {"writes": True},
+        "automation": {
+            "recipe": {
+                "track": "ui",
+                "actions": [{"op": "click", "selector": "#save"}],
+            }
+        },
+    }
+    result = es.check_case(case, "custom_character")
+    assert result["verdict"] == es.UNKNOWN
+    assert "Y 为空不得默认 MATCH" in result["problem"]
+
+
+def test_ui_write_uses_explicit_scope_and_must_match_requirement_entity():
+    case = {
+        "case_id": "q/R5-C001",
+        "side_effects": {"writes": True, "write_scope": "custom_character"},
+        "automation": {
+            "recipe": {
+                "track": "ui",
+                "actions": [{"op": "click", "selector": "#save"}],
+            }
+        },
+    }
+    assert es.check_case(case, "custom_character")["verdict"] == es.MATCH
+    assert es.check_case(case, "recommended_character")["verdict"] == es.MISMATCH
+
+
 def test_banner_states_the_real_path_was_not_reached():
     out = es.check_caseset(
         {"cases": [_case("q/R5-C001", "/admin/v1/characters/recommended")]},

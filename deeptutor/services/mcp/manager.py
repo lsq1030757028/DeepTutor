@@ -133,10 +133,24 @@ class MCPToolAdapter(BaseTool):
         return self._server_name
 
     def get_definition(self) -> ToolDefinition:
+        schema = self._input_schema
+        if self._server_name == "test-partner" and self._original_name.startswith("journey_"):
+            from deeptutor.services.test_journey.trust import RESERVED_ARGUMENTS
+
+            schema = dict(self._input_schema)
+            properties = schema.get("properties")
+            if isinstance(properties, dict):
+                schema["properties"] = {
+                    name: spec for name, spec in properties.items()
+                    if name not in RESERVED_ARGUMENTS
+                }
+            required = schema.get("required")
+            if isinstance(required, list):
+                schema["required"] = [name for name in required if name not in RESERVED_ARGUMENTS]
         return ToolDefinition(
             name=self._wrapped_name,
             description=f"[{self._server_name}] {self._description}",
-            raw_parameters=self._input_schema,
+            raw_parameters=schema,
         )
 
     async def execute(self, **kwargs: Any) -> ToolResult:
@@ -149,9 +163,11 @@ class MCPToolAdapter(BaseTool):
             from deeptutor.services.test_journey.trust import (
                 RESERVED_ARGUMENTS,
                 JourneyTrustError,
+                current_resolved_user_decision,
                 current_trusted_journey_context,
                 effective_arguments,
                 sign_bridge_context,
+                sign_user_decision_context,
             )
 
             context = current_trusted_journey_context()
@@ -167,6 +183,16 @@ class MCPToolAdapter(BaseTool):
                 kwargs.pop(reserved, None)
             effective = effective_arguments(kwargs, self._input_schema)
             try:
+                if self._original_name == "journey_write_confirm":
+                    decision = current_resolved_user_decision()
+                    if decision is None:
+                        return ToolResult(
+                            content=("Write confirmation requires a resolved interactive "
+                                     "user decision from this same Test turn."),
+                            success=False,
+                        )
+                    kwargs["decision_context"] = sign_user_decision_context(
+                        context, decision)
                 kwargs["bridge_context"] = sign_bridge_context(
                     context,
                     tool=self._original_name,
