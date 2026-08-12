@@ -146,6 +146,30 @@ def test_an_event_without_digests_authorizes_nothing(store, target):
     assert any("没记 digest" in d["reason"] for d in auth["dropped"])
 
 
+def test_latest_confirmation_can_revoke_all_prior_writes(store, target):
+    bid = _batch_with_one_write_case(store, target)
+    assert _confirm(
+        batch_id=bid, case_ids=["exectest/R1-C001"],
+        caller_surface="capability")["ok"]
+    assert _confirm(
+        batch_id=bid, case_ids=[], caller_surface="capability")["ok"]
+    assert execute_run.write_authorization(bid)["authorized"] == set()
+
+
+def test_latest_confirmation_replaces_prior_subset(store, target):
+    bid = build_batch(store, target, [api_case("a", writes=True),
+                                      api_case("b", writes=True)])
+    write_ids = [case["case_id"] for case in
+                 artifacts.load_artifact(bid, "approved_caseset")["cases"]]
+    assert _confirm(
+        batch_id=bid, case_ids=write_ids,
+        caller_surface="capability")["ok"]
+    assert _confirm(
+        batch_id=bid, case_ids=[write_ids[1]],
+        caller_surface="capability")["ok"]
+    assert execute_run.write_authorization(bid)["authorized"] == {write_ids[1]}
+
+
 def test_dropped_authorizations_land_in_the_run_receipt(store, target):
     """失效必须说出口：作废后的症状与「压根没确认」一模一样（0021 红线六）。"""
     bid = _batch_with_one_write_case(store, target)

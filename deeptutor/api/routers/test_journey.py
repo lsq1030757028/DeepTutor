@@ -44,9 +44,7 @@ def _error(code: str, message: str, *, status: int = 200) -> JSONResponse:
 
 async def _read(tool_name: str, **arguments: Any) -> JSONResponse | dict[str, Any]:
     await get_mcp_manager().ensure_started()
-    tool = get_tool_registry().get(
-        wrapped_tool_name("test-partner", f"journey_{tool_name}")
-    )
+    tool = get_tool_registry().get(wrapped_tool_name("test-partner", f"journey_{tool_name}"))
     if tool is None:
         return _error(
             "E_MCP_UNAVAILABLE",

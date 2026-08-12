@@ -56,9 +56,9 @@ export function journeyCardCopy(t: TFunction) {
       business: t("journey.badge.business"),
       uncovered: (n: number) =>
         t("{{count}} further rules are declared out of scope", { count: n }),
-      boundary: t("Read-only here. Selecting and adopting happens in the workbench."),
-      action: t("Adopt cases"),
-      actionPending: t("Adopt cases (available once drafting finishes)"),
+      boundary: t("Read-only here. Return to Test chat to explicitly select draft IDs; nothing is pre-selected."),
+      action: t("Select cases in Test chat"),
+      actionPending: t("Select cases in Test chat (available once drafting finishes)"),
     },
 
     // ── 卡三 · 执行进度与结论摘要（流式）──────────────────────────────────
@@ -96,9 +96,7 @@ export function journeyCardCopy(t: TFunction) {
       covered: t("journey.coverage.covered"),
       declared: t("journey.coverage.declared"),
       gap: t("journey.coverage.gap"),
-      boundary: t(
-        "Read-only. Write out-of-scope declarations in the workbench — they ship with the deliverable.",
-      ),
+      boundary: t("Read-only here. Resolve unexplained gaps in Test chat; the closure stays in the workbench."),
       action: t("Resolve the gaps"),
       actionDone: t("Open closure in workbench"),
     },

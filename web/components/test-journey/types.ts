@@ -109,6 +109,24 @@ export interface RunRow {
   verdicts: VerdictRow[];
 }
 
+export function verdictParts(verdict: string): { code: string; reason: string } {
+  const raw = String(verdict ?? "").trim();
+  const separator = raw.indexOf(":");
+  return {
+    code: (separator >= 0 ? raw.slice(0, separator) : raw).toUpperCase(),
+    reason: separator >= 0 ? raw.slice(separator + 1).trim() : "",
+  };
+}
+
+/** Default to the newest run; preserve an explicit older selection if it still exists. */
+export function selectRun(runs: RunRow[], selectedRunId: string | null): RunRow | null {
+  if (selectedRunId) {
+    const selected = runs.find((run) => run.run_id === selectedRunId);
+    if (selected) return selected;
+  }
+  return runs.length ? runs[runs.length - 1] : null;
+}
+
 /**
  * 汇总一趟的结论。探测项从分母里摘出去单列——
  * 把探测性用例算进通过率，是最容易把"我们其实没验"读成"验过了"的一步。
@@ -117,7 +135,7 @@ export function summarizeRun(rows: VerdictRow[]) {
   const probing = rows.filter((r) => r.probing);
   const scored = rows.filter((r) => !r.probing);
   const count = (v: string) =>
-    scored.filter((r) => String(r.verdict).toUpperCase() === v).length;
+    scored.filter((r) => verdictParts(String(r.verdict)).code === v).length;
   return {
     total: scored.length,
     passed: count("PASS"),

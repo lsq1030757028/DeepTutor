@@ -205,10 +205,11 @@ async def fill_details(call: CallModel, material: Material, scenario: str,
     while i < total:
         batch = cases[i:i + size]
         try:
-            filled, shape_notes = await _fill_one_batch(call, b, should_cancel,
-                                                        material, scenario, batch)
+            filled, shape_notes, consumed = await _fill_one_batch(
+                call, b, should_cancel, material, scenario, batch)
             out.extend(filled)
             notes.extend(shape_notes)
+            i += consumed
         except BudgetExhausted:
             notes.append(
                 f"模型调用次数用尽，还有 {total - i} 条没来得及补细节——"
@@ -218,7 +219,7 @@ async def fill_details(call: CallModel, material: Material, scenario: str,
         except (OutputTruncated, OutputMalformed) as exc:
             ids = "、".join(str(c.get("id") or "?") for c in batch)
             notes.append(f"这几条没生成成功（{ids}）：{exc}")
-        i += size
+            i += len(batch)
         if on_progress:
             on_progress(Progress("detail", min(i, total), total))
 
@@ -228,10 +229,11 @@ async def fill_details(call: CallModel, material: Material, scenario: str,
 async def _fill_one_batch(call: CallModel, budget: _Budget,
                           should_cancel: ShouldCancel, material: Material,
                           scenario: str, batch: list[dict[str, Any]],
-                          ) -> tuple[list[dict[str, Any]], list[str]]:
+                          ) -> tuple[list[dict[str, Any]], list[str], int]:
     """一批的三种结局：成、截断后对半减量再成、彻底失败。
 
-    返回 `(用例, 形状救回说明)`。说明**顺着返回值往上传**，不走模块级收集器——
+    返回 `(用例, 形状救回说明, 实际消费的清单条数)`。截断减半成功时，
+    调用方据第三项继续处理后半批，不能把它们静默跳过。说明**顺着返回值往上传**，不走模块级收集器——
     同一进程里可能有多个用户的生成任务并行，共享收集器会把 A 的说明串到 B 的结果里。
     """
     work = list(batch)
@@ -256,8 +258,9 @@ async def _fill_one_batch(call: CallModel, budget: _Budget,
         # 收敛到消费侧唯一形状（BB-487）。提示词已直接要求规范形状，
         # 这一步兜的是"模型不是编译器"：它会漏、会用同义词、会退回旧写法。
         # 不兜的后果实测过——断言落在没人读的位置，整批用例静默变成不可执行的空壳。
-        return normalize_generated_cases(
+        normalized, notes = normalize_generated_cases(
             [c for c in cases if isinstance(c, dict)], work)
+        return normalized, notes, len(work)
     raise OutputMalformed("这一批两次都没成")
 
 

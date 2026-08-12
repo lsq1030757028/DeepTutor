@@ -308,6 +308,60 @@ def test_named_node_deduction_only_filters_its_matching_failure():
     assert "not ok 2 - real-regression" in out.stdout
 
 
+def _tap(*rows: str) -> str:
+    return "\n".join(rows)
+
+
+def test_node_gate_requires_complete_consistent_tap_even_without_not_ok():
+    crash = _run_bash(
+        GATE, "node_test_run_is_acceptable 'internal loader crash' 1 ''")
+    assert crash.returncode != 0
+
+    truncated = _tap("ok 1 - good", "# tests 1", "# pass 1")
+    result = _run_bash(
+        GATE, f"node_test_run_is_acceptable '{truncated}' 0 ''")
+    assert result.returncode != 0
+
+
+def test_node_gate_accepts_green_or_only_named_complete_failures():
+    green = _tap(
+        "ok 1 - good", "# tests 1", "# pass 1", "# fail 0",
+        "# cancelled 0", "# skipped 0", "# todo 0")
+    assert _run_bash(
+        GATE, f"node_test_run_is_acceptable '{green}' 0 ''").returncode == 0
+
+    known = _tap(
+        "not ok 1 - known-baseline", "# tests 1", "# pass 0", "# fail 1",
+        "# cancelled 0", "# skipped 0", "# todo 0")
+    assert _run_bash(
+        GATE,
+        f"node_test_run_is_acceptable '{known}' 1 'known-baseline'",
+    ).returncode == 0
+
+
+def test_node_gate_rejects_unknown_bailout_and_inconsistent_summary():
+    mixed = _tap(
+        "not ok 1 - known-baseline", "not ok 2 - real-regression",
+        "# tests 2", "# pass 0", "# fail 2", "# cancelled 0",
+        "# skipped 0", "# todo 0")
+    assert _run_bash(
+        GATE,
+        f"node_test_run_is_acceptable '{mixed}' 1 'known-baseline'",
+    ).returncode != 0
+    bailout = _tap(
+        "Bail out! loader", "# tests 0", "# pass 0", "# fail 0",
+        "# cancelled 0", "# skipped 0", "# todo 0")
+    assert _run_bash(
+        GATE, f"node_test_run_is_acceptable '{bailout}' 1 ''").returncode != 0
+    inconsistent = _tap(
+        "ok 1 - good", "# tests 2", "# pass 1", "# fail 0",
+        "# cancelled 0", "# skipped 0", "# todo 0")
+    assert _run_bash(
+        GATE,
+        f"node_test_run_is_acceptable '{inconsistent}' 0 ''",
+    ).returncode != 0
+
+
 def test_gate_uses_one_configurable_node_runtime_for_every_web_check():
     with open(GATE, encoding="utf-8") as fh:
         gate = fh.read()
@@ -339,6 +393,18 @@ def test_ci_paths_cover_overlay_and_trusted_journey_bridge():
         '"deeptutor/services/mcp/manager.py"',
         '"deeptutor/runtime/providers/**"',
         '"web/components/test-journey/**"',
+        '"web/components/test-workbench/**"',
     )
     for path in required_paths:
         assert workflow.count(path) == 2, path
+
+    host_workflow_path = os.path.abspath(os.path.join(
+        HERE, "..", "..", ".github", "workflows", "tests.yml"
+    ))
+    with open(host_workflow_path, encoding="utf-8") as fh:
+        host_workflow = fh.read()
+    for path in (
+        '"extensions/test-partner/server/generate/**"',
+        '"extensions/test-partner/tests/test_generate*.py"',
+    ):
+        assert host_workflow.count(path) == 2, path

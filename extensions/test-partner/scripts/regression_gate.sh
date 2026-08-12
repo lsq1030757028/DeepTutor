@@ -30,6 +30,37 @@ filter_unexpected_node_failures() {
   fi
 }
 
+node_test_run_is_acceptable() {
+  local output="$1"
+  local exit_code="$2"
+  local known_pattern="$3"
+  local unexpected tests passed failed skipped todo cancelled not_ok_count
+  unexpected=$(filter_unexpected_node_failures "$output" "$known_pattern")
+  [ -z "$unexpected" ] || return 1
+  printf '%s\n' "$output" | grep -q '^Bail out!' && return 1
+  summary_value() {
+    printf '%s\n' "$output" | sed -n "s/^# $1 \([0-9][0-9]*\)$/\1/p" | tail -1
+  }
+  tests=$(summary_value tests)
+  passed=$(summary_value pass)
+  failed=$(summary_value fail)
+  skipped=$(summary_value skipped)
+  todo=$(summary_value todo)
+  cancelled=$(summary_value cancelled)
+  [ -n "$tests" ] && [ -n "$passed" ] && [ -n "$failed" ] && \
+    [ -n "$skipped" ] && [ -n "$todo" ] && [ -n "$cancelled" ] || return 1
+  [ "$tests" -eq $((passed + failed + skipped + todo + cancelled)) ] || return 1
+  not_ok_count=$(printf '%s\n' "$output" | grep -c '^not ok' || true)
+  [ "$not_ok_count" -eq "$failed" ] || return 1
+  if [ "$exit_code" -eq 0 ]; then
+    [ "$failed" -eq 0 ]
+  else
+    # A non-zero code is explainable only by complete TAP containing named,
+    # deducted failures.  Loader/internal crashes have no trustworthy summary.
+    [ "$failed" -gt 0 ] && [ -n "$known_pattern" ]
+  fi
+}
+
 # 单元测试只加载筛选函数，不运行四层回归闸。
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then
   return 0
@@ -86,13 +117,18 @@ if [ ! -d "$ROOT/web/node_modules" ]; then
   FAIL=1
 else
   node_out=$(cd "$ROOT/web" && "$NODE_BIN" scripts/run-node-tests.mjs 2>&1)
+  node_code=$?
   printf '%s\n' "$node_out" | grep -E "^# (pass|fail) " | sed 's/^/  /'
   unexpected=$(filter_unexpected_node_failures "$node_out" "$KNOWN_BROKEN_NODE_TESTS")
-  if [ -z "$unexpected" ]; then
-    verdict 0 "web test:node（具名扣除清单之外零失败）"
+  if node_test_run_is_acceptable "$node_out" "$node_code" "$KNOWN_BROKEN_NODE_TESTS"; then
+    verdict 0 "web test:node（完整 TAP，具名扣除清单之外零失败）"
   else
-    printf '%s\n' "$unexpected" | head -5
-    verdict 1 "web test:node 出现基线外失败"
+    if [ -n "$unexpected" ]; then
+      printf '%s\n' "$unexpected" | head -5
+    else
+      printf '  runner exit=%s；TAP 缺失、截断或汇总不一致\n' "$node_code"
+    fi
+    verdict 1 "web test:node 出现基线外失败或 runner 未完整结束"
   fi
   ( cd "$ROOT/web" && "$NODE_BIN" node_modules/eslint/bin/eslint.js . >/dev/null 2>&1 )
   verdict $? "eslint（0 error 即过，warning 不拦）"

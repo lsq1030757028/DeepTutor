@@ -18,7 +18,12 @@ import {
   openJourneyTrace,
 } from "@/components/test-journey/client";
 import type { RunRow, VerdictRow } from "@/components/test-journey/types";
-import { runTrack, summarizeRun } from "@/components/test-journey/types";
+import {
+  runTrack,
+  selectRun,
+  summarizeRun,
+  verdictParts,
+} from "@/components/test-journey/types";
 
 /**
  * `label` 是 i18n 键。四种结论与聊天富卡共用同一批 `journey.verdict.*` 键——
@@ -34,7 +39,7 @@ const VERDICT_STYLE: Record<string, { label: string; className: string }> = {
 
 function VerdictBadge({ verdict }: { verdict: string }) {
   const { t } = useTranslation();
-  const known = VERDICT_STYLE[String(verdict).toUpperCase()];
+  const known = VERDICT_STYLE[verdictParts(verdict).code];
   // 认不出来的结论码原样显示——**不许翻译、不许归到四种里的任何一种**。
   const label = known ? t(known.label) : verdict;
   const className = known
@@ -78,7 +83,7 @@ export default function ResultTable({
   runs: RunRow[];
 }) {
   const { t } = useTranslation();
-  const [index, setIndex] = useState(runs.length - 1);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [traceStates, setTraceStates] = useState<Record<string, TraceState>>({});
   if (runs.length === 0) {
     return (
@@ -89,7 +94,8 @@ export default function ResultTable({
       </p>
     );
   }
-  const run = runs[Math.min(Math.max(index, 0), runs.length - 1)];
+  const run = selectRun(runs, selectedRunId);
+  if (!run) return null;
   const summary = summarizeRun(run.verdicts);
   const track = runTrack(run.receipt, run.verdicts);
   const probingRows = run.verdicts.filter((r) => r.probing);
@@ -126,13 +132,13 @@ export default function ResultTable({
           <span className="text-xs text-[var(--muted-foreground)]">
             {t("journey.label.attempts")}
           </span>
-          {runs.map((r, i) => (
+          {runs.map((r) => (
             <button
               key={r.run_id}
               type="button"
-              onClick={() => setIndex(i)}
+              onClick={() => setSelectedRunId(r.run_id)}
               className={`rounded-md border px-2 py-0.5 font-mono text-[11px] ${
-                i === index
+                r.run_id === run.run_id
                   ? "border-[var(--primary)] text-[var(--foreground)]"
                   : "border-[var(--border)] text-[var(--muted-foreground)] hover:bg-[var(--muted)]"
               }`}
@@ -194,15 +200,16 @@ export default function ResultTable({
           <tbody>
             {scoredRows.map((row) => {
               const traceState = traceStates[`${run.run_id}:${row.id}`] ?? {};
+              const verdict = verdictParts(row.verdict);
               return (
               <tr key={row.id} className="border-b border-[var(--border)] last:border-0 align-top">
                 <td className="px-3 py-2.5 font-mono text-xs text-[var(--foreground)]">{row.id}</td>
                 <td className="px-3 py-2.5">
                   <VerdictBadge verdict={row.verdict} />
                   {/* 挂起/拦下没写理由 = 没给结论。这里把缺失说出来而不是留白 */}
-                  {["PENDING", "BLOCK", "BLOCKED"].includes(String(row.verdict).toUpperCase()) ? (
+                  {["PENDING", "BLOCK", "BLOCKED"].includes(verdict.code) ? (
                     <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                      {row.note ||
+                      {row.note || verdict.reason ||
                         t("(No reason recorded for holding this one — it must be filled in)")}
                     </p>
                   ) : row.note ? (

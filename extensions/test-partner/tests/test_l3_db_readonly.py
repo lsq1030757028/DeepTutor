@@ -109,6 +109,38 @@ def test_data_modifying_cte_is_rejected(sql):
     assert "CTE" in str(exc.value) or "全句" in str(exc.value)
 
 
+@pytest.mark.parametrize("sql", [
+    "SELECT pg_sleep(600)",
+    "SELECT pg_advisory_lock(42)",
+    "SELECT pg_read_file('/etc/passwd')",
+    "SELECT dblink_exec('remote', 'DELETE FROM t')",
+])
+def test_resource_and_file_functions_are_rejected(sql):
+    with pytest.raises(dbro.DbStatementRejected):
+        dbro.check_statement(sql)
+
+
+def test_connect_sets_server_side_statement_and_lock_timeouts(monkeypatch):
+    captured = {}
+
+    class Connection:
+        def set_session(self, **kwargs):
+            captured["session"] = kwargs
+
+    class Psycopg:
+        @staticmethod
+        def connect(_dsn, **kwargs):
+            captured.update(kwargs)
+            return Connection()
+
+    monkeypatch.setitem(__import__("sys").modules, "psycopg2", Psycopg())
+    conn = dbro.connect("postgresql://readonly@example/db")
+    assert conn is not None
+    assert f"statement_timeout={dbro.STATEMENT_TIMEOUT_MS}" in captured["options"]
+    assert f"lock_timeout={dbro.LOCK_TIMEOUT_MS}" in captured["options"]
+    assert captured["session"] == {"readonly": True, "autocommit": True}
+
+
 def test_dollar_quoted_body_is_neutralised():
     """`$$...$$` 里可以塞任何字符（含分号和引号）。归一化必须先吃掉它。
 

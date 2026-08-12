@@ -45,13 +45,15 @@ collection 里的断言已经被编译成 pm.test 的 JS 文本，反解等于�
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import logging
 import os
 import re
+import tempfile
 import threading
 import time
-from typing import Any
+from typing import Any, Iterator
 
 from server import case_validate, delivery, execute
 
@@ -428,6 +430,99 @@ def variable_usage(root: str | None = None) -> dict[str, Any]:
 #: 后果是让调用方改到 case_id 这种身份字段，比漏掉一个该放的严重得多。
 EDITABLE_FIELDS = ("title", "module", "priority", "case_type", "preconditions",
                    "steps", "expected", "test_data", "endpoints", "request")
+_CASE_UPDATE_THREAD_LOCK = threading.Lock()
+
+
+@contextmanager
+def _case_update_lock(cases_path: str) -> Iterator[None]:
+    """Lock the complete read/validate/write mutation across threads/processes."""
+    lock_path = cases_path + ".lock"
+    with _CASE_UPDATE_THREAD_LOCK:
+        with open(lock_path, "a+b") as lock_file:
+            lock_file.seek(0, os.SEEK_END)
+            if lock_file.tell() == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _write_cases_atomic(cases_path: str, payload: Any) -> None:
+    fd, tmp = tempfile.mkstemp(
+        prefix=f".{os.path.basename(cases_path)}.", suffix=".tmp",
+        dir=os.path.dirname(cases_path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, cases_path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+
+
+def _update_case_locked(safe_id: str, cases_path: str, case_id: str,
+                        patch: dict[str, Any]) -> dict[str, Any]:
+    payload = _read_json(cases_path)
+    rows = payload.get("cases") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        raise WorkbenchError(f"{delivery.CASES_FILE} 读不出用例数组。",
+                             code="CASES_JSON_BROKEN")
+
+    wanted = str(case_id or "").strip()
+    index = next((i for i, r in enumerate(rows)
+                  if isinstance(r, dict) and str(r.get("case_id") or "") == wanted), -1)
+    if index < 0:
+        raise WorkbenchError(f"批次里没有编号「{wanted}」的用例。", code="CASE_NOT_FOUND")
+
+    updated = dict(rows[index])
+    updated.update(patch)
+    updated["origin"] = "human"
+    verdict = case_validate.validate_cases([updated])
+    errors = [e for e in (verdict.get("errors") or [])]
+    if errors:
+        raise WorkbenchError(
+            "改完之后这条用例不合格，没有保存："
+            + "；".join(str(e.get("message") or e) for e in errors[:3]),
+            code="CASE_INVALID")
+
+    rows[index] = updated
+    if isinstance(payload, dict):
+        payload["cases"] = rows
+        payload["last_edited_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        payload = rows
+    try:
+        _write_cases_atomic(cases_path, payload)
+    except OSError as exc:
+        raise WorkbenchError(
+            f"改动没能写进批次目录：{type(exc).__name__}: {exc}。"
+            "常见原因是该批次目录不是当前服务进程建的（属主不同），"
+            "用例本身没有被改动。", code="CASES_WRITE_FAILED") from exc
+
+    log.info("workbench: 批次 %s 的用例 %s 已被人工修改（%d 个字段）",
+             safe_id, wanted, len(patch))
+    return {"ok": True, "case": _case_row(updated, index),
+            "warnings": [str(w.get("message") or w)
+                         for w in (verdict.get("warnings") or [])[:5]]}
 
 
 def update_case(delivery_id: str, case_id: str, patch: Any,
@@ -450,67 +545,14 @@ def update_case(delivery_id: str, case_id: str, patch: Any,
     if not isinstance(patch, dict) or not patch:
         raise WorkbenchError("没给出要改的内容。", code="EMPTY_PATCH")
 
-    payload = _read_json(cases_path)
-    rows = payload.get("cases") if isinstance(payload, dict) else payload
-    if not isinstance(rows, list):
-        raise WorkbenchError(f"{delivery.CASES_FILE} 读不出用例数组。",
-                             code="CASES_JSON_BROKEN")
-
-    wanted = str(case_id or "").strip()
-    index = next((i for i, r in enumerate(rows)
-                  if isinstance(r, dict) and str(r.get("case_id") or "") == wanted), -1)
-    if index < 0:
-        raise WorkbenchError(f"批次里没有编号「{wanted}」的用例。", code="CASE_NOT_FOUND")
-
     rejected = sorted(set(patch) - set(EDITABLE_FIELDS))
     if rejected:
         raise WorkbenchError(
             f"这些字段不允许编辑：{'、'.join(rejected)}。"
             f"可改的是：{'、'.join(EDITABLE_FIELDS)}。", code="FIELD_NOT_EDITABLE")
 
-    updated = dict(rows[index])
-    updated.update(patch)
-    updated["origin"] = "human"          # 留痕：这条被人动过
-
-    # 单条复校：把这一条交给与落盘时同一套规则，errors 非空即拒。
-    verdict = case_validate.validate_cases([updated])
-    errors = [e for e in (verdict.get("errors") or [])]
-    if errors:
-        raise WorkbenchError(
-            "改完之后这条用例不合格，没有保存："
-            + "；".join(str(e.get("message") or e) for e in errors[:3]),
-            code="CASE_INVALID")
-
-    rows[index] = updated
-    if isinstance(payload, dict):
-        payload["cases"] = rows
-        payload["last_edited_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    else:
-        payload = rows
-    # 原子写：改用例的同时被读到半截文件，页面会以为整批坏了
-    tmp = cases_path + ".tmp"
-    try:
-        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-            f.write("\n")
-        os.replace(tmp, cases_path)
-    except OSError as exc:
-        # 写不进去最常见的原因是目录属主不对（例如批次是被另一个身份的进程建的）。
-        # 裸抛会变成一句 Internal Server Error，用户既不知道发生了什么也无从下手。
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise WorkbenchError(
-            f"改动没能写进批次目录：{type(exc).__name__}: {exc}。"
-            "常见原因是该批次目录不是当前服务进程建的（属主不同），"
-            "用例本身没有被改动。", code="CASES_WRITE_FAILED") from exc
-
-    log.info("workbench: 批次 %s 的用例 %s 已被人工修改（%d 个字段）",
-             safe_id, wanted, len(patch))
-    return {"ok": True, "case": _case_row(updated, index),
-            "warnings": [str(w.get("message") or w)
-                         for w in (verdict.get("warnings") or [])[:5]]}
+    with _case_update_lock(cases_path):
+        return _update_case_locked(safe_id, cases_path, case_id, patch)
 
 
 # ── 导出（设计稿第 7 屏） ───────────────────────────────────────────────────

@@ -44,8 +44,10 @@ import json
 import os
 import re
 import secrets
+import shutil
+import tempfile
 import time
-from typing import Any
+from typing import Any, Iterator
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -294,11 +296,73 @@ def _read_json(path: str) -> dict[str, Any]:
 
 
 def _write_json(path: str, data: dict[str, Any]) -> None:
+    """Atomically replace one JSON file without sharing a temporary pathname.
+
+    Every writer gets a private temporary file in the destination directory.
+    A fixed ``batch.json.tmp`` lets two otherwise valid runs overwrite or move
+    each other's staging file before ``os.replace``.
+    """
+    parent = os.path.dirname(path)
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=1)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+
+
+def _assert_batch_payload_safe(data: dict[str, Any], label: str) -> None:
+    """Reject unknown high-entropy values before batch artifacts persist."""
+    from server.journey.gates import credential_scan
+    encoded = json.dumps(data, ensure_ascii=False, sort_keys=True)
+    report = credential_scan.scan_text_content(encoded, label=label)
+    if not report["ok"]:
+        raise ArtifactError(
+            f"{label} 疑似包含凭据，已在落盘前拒绝；请移除或变量化后重试")
+
+
+@contextmanager
+def _file_lock(path: str, *, timeout_s: float = 1200.0) -> Iterator[None]:
+    """Serialize one artifact mutation across threads and local processes."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=1)
-    os.replace(tmp, path)
+    with open(path, "a+b") as fh:
+        fh.seek(0, os.SEEK_END)
+        if fh.tell() == 0:
+            fh.write(b"\0")
+            fh.flush()
+        fh.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            deadline = time.monotonic() + timeout_s
+            while True:
+                try:
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(
+                            f"等待产物锁超时：{os.path.basename(path)}")
+                    time.sleep(0.05)
+            try:
+                yield
+            finally:
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
 # ── 批次 ────────────────────────────────────────────────────────────────────
@@ -325,6 +389,7 @@ def create_batch(title: str, *, owner: str = "", base_url: str = "",
         "created_at": now_iso(),
         "run_ids": [],
     }
+    _assert_batch_payload_safe(meta, "batch.json")
     target = batch_dir(batch_id, create=True, owner=partition, root=root)
     _write_json(os.path.join(target, "batch.json"), meta)
     return meta
@@ -340,6 +405,69 @@ def save_batch(meta: dict[str, Any], *, root: str | None = None) -> None:
     _write_json(os.path.join(batch_dir(meta["batch_id"],
                                        owner=meta.get("partition") or None,
                                        root=root), "batch.json"), meta)
+
+
+def append_run_id(batch_id: str, run_id: str, *, owner: str | None = None,
+                  root: str | None = None) -> dict[str, Any]:
+    """Append a completed run without losing a concurrent sibling run.
+
+    The lock covers the complete read-modify-write transaction.  It is scoped
+    to the resolved owner partition and batch, so different batches remain
+    independent while two runs of the same batch both remain discoverable.
+    """
+    ident = _safe_id(batch_id, _BATCH_ID_RE, "batch_id")
+    safe_run = _safe_id(run_id, _RUN_ID_RE, "run_id")
+    target, partition = _resolve_dir("batches", ident, owner, root)
+    path = os.path.join(target, "batch.json")
+    with _file_lock(path + ".lock"):
+        meta = _read_json(path)
+        recorded_partition = safe_owner(
+            meta.get("partition") or meta.get("owner"))
+        if recorded_partition != partition:
+            raise ArtifactError("batch.json 归属与所在分区不一致")
+        run_ids = meta.get("run_ids")
+        if not isinstance(run_ids, list):
+            raise ArtifactError("batch.json 的 run_ids 必须是数组")
+        if safe_run not in run_ids:
+            meta["run_ids"] = [*run_ids, safe_run]
+            _write_json(path, meta)
+        return meta
+
+
+@contextmanager
+def batch_mutation_lock(batch_id: str, *, owner: str | None = None,
+                        root: str | None = None) -> Iterator[None]:
+    """Serialize state-changing tools for one owner-bound batch."""
+    target = batch_dir(batch_id, owner=owner, root=root)
+    with _file_lock(os.path.join(target, ".mutation.lock")):
+        yield
+
+
+def invalidate_bundle(batch_id: str, *, owner: str | None = None,
+                      root: str | None = None) -> bool:
+    """Remove the derived bundle when its approved caseset is superseded."""
+    parent = os.path.realpath(batch_dir(
+        batch_id, owner=owner, root=root))
+    target = os.path.realpath(os.path.join(parent, "bundle"))
+    if os.path.commonpath([parent, target]) != parent:
+        raise ArtifactError("bundle 路径越出批次目录")
+    if not os.path.isdir(target):
+        return False
+    shutil.rmtree(target)
+    return True
+
+
+def discard_fresh_run(run_id: str, *, owner: str | None = None,
+                      root: str | None = None) -> bool:
+    """Remove only a validated run directory created by the current attempt."""
+    parent = os.path.realpath(runs_root(owner, root=root))
+    target = os.path.realpath(run_dir(run_id, owner=owner, root=root))
+    if os.path.commonpath([parent, target]) != parent:
+        raise ArtifactError("run 路径越出 owner 的 runs 目录")
+    if not os.path.isdir(target):
+        return False
+    shutil.rmtree(target)
+    return True
 
 
 def list_batches(*, owner: str | None = None,
@@ -385,6 +513,9 @@ def save_artifact(batch_id: str, kind: str, payload: dict[str, Any],
                   *, schema_version: str = "1", owner: str | None = None,
                   root: str | None = None) -> dict[str, Any]:
     """落盘一个类型化产物。信封字段由本函数盖章，payload 不得抢注。"""
+    if kind not in ARTIFACT_FILES:
+        raise ArtifactError(
+            f"未知产物类型：{kind}（合法：{'/'.join(ARTIFACT_FILES)}）")
     load_batch(batch_id, owner=owner, root=root)  # 批次必须先存在
     body = dict(payload)
     for reserved in ("artifact", "batch_id"):
@@ -393,6 +524,7 @@ def save_artifact(batch_id: str, kind: str, payload: dict[str, Any],
     body["schema_version"] = body.get("schema_version") or schema_version
     body["batch_id"] = batch_id
     body.setdefault("created_at", now_iso())
+    _assert_batch_payload_safe(body, ARTIFACT_FILES[kind])
     _write_json(artifact_path(batch_id, kind, owner=owner, root=root), body)
     return body
 
@@ -483,8 +615,11 @@ def append_event(batch_id: str, event: dict[str, Any], *, owner: str | None = No
     row = dict(event)
     row.setdefault("at", now_iso())
     path = os.path.join(batch_dir(batch_id, owner=owner, root=root), "events.jsonl")
-    with open(path, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    with _file_lock(path + ".lock"):
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
     return row
 
 

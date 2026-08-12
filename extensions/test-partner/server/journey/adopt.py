@@ -28,6 +28,74 @@ def _slugify(text: str) -> str:
     return s or "caseset"
 
 
+def _draft_digest(case: dict[str, Any]) -> str:
+    """Digest the business content while excluding draft-only identity fields."""
+    payload = dict(case)
+    payload.pop("draft_id", None)
+    payload.pop("kind", None)
+    for key in ("case_id", "case_version", "source_case_digest", "oracle_digest"):
+        payload.pop(key, None)
+    return digest.sha256_digest(payload)
+
+
+def _identity_history(batch_id: str) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    """Recover the latest stable identity for every previously adopted draft.
+
+    New receipts carry an explicit mapping.  For an existing M1 receipt, infer
+    the mapping once from its selected order and the matching current caseset.
+    """
+    latest: dict[str, dict[str, Any]] = {}
+    used: set[str] = set()
+    events = artifacts.read_events(batch_id)
+    for event in events:
+        if event.get("type") != "adopt_confirm":
+            continue
+        for identity in event.get("identities") or []:
+            draft_id = str(identity.get("draft_id") or "")
+            case_id = str(identity.get("case_id") or "")
+            version = identity.get("case_version")
+            draft_digest = str(identity.get("draft_digest") or "")
+            if draft_id and case_id and isinstance(version, int) and draft_digest:
+                latest[draft_id] = {
+                    "case_id": case_id,
+                    "case_version": version,
+                    "draft_digest": draft_digest,
+                }
+                used.add(case_id)
+
+    if artifacts.has_artifact(batch_id, "approved_caseset"):
+        current = artifacts.load_artifact(batch_id, "approved_caseset")
+        current_cases = current.get("cases") or []
+        used.update(str(case.get("case_id") or "") for case in current_cases)
+        matching = next((
+            event for event in reversed(events)
+            if event.get("type") == "adopt_confirm"
+            and event.get("caseset_id") == current.get("caseset_id")
+        ), None)
+        selected = matching.get("selected") if matching else None
+        if isinstance(selected, list) and len(selected) == len(current_cases):
+            for draft_id, case in zip(selected, current_cases):
+                if str(draft_id) not in latest:
+                    latest[str(draft_id)] = {
+                        "case_id": str(case.get("case_id") or ""),
+                        "case_version": int(case.get("case_version") or 1),
+                        "draft_digest": _draft_digest(case),
+                    }
+    used.discard("")
+    return latest, used
+
+
+def _next_case_id(slug: str, rule_number: str, used: set[str]) -> str:
+    pattern = re.compile(
+        rf"^{re.escape(slug)}/R{re.escape(rule_number)}-C([0-9]{{3}})$")
+    highest = max(
+        (int(match.group(1)) for case_id in used
+         if (match := pattern.match(case_id))),
+        default=0,
+    )
+    return f"{slug}/R{rule_number}-C{highest + 1:03d}"
+
+
 def _materialize(batch_id: str, caseset: dict[str, Any]) -> None:
     """派生视图：cases.md（人读）+ cases_exec.json + cases_index.json（机器读）。
     全部只带 digest 回指，禁反写（派生物可随时删除重生成）。"""
@@ -73,18 +141,34 @@ def adopt(batch_id: str, *, selected_draft_ids: list[str],
         return {"ok": False, "problems": ["未勾选任何用例——采纳集不能为空"]}
 
     slug = _slugify(caseset_slug or "bysms")
-    counters: dict[str, int] = {}
+    identities, used_case_ids = _identity_history(batch_id)
     cases: list[dict[str, Any]] = []
+    receipt_identities: list[dict[str, Any]] = []
     for did in selected_draft_ids:
         src = dict(by_draft[did])
+        content_digest = _draft_digest(src)
         src.pop("draft_id", None)
         src.pop("kind", None)
         rid = src["source_anchor"]["rule_id"]
         rnum = re.sub(r"[^0-9]", "", rid) or "0"
-        counters[rnum] = counters.get(rnum, 0) + 1
-        src["case_id"] = f"{slug}/R{rnum}-C{counters[rnum]:03d}"
-        src["case_version"] = 1
+        previous = identities.get(did)
+        if previous:
+            case_id = previous["case_id"]
+            case_version = previous["case_version"] + (
+                previous["draft_digest"] != content_digest)
+        else:
+            case_id = _next_case_id(slug, rnum, used_case_ids)
+            case_version = 1
+        used_case_ids.add(case_id)
+        src["case_id"] = case_id
+        src["case_version"] = case_version
         cases.append(digest.stamp_case_digests(src))
+        receipt_identities.append({
+            "draft_id": did,
+            "draft_digest": content_digest,
+            "case_id": case_id,
+            "case_version": case_version,
+        })
 
     source = dict(intake["source"])
     if not source.get("content_digest"):
@@ -125,6 +209,7 @@ def adopt(batch_id: str, *, selected_draft_ids: list[str],
         "by": confirmed_by or "unspecified",
         "caseset_id": caseset["caseset_id"],
         "selected": selected_draft_ids,
+        "identities": receipt_identities,
     })
     return {"ok": True, "approved_caseset": art, "cases_gate": gate,
             "case_ids": [c["case_id"] for c in cases]}

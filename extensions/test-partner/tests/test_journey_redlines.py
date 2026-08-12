@@ -43,6 +43,24 @@ def test_navigation_and_route_policy():
     assert rl.route_decision(base, "https://cdn.example.com/lib.js") == "abort"
 
 
+@pytest.mark.parametrize("url", [
+    "https://user:secret@example.com",
+    "https://example.com/path?token=secret",
+    "https://example.com/path#secret",
+    "ftp://example.com/file",
+])
+def test_persisted_target_url_rejects_secret_bearing_or_non_http_shapes(url):
+    result = rl.safe_target_url(url)
+    assert result["ok"] is False
+    assert "secret" not in result["error"]
+
+
+def test_persisted_target_url_normalizes_default_port_and_trailing_slash():
+    assert rl.safe_target_url("HTTPS://Example.COM:443/app/") == {
+        "ok": True, "url": "https://example.com/app",
+    }
+
+
 # ── 红线 2：变量残留 ───────────────────────────────────────────────────────
 
 def test_unresolved_vars_and_render():

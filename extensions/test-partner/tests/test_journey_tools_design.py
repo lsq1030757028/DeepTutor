@@ -300,3 +300,47 @@ def test_adopt_unknown_draft_rejected(store, local_target):
     bid = chain_to_draft(store, local_target)
     r = adopt.adopt(bid, selected_draft_ids=["d1", "nope"])
     assert not r["ok"] and any("nope" in p for p in r["problems"])
+
+
+def test_readopt_same_draft_keeps_case_id_and_version(store, local_target):
+    bid = chain_to_draft(store, local_target)
+    first = adopt.adopt(bid, selected_draft_ids=["d1"])
+    second = adopt.adopt(bid, selected_draft_ids=["d1"])
+    assert first["ok"] and second["ok"]
+    case = store.load_artifact(bid, "approved_caseset")["cases"][0]
+    assert second["case_ids"] == first["case_ids"]
+    assert case["case_version"] == 1
+
+
+def test_readopt_changed_draft_keeps_id_and_increments_version(store, local_target):
+    bid = chain_to_draft(store, local_target)
+    first = adopt.adopt(bid, selected_draft_ids=["d1"])
+    changed = make_case("d1")
+    changed["expected"] = "进入管理台并展示当前用户"
+    drafted = draft_cases.draft(bid, cases=[changed])
+    assert drafted["ok"]
+    second = adopt.adopt(bid, selected_draft_ids=["d1"])
+    case = store.load_artifact(bid, "approved_caseset")["cases"][0]
+    assert second["case_ids"] == first["case_ids"]
+    assert case["case_version"] == 2
+
+
+def test_new_draft_never_reuses_removed_case_id(store, local_target):
+    bid = chain_to_draft(store, local_target, n=2)
+    first = adopt.adopt(bid, selected_draft_ids=["d1", "d2"])
+    drafted = draft_cases.draft(bid, cases=[make_case("d3")])
+    assert drafted["ok"]
+    second = adopt.adopt(bid, selected_draft_ids=["d3"])
+    assert first["case_ids"] == ["bysms/R1-C001", "bysms/R1-C002"]
+    assert second["case_ids"] == ["bysms/R1-C003"]
+
+
+def test_chat_ask_user_is_an_approved_human_gate(store, local_target):
+    bid = chain_to_draft(store, local_target, n=1)
+    result = adopt.adopt(
+        bid,
+        selected_draft_ids=["d1"],
+        adopted_via="chat_ask_user",
+        confirmed_by="turn-answer",
+    )
+    assert result["ok"], result

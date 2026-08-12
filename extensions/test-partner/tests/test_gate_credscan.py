@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """credential_scan 金标验收（DoD 7：扫描器自身+金标样本离线判）。"""
 import json
+import os
 import zipfile
 
 from server.journey.gates import credential_scan as cs
@@ -27,6 +28,80 @@ def test_known_secret_in_binary_caught(tmp_path):
         z.writestr("network.txt", "POST body: password=88888888", zipfile.ZIP_STORED)
     r = cs.scan_tree(str(tmp_path), known_secrets=["88888888"])
     assert not r["ok"] and any(h["file"] == "trace.zip" for h in r["known_hits"])
+
+
+def test_known_secret_inside_deflated_trace_member_is_caught(tmp_path):
+    secret = "known-secret-value-73gH2kLm9Pq4"
+    path = tmp_path / "trace.zip"
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("trace.network", json.dumps({"cookie": secret}))
+    assert secret.encode() not in path.read_bytes(), "fixture must prove raw zip scan is insufficient"
+    result = cs.scan_tree(str(tmp_path), known_secrets=[secret])
+    assert result["ok"] is False
+    assert result["known_hits"][0]["file"] == "trace.zip!trace.network"
+
+
+def test_unknown_high_entropy_cookie_inside_trace_is_caught(tmp_path):
+    token = "session_W8m3Qp9Zx2Tv7Nk5Ld4Hs6Jr"
+    with zipfile.ZipFile(
+            tmp_path / "trace.zip", "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("trace.network", json.dumps({"set-cookie": token}))
+    result = cs.scan_tree(str(tmp_path))
+    assert result["ok"] is False
+    assert any(hit["file"] == "trace.zip!trace.network"
+               for hit in result["entropy_hits"])
+
+
+def test_unsafe_zip_member_is_fail_closed_without_expanding_it(tmp_path):
+    with zipfile.ZipFile(
+            tmp_path / "trace.zip", "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("huge.txt", b"0" * (cs.MAX_ARCHIVE_MEMBER_BYTES + 1))
+    result = cs.scan_tree(str(tmp_path))
+    assert result["ok"] is False
+    assert result["archive_rejections"]
+
+
+def test_known_secrets_are_stream_scanned_across_a_large_binary(tmp_path):
+    secrets = ["first-secret", "boundary-secret", "middle-secret", "last-secret"]
+    path = tmp_path / "large-trace.zip"
+    size = cs.MAX_BYTES + 2 * cs.SCAN_CHUNK_BYTES
+    positions = [
+        0,
+        cs.SCAN_CHUNK_BYTES - 3,
+        size // 2,
+        size - len(secrets[-1]),
+    ]
+    with open(path, "wb") as fh:
+        fh.seek(size - 1)
+        fh.write(b"\0")
+        for position, secret in zip(positions, secrets):
+            fh.seek(position)
+            fh.write(secret.encode("utf-8"))
+
+    result = cs.scan_tree(str(tmp_path), known_secrets=secrets)
+    assert result["ok"] is False
+    assert {hit["secret_index"] for hit in result["known_hits"]} == set(range(4))
+    assert result["scanned_files"] == 1
+    assert "large-trace.zip" not in result["entropy_skipped_large_files"]
+    assert not any(secret in json.dumps(result) for secret in secrets)
+
+
+def test_large_text_skips_entropy_only_not_known_secret_scan(tmp_path):
+    path = tmp_path / "large.log"
+    with open(path, "wb") as fh:
+        fh.seek(cs.MAX_BYTES + 1)
+        fh.write(b"\0")
+    result = cs.scan_tree(str(tmp_path), known_secrets=["absent-secret"])
+    assert result["ok"] is True
+    assert result["scanned_files"] == 1
+    assert result["entropy_skipped_large_files"] == ["large.log"]
+
+
+def test_short_known_value_is_not_silently_ignored(tmp_path):
+    (tmp_path / "tiny.bin").write_bytes(b"x=ab")
+    result = cs.scan_tree(str(tmp_path), known_secrets=["ab"])
+    assert result["ok"] is False
+    assert result["known_hits"][0]["secret_len"] == 2
 
 
 def test_custom_high_entropy_string_caught(tmp_path):

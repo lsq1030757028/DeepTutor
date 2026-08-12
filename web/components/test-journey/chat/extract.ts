@@ -74,7 +74,7 @@ export interface RuleRow {
 }
 
 export interface DraftCaseRow {
-  case_id: string;
+  draft_id: string;
   title: string;
   probing: boolean;
 }
@@ -295,7 +295,7 @@ function applyDraft(m: Mutable, payload: Record<string, unknown>): boolean {
     const anchor = asRecord(c.source_anchor) ?? {};
     return [
       {
-        case_id: str(c.case_id),
+        draft_id: str(c.draft_id),
         title: str(c.title),
         probing: Boolean(anchor.probing ?? c.probing),
       },

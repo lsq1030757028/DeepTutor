@@ -13,26 +13,58 @@ import os
 from typing import Any
 
 from server.journey import artifacts
+from server.journey.digest import sha256_digest
 from server.journey.gates import capability_ladder, entity_scope
 from server.journey.project_verdicts import read_verdicts
 
 
 def build_coverage(batch_id: str, run_id: str = "") -> dict[str, Any]:
+    caseset = None
+    if artifacts.has_artifact(batch_id, "approved_caseset"):
+        caseset = artifacts.load_artifact(batch_id, "approved_caseset")
+    batch = artifacts.load_batch(batch_id)
+    run_id = run_id or (batch.get("run_ids") or [""])[-1]
+    receipt: dict[str, Any] = {}
+    if run_id:
+        if run_id not in (batch.get("run_ids") or []):
+            return {"ok": False, "code": "E_RUN_BATCH_MISMATCH",
+                    "problems": ["run_id 不属于当前批次，覆盖账本未写入"]}
+        try:
+            with open(os.path.join(artifacts.run_dir(run_id), "receipt.json"),
+                      encoding="utf-8") as fh:
+                receipt = json.load(fh)
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "code": "E_RUN_RECEIPT_INVALID",
+                    "problems": [f"run receipt 不可读，覆盖账本未写入：{exc}"]}
+        expected_owner = artifacts.safe_owner(
+            batch.get("partition") or batch.get("owner"))
+        expected_caseset_id = str((caseset or {}).get("caseset_id") or "")
+        expected_caseset_sha = sha256_digest(caseset) if caseset else ""
+        mismatches = []
+        if str(receipt.get("batch_id") or "") != batch_id:
+            mismatches.append("batch_id")
+        if str(receipt.get("owner_partition") or "") != expected_owner:
+            mismatches.append("owner_partition")
+        if str(receipt.get("caseset_id") or "") != expected_caseset_id:
+            mismatches.append("caseset_id")
+        if str(receipt.get("caseset_sha256") or "") != expected_caseset_sha:
+            mismatches.append("caseset_sha256")
+        if mismatches:
+            return {"ok": False, "code": "E_RUN_STATE_MISMATCH",
+                    "problems": [
+                        "run 与当前批次/采纳集不一致，覆盖账本未写入："
+                        + ",".join(mismatches)]}
+
     analysis = artifacts.load_artifact(batch_id, "test_analysis")
     frame = artifacts.load_artifact(batch_id, "business_frame")
     rules = {r["rule_id"]: r for r in frame["rules"]}
 
-    caseset = None
-    if artifacts.has_artifact(batch_id, "approved_caseset"):
-        caseset = artifacts.load_artifact(batch_id, "approved_caseset")
     draft = None
     if artifacts.has_artifact(batch_id, "case_draft"):
         draft = artifacts.load_artifact(batch_id, "case_draft")
     uncovered_decl = {d.get("rule_id"): d.get("reason", "")
                       for d in (draft or {}).get("uncovered_rules", [])}
 
-    batch = artifacts.load_batch(batch_id)
-    run_id = run_id or (batch.get("run_ids") or [""])[-1]
     verdicts = {v["id"]: v for v in (read_verdicts(run_id) if run_id else [])}
 
     # 实体溯源（0030）：需求所指实体 vs 本轮实际写入实体。
@@ -119,14 +151,6 @@ def build_coverage(batch_id: str, run_id: str = "") -> dict[str, Any]:
     pending_cases = [c["case_id"] for c in decision_cases
                      if c["verdict"] not in ("PASS", "FAIL")]
     failed_cases = [c["case_id"] for c in decision_cases if c["verdict"] == "FAIL"]
-    receipt: dict[str, Any] = {}
-    if run_id:
-        try:
-            with open(os.path.join(artifacts.run_dir(run_id), "receipt.json"),
-                      encoding="utf-8") as fh:
-                receipt = json.load(fh)
-        except (OSError, ValueError):
-            receipt = {}
     security_ok = receipt.get("credential_scan_ok") is True
     official_complete = bool(decision_cases) and not pending_cases
     if not security_ok:

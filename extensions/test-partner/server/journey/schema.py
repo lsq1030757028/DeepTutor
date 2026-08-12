@@ -21,7 +21,7 @@ CASESET_ID_RE = re.compile(r"^acs-[0-9]{8}-[a-z0-9]{6,}$")
 CASE_ID_RE = re.compile(r"^[a-z0-9-]+/R[0-9]+-C[0-9]{3}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 SOURCE_KINDS = {"requirement_doc", "tapd", "pasted_text", "har_fastlane"}
-ADOPTED_VIA = {"workbench_selection", "chat_confirm"}
+ADOPTED_VIA = {"workbench_selection", "chat_confirm", "chat_ask_user"}
 EVIDENCE_KINDS = {"playwright_trace", "screenshot", "http_transcript",
                   "db_snapshot", "console_log"}
 

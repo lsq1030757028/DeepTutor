@@ -43,7 +43,7 @@ interface InspectResponse {
 }
 
 interface GeneratedCase {
-  id?: string;
+  case_id?: string;
   title?: string;
   intent?: string;
   request?: { method?: string; url?: string; assertions?: unknown[] };
@@ -188,9 +188,8 @@ export default function NewBatchFlow({ onDone, onCancel, resumeJobId = null }: {
           if (cur.state === "done" || cur.state === "failed" || cur.state === "cancelled") {
             stopPolling();
             if (cur.state === "done") {
-              // 默认全选：模型产出的都可采纳，用户要做的是"去掉不要的"，
-              // 而不是从零勾一遍——后者在十几条时是纯苦力。
-              setPicked(new Set((cur.result?.cases || []).map((c) => String(c.id))));
+              // 采纳是显式人闸：模型生成的内容不代表用户已同意入库。
+              setPicked(new Set());
               setStep("review");
             }
           }
@@ -217,7 +216,7 @@ export default function NewBatchFlow({ onDone, onCancel, resumeJobId = null }: {
         setJob(cur);
         if (cur.state === "done") {
           stopPolling();
-          setPicked(new Set((cur.result?.cases || []).map((c) => String(c.id))));
+          setPicked(new Set());
           setStep("review");
         } else if (cur.state === "failed" || cur.state === "cancelled") {
           stopPolling();
@@ -261,7 +260,7 @@ export default function NewBatchFlow({ onDone, onCancel, resumeJobId = null }: {
         result: {
           ...prev.result,
           cases: prev.result.cases.map((c) =>
-            String(c.id) === caseId ? { ...c, ...patch, _edited: true } : c),
+            String(c.case_id) === caseId ? { ...c, ...patch, _edited: true } : c),
         },
       };
     });
@@ -275,7 +274,7 @@ export default function NewBatchFlow({ onDone, onCancel, resumeJobId = null }: {
         result: {
           ...prev.result,
           cases: prev.result.cases.map((c) => {
-            if (String(c.id) !== caseId) return c;
+            if (String(c.case_id) !== caseId) return c;
             const req = (c.request || {}) as Record<string, unknown>;
             const existing = Array.isArray(req.assertions) ? req.assertions : [];
             return {
@@ -310,8 +309,8 @@ export default function NewBatchFlow({ onDone, onCancel, resumeJobId = null }: {
           // 采纳前的就地修改：只送改过的字段，底稿仍是服务端那份
           edits: Object.fromEntries(
             (job.result?.cases || [])
-              .filter((c) => picked.has(String(c.id)) && c._edited)
-              .map((c) => [String(c.id), {
+              .filter((c) => picked.has(String(c.case_id)) && c._edited)
+              .map((c) => [String(c.case_id), {
                 ...(c.title !== undefined ? { title: c.title } : {}),
                 ...(c.request !== undefined ? { request: c.request } : {}),
               }]),
@@ -534,9 +533,10 @@ export default function NewBatchFlow({ onDone, onCancel, resumeJobId = null }: {
                 </thead>
                 <tbody>
                   {cases.map((c) => {
-                    const id = String(c.id);
+                    const id = String(c.case_id);
                     const on = picked.has(id);
-                    const thin = !c.assertions || c.assertions.length <= 1;
+                    const effectiveAssertions = c.request?.assertions ?? c.assertions ?? [];
+                    const thin = effectiveAssertions.length <= 1;
                     return (
                       <tr key={id}>
                         <td className="border-b border-[var(--border)]/60 px-2.5 py-2 align-top">
@@ -609,13 +609,18 @@ export default function NewBatchFlow({ onDone, onCancel, resumeJobId = null }: {
             </div>
 
             <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-3">
+              {job?.result?.complete === false ? (
+                <p className="w-full text-[12px] text-red-600 dark:text-red-400">
+                  {t("This generation is incomplete and cannot be adopted. Regenerate before continuing.")}
+                </p>
+              ) : null}
               <span className="text-[12px] text-[var(--muted-foreground)]">
                 {t("{{n}} selected", { n: picked.size })}
               </span>
               <span className="flex-1" />
               <button
                 type="button"
-                disabled={busy || picked.size === 0}
+                disabled={busy || picked.size === 0 || job?.result?.complete !== true}
                 onClick={() => void adopt()}
                 className="inline-flex items-center gap-1.5 rounded-[9px] bg-[var(--primary)] px-3.5 py-1.5 text-[12.5px] font-medium text-[var(--primary-foreground)] disabled:opacity-45"
               >

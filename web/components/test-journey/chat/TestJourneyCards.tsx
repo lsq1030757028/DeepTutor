@@ -164,6 +164,40 @@ function WorkbenchLink({
   );
 }
 
+function ChatLink({
+  batchId,
+  label,
+  disabled,
+  emphasis,
+}: {
+  batchId: string;
+  label: string;
+  disabled?: boolean;
+  emphasis?: boolean;
+}) {
+  const base =
+    "shrink-0 rounded-lg border px-2.5 py-1 text-[11.5px] transition-colors";
+  if (disabled || !batchId) {
+    return (
+      <span className={`${base} cursor-not-allowed border-[var(--border)] text-[var(--muted-foreground)]/60`}>
+        {label}
+      </span>
+    );
+  }
+  return (
+    <a
+      href={`/home?capability=test&test_batch=${encodeURIComponent(batchId)}`}
+      className={
+        emphasis
+          ? `${base} border-transparent bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90`
+          : `${base} border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--muted)]`
+      }
+    >
+      {label}
+    </a>
+  );
+}
+
 function CaseRow({
   id,
   title,
@@ -252,7 +286,7 @@ function DraftCard({ state }: { state: JourneyState }) {
       meta={cases.length > 0 ? <Chip>{C.draft.count(cases.length)}</Chip> : null}
       boundary={C.draft.boundary}
       action={
-        <WorkbenchLink
+        <ChatLink
           batchId={state.batchId}
           label={live ? C.draft.actionPending : C.draft.action}
           disabled={live}
@@ -264,8 +298,8 @@ function DraftCard({ state }: { state: JourneyState }) {
           <div>
             {cases.map((c) => (
               <CaseRow
-                key={c.case_id}
-                id={c.case_id}
+                key={c.draft_id}
+                id={c.draft_id}
                 title={c.title}
                 badge={
                   <Chip tone={c.probing ? "warn" : "mute"}>
@@ -399,11 +433,11 @@ function CoverageCard({ state }: { state: JourneyState }) {
       meta={<Chip>{C.coverage.ruleCount(s.total_rules)}</Chip>}
       boundary={C.coverage.boundary}
       action={
-        <WorkbenchLink
-          batchId={state.batchId}
-          label={cov.done ? C.coverage.actionDone : C.coverage.action}
-          emphasis={!cov.done}
-        />
+        cov.done ? (
+          <WorkbenchLink batchId={state.batchId} label={C.coverage.actionDone} />
+        ) : (
+          <ChatLink batchId={state.batchId} label={C.coverage.action} emphasis />
+        )
       }
     >
       <div className="flex h-2 overflow-hidden rounded-full bg-[var(--muted)]">

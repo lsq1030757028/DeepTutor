@@ -35,7 +35,8 @@ from server.journey.pw_harness import case_slug
 COMPILER_VERSION = "m1.2"
 _SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 _EMBED = {"_redlines.py": "redlines.py", "_runtime.py": "pw_runtime.py",
-          "_harness.py": "pw_harness.py", "_dbro.py": "db_readonly.py"}
+          "_harness.py": "pw_harness.py", "_dbro.py": "db_readonly.py",
+          "_pid_ledger.py": "pid_ledger.py"}
 
 _CONFTEST = '''# 自动生成：AutomationBundle conftest（compiler {version}）。派生物，禁手改。
 import os
@@ -144,14 +145,14 @@ def _gen_tests(caseset: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     return "\n".join(lines), mapping
 
 
-def _collect_only(bundle_dir: str) -> tuple[list[str], str]:
+def _collect_only(bundle_dir: str) -> tuple[list[str], str, int]:
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q",
          "-c", "pytest.ini", "."],
         cwd=bundle_dir, capture_output=True, text=True, encoding="utf-8",
         timeout=120)
     names = re.findall(r"test_cases\.py::(test_[a-z0-9_]+)", proc.stdout or "")
-    return names, (proc.stdout or "") + (proc.stderr or "")
+    return names, (proc.stdout or "") + (proc.stderr or ""), proc.returncode
 
 
 def compile_bundle(batch_id: str) -> dict[str, Any]:
@@ -211,6 +212,7 @@ def compile_bundle(batch_id: str) -> dict[str, Any]:
             "schema_version": "1",
             "batch_id": batch_id,
             "caseset_id": caseset["caseset_id"],
+            "caseset_sha256": digest.sha256_digest(caseset),
             "caseset_schema_version": caseset["schema_version"],
             "compiler_version": COMPILER_VERSION,
             "generated_at": artifacts.now_iso(),
@@ -238,11 +240,12 @@ def compile_bundle(batch_id: str) -> dict[str, Any]:
             raise _GateFail
 
         # 闸 3+4：collect 与映射
-        collected, out = _collect_only(bundle_dir)
+        collected, out, collect_rc = _collect_only(bundle_dir)
         expected = [m["test_name"] for m in mapping]
-        if sorted(collected) != sorted(expected):
+        if collect_rc != 0 or sorted(collected) != sorted(expected):
             problems.append(
-                f"collect 与映射不一致：collected={sorted(collected)} "
+                f"collect 失败或与映射不一致：rc={collect_rc} "
+                f"collected={sorted(collected)} "
                 f"expected={sorted(expected)}；输出尾部：{out[-500:]}")
             raise _GateFail
 

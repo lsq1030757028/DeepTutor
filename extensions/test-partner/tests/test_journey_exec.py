@@ -147,7 +147,7 @@ def test_compile_produces_bundle_and_passes_gate(store, target):
     assert r["ok"], r
     d = r["bundle_dir"]
     for f in ("bundle.json", "test_cases.py", "conftest.py", "pytest.ini",
-              "_redlines.py", "_runtime.py", "_harness.py"):
+              "_redlines.py", "_runtime.py", "_harness.py", "_pid_ledger.py"):
         assert os.path.isfile(os.path.join(d, f))
     with open(os.path.join(d, "bundle.json"), encoding="utf-8") as fh:
         manifest = json.load(fh)
@@ -170,15 +170,74 @@ def test_compile_gate_blocks_digest_tamper(store, target):
     assert not os.path.isdir(os.path.join(store.batch_dir(bid), "bundle"))
 
 
-def test_compile_gate_credscan_blocks_planted_secret(store, target):
+def test_batch_artifact_gate_blocks_planted_secret_before_compile(store, target):
     bad = api_case("d1")
     bad["title"] = "内联凭据 kJ8x2Qw9zR4tYv7uB3nM5pL6sD1fG0hA"
-    bid = build_batch(store, target, [bad, api_case("d2")])
-    r = compile_bundle.compile_bundle(bid)
-    assert not r["ok"] and any("凭据扫描" in p for p in r["problems"])
+    with pytest.raises(store.ArtifactError, match="落盘前拒绝"):
+        build_batch(store, target, [bad, api_case("d2")])
+    assert not any("case_draft.json" in filenames
+                   for _dir, _subdirs, filenames in os.walk(store.batches_root()))
+
+
+@pytest.mark.parametrize("returncode", [1, 2, 3, 4, 5])
+def test_compile_gate_rejects_nonzero_collect_even_with_complete_nodes(
+        store, target, monkeypatch, returncode):
+    bid = build_batch(store, target, [api_case("d1")])
+    real_collect = compile_bundle._collect_only
+
+    def failed_collect(bundle_dir):
+        names, output, _rc = real_collect(bundle_dir)
+        return names, output + "\nINTERNALERROR after collection", returncode
+
+    monkeypatch.setattr(compile_bundle, "_collect_only", failed_collect)
+    result = compile_bundle.compile_bundle(bid)
+    assert result["ok"] is False
+    assert any(f"rc={returncode}" in problem for problem in result["problems"])
+    assert not os.path.isdir(os.path.join(store.batch_dir(bid), "bundle"))
 
 
 # ── execute：API 轨端到端 + 红线 ───────────────────────────────────────────
+
+
+@pytest.mark.parametrize("returncode", [1, 2, 3, 4, 5])
+def test_nonzero_pytest_exit_with_partial_rows_can_never_pass(returncode):
+    rows = [{"case_id": "exectest/R1-C001", "outcome": "passed"}]
+    verdict, integrity = execute_run._execution_verdict(
+        rows, returncode, ["exectest/R1-C001", "exectest/R1-C002"])
+    assert verdict == "BLOCK"
+    assert integrity["ok"] is False
+    assert integrity["missing_case_ids"] == ["exectest/R1-C002"]
+
+
+def test_complete_unique_results_with_zero_exit_can_pass():
+    rows = [
+        {"case_id": "exectest/R1-C001", "outcome": "passed"},
+        {"case_id": "exectest/R1-C002", "outcome": "passed"},
+    ]
+    verdict, integrity = execute_run._execution_verdict(
+        rows, 0, ["exectest/R1-C001", "exectest/R1-C002"])
+    assert verdict == "PASS" and integrity["ok"] is True
+
+
+def test_duplicate_or_unknown_result_rows_block_projection():
+    rows = [
+        {"case_id": "exectest/R1-C001", "outcome": "passed"},
+        {"case_id": "exectest/R1-C001", "outcome": "passed"},
+        {"case_id": "exectest/R9-C999", "outcome": "passed"},
+    ]
+    verdict, integrity = execute_run._execution_verdict(
+        rows, 0, ["exectest/R1-C001", "exectest/R1-C002"])
+    assert verdict == "BLOCK"
+    assert integrity["duplicate_case_ids"] == ["exectest/R1-C001"]
+    assert integrity["unexpected_case_ids"] == ["exectest/R9-C999"]
+
+
+@pytest.mark.parametrize("timeout_s", [-1, 0, 1201])
+def test_invalid_timeout_is_rejected_before_batch_or_run_creation(store, timeout_s):
+    before = list(store.list_owners())
+    result = execute_run.execute("b-20260813-missing", timeout_s=timeout_s)
+    assert result["ok"] is False and result["error"] == "INVALID_TIMEOUT"
+    assert store.list_owners() == before
 
 def run_chain(store, target, cases, **exec_kw):
     bid = build_batch(store, target, cases)
@@ -192,7 +251,8 @@ def test_execute_api_track_end_to_end(store, target):
     bid, r = run_chain(store, target,
                        [api_case("d1"), api_case("d2", json_path="data.n", equals=3)])
     rec = r["receipt"]
-    assert rec["verdict"] == "PASS", rec
+    assert rec["verdict"] == "PASS", json.dumps(
+        rec, ensure_ascii=False, sort_keys=True)
     assert rec["counts"] == {"passed": 2}
     assert rec["credential_scan_ok"]
     run_dir = r["run_dir"]
@@ -344,6 +404,20 @@ def test_execute_security_scan_failure_blocks_receipt_and_projection(
     assert r["receipt"]["verdict"] == "BLOCK"
     p = project_verdicts.project(r["run_id"])
     assert not p["ok"] and p["stage"] == "credential_scan"
+
+
+def test_project_rejects_run_from_superseded_caseset(store, target):
+    bid = build_batch(store, target, [api_case("d1")])
+    assert compile_bundle.compile_bundle(bid)["ok"]
+    run = execute_run.execute(bid)
+    assert run["ok"]
+    caseset = store.load_artifact(bid, "approved_caseset")
+    caseset["caseset_id"] = "acs-superseded"
+    store.save_artifact(bid, "approved_caseset", caseset)
+    projected = project_verdicts.project(run["run_id"])
+    assert projected["ok"] is False
+    assert projected["stage"] == "run_identity"
+    assert "caseset_id" in projected["mismatches"]
 
 
 def test_execute_resume_skips_done(store, target):
@@ -516,6 +590,31 @@ def test_coverage_design_done_does_not_masquerade_as_business_done(store, target
     assert ledger["business_result"]["ready_for_acceptance"] is False
 
 
+def test_coverage_rejects_a_run_from_another_batch_without_writing(store, target):
+    first, _first_run = executed_run(store, target)
+    second, second_run = executed_run(store, target)
+    assert project_verdicts.project(second_run["run_id"])["ok"]
+    assert not store.has_artifact(first, "coverage_ledger")
+
+    result = coverage.build_coverage(first, second_run["run_id"])
+    assert result["ok"] is False
+    assert result["code"] == "E_RUN_BATCH_MISMATCH"
+    assert not store.has_artifact(first, "coverage_ledger")
+
+
+def test_coverage_rejects_run_after_caseset_content_changes(store, target):
+    bid, run = executed_run(store, target)
+    assert project_verdicts.project(run["run_id"])["ok"]
+    caseset = store.load_artifact(bid, "approved_caseset")
+    caseset["cases"][0]["title"] = "采纳集已变化"
+    store.save_artifact(bid, "approved_caseset", caseset)
+
+    result = coverage.build_coverage(bid, run["run_id"])
+    assert result["ok"] is False
+    assert result["code"] == "E_RUN_STATE_MISMATCH"
+    assert not store.has_artifact(bid, "coverage_ledger")
+
+
 def test_coverage_gap_unexplained_not_done(store, target):
     bid = build_batch(store, target, [api_case("d1"), api_case("d2")])
     # 加一条没有用例也没有声明的规则（直接改 business_frame 再看 coverage）
@@ -560,7 +659,10 @@ def test_ui_track_real_browser(store, target):
     bid, r = run_chain(store, target, [ui_case("d1"), ui_case("d2")],
                        timeout_s=180)
     rec = r["receipt"]
-    assert rec["verdict"] == "PASS", rec
+    assert rec["verdict"] == "PASS", json.dumps(
+        rec, ensure_ascii=False, sort_keys=True)
+    assert rec["target_identity"]["track"] == "ui"
+    assert rec["target_identity"]["page_title"].startswith("本地靶")
     slug_dir = os.path.join(r["run_dir"], "exectest__r1__c001")
     assert os.path.isfile(os.path.join(slug_dir, "trace.zip"))
     assert os.path.isfile(os.path.join(slug_dir, "final.png"))

@@ -12,6 +12,7 @@
 import json
 import multiprocessing
 import os
+import shutil
 import threading
 
 import pytest
@@ -288,6 +289,11 @@ def test_rejected_execute_never_starts_pytest_or_leaves_its_slot_marker(
         return str(rejected_run_dir)
 
     monkeypatch.setattr(execute_run.artifacts, "run_dir", fake_run_dir)
+    monkeypatch.setattr(
+        execute_run.artifacts, "discard_fresh_run",
+        lambda *_args, **_kwargs: (
+            shutil.rmtree(rejected_run_dir) or True
+            if rejected_run_dir.exists() else False))
     monkeypatch.setattr(execute_run.artifacts, "new_run_id",
                         lambda: rejected_run_id)
     spawned = []
@@ -307,6 +313,7 @@ def test_rejected_execute_never_starts_pytest_or_leaves_its_slot_marker(
                    if name.endswith(".json")}
         assert rejected_run_id + ".json" not in markers
         assert markers == {"r-20260812-busy-a.json", "r-20260812-busy-b.json"}
+        assert not rejected_run_dir.exists()
     finally:
         preg.release_slot("r-20260812-busy-a", root=root)
         preg.release_slot("r-20260812-busy-b", root=root)
@@ -341,12 +348,17 @@ def test_open_trace_does_not_spawn_real_process_in_tests(root, tmp_path, monkeyp
     class _FakeProc:
         pid = 31337
 
+        @staticmethod
+        def poll():
+            return None
+
     def _fake_popen(cmd, **kwargs):
         spawned.append(cmd)
         return _FakeProc()
 
     real_popen_calls = []
     monkeypatch.setattr(jc.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(jc.importlib.util, "find_spec", lambda _name: object())
     monkeypatch.setattr(preg, "register_pid",
                         lambda rd, pid, kind, root=None: real_popen_calls.append(pid))
 
@@ -372,7 +384,12 @@ def test_open_trace_registers_the_pid_it_spawns(root, tmp_path, monkeypatch):
     class _FakeProc:
         pid = 4242
 
+        @staticmethod
+        def poll():
+            return None
+
     monkeypatch.setattr(jc.subprocess, "Popen", lambda cmd, **kw: _FakeProc())
+    monkeypatch.setattr(jc.importlib.util, "find_spec", lambda _name: object())
     run_id = artifacts.new_run_id()
     rd = artifacts.run_dir(run_id, create=True)
     os.makedirs(os.path.join(rd, "case__001"))

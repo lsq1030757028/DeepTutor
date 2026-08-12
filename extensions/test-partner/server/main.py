@@ -289,7 +289,8 @@ def _journey_bridge(tool: str, bridge_context: Any,
         return verify_context(bridge_context, tool=tool,
                               effective_args=effective_args)
     except BridgeAuthError as exc:
-        return {"ok": False, "code": "E_BRIDGE_AUTH", "message": str(exc)}
+        return {"ok": False, "code": "E_TRUST_CONTEXT_REQUIRED",
+                "message": str(exc)}
 
 
 @mcp.tool()
@@ -456,6 +457,7 @@ def journey_execute(batch_id: str, variables: Any = None, case_ids: Any = None,
 
     同一批输入重复调用不会产生第二个 run（幂等），返回上次结果并标 replayed=true。
     写用例仍受写确认闸约束，重放不跳过人闸。
+    timeout_s 只接受 1..1200 秒；越界会在创建 run 和占用执行槽之前拒绝。
     """
     effective = {
         "batch_id": batch_id, "variables": variables, "case_ids": case_ids,

@@ -54,8 +54,8 @@ journey_discipline: |-
   ## What you do not do
 
   - Do not orchestrate a "run everything in one shot"; the user sees each step's result.
-  - Do not adopt cases on the user's behalf — selection happens in the workbench;
-    you only hand off to that step.
+  - Do not adopt cases on the user's behalf. List each `draft_id` and title,
+    then use `ask_user` to collect an explicit selection in Test chat.
   - Do not modify a frozen approved case set. If the requirement changed, re-clarify;
     the tool will stop you anyway.
 
@@ -90,10 +90,11 @@ human_gates: |-
   Anything the user cannot answer gets `probing=true` — do not decide it for them.
 
   **3. Adoption hand-off (before `journey_adopt`)**
-  Per-case selection happens in the workbench; you only hand off — say where to
-  go and that this step is the freeze point. **Never adopt on the user's behalf.**
-  Call `journey_adopt` after the user says they are done, and set `confirmed_by`
-  to where that statement came from.
+  List every draft's `draft_id` and title, then use `ask_user` to request the exact
+  IDs to adopt. **Nothing is pre-selected; never choose on the user's behalf.**
+  Only after an explicit reply call `journey_adopt`, pass those IDs as
+  `selected_draft_ids`, set `adopted_via="chat_ask_user"`, and set `confirmed_by`
+  to where the user's answer came from.
 
   **4. Write confirmation (before touching data in the system under test)**
   List every case that will change target data — what it does, what it affects —
@@ -103,7 +104,7 @@ human_gates: |-
   no run.
 
   After the user answers, call `journey_write_confirm`. Record every write case
-  explicitly as allowed or denied and set `confirmed_by` to the source of this
+  explicitly as allowed or denied and set `decided_by` to the source of this
   user reply. Only claim authorization after the tool succeeds. Silence, an
   ambiguous answer, or a tool failure all mean not authorized; do not execute
   the write case.

@@ -60,6 +60,13 @@ _FORBIDDEN = (
     "refresh", "import", "security",
 )
 _FORBIDDEN_RE = re.compile(r"\b(" + "|".join(_FORBIDDEN) + r")\b", re.I)
+_DANGEROUS_FUNCTION_RE = re.compile(
+    r"\b(?:pg_sleep|pg_advisory_(?:lock|lock_shared|unlock|unlock_all|unlock_shared)"
+    r"|pg_read_(?:file|binary_file)|pg_ls_dir|lo_(?:import|export)|dblink(?:_exec)?)\s*\(",
+    re.I,
+)
+STATEMENT_TIMEOUT_MS = 15_000
+LOCK_TIMEOUT_MS = 3_000
 
 #: 允许的首关键字。`show` 留着是因为设计稿 §6.2 明写 `只允许 SELECT/SHOW`。
 _ALLOWED_HEAD = ("select", "with", "show", "table", "values")
@@ -123,6 +130,11 @@ def check_statement(sql: Any) -> None:
             f"（WITH x AS (DELETE ... RETURNING *) SELECT * FROM x）以 WITH 开头、"
             f"以 SELECT 收尾，却真的删数据。若这是列名/字面量误伤，"
             f"说明归一化漏了一种引号形态，去修 normalize()，不要放宽关键字表。")
+    function_hit = _DANGEROUS_FUNCTION_RE.search(body)
+    if function_hit:
+        raise DbStatementRejected(
+            f"只读语句调用了禁止的资源/文件函数 {function_hit.group(0).strip()}。"
+            "SELECT 不等于无副作用；休眠、advisory lock、文件读取与 dblink 都不得由测试配方调用。")
 
 
 def dsn_present() -> bool:
@@ -151,7 +163,12 @@ def connect(dsn: str = "") -> Any:
             dsn,
             connect_timeout=15,
             # 服务端层的锁。与白名单互相独立：白名单被绕过时它还在。
-            options="-c default_transaction_read_only=on",
+            options=(
+                "-c default_transaction_read_only=on "
+                f"-c statement_timeout={STATEMENT_TIMEOUT_MS} "
+                f"-c lock_timeout={LOCK_TIMEOUT_MS} "
+                f"-c idle_in_transaction_session_timeout={STATEMENT_TIMEOUT_MS}"
+            ),
         )
         conn.set_session(readonly=True, autocommit=True)
     except Exception as exc:  # noqa: BLE001 - 驱动异常族杂，统一归类为通道问题

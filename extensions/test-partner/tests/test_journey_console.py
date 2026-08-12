@@ -31,11 +31,16 @@ def no_real_gui_subprocess(monkeypatch):
     class _FakeProc:
         pid = 990001
 
+        @staticmethod
+        def poll():
+            return None
+
     def _fake_popen(cmd, **kwargs):
         calls.append(list(cmd))
         return _FakeProc()
 
     monkeypatch.setattr(jc.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(jc.importlib.util, "find_spec", lambda _name: object())
     return calls
 
 
@@ -107,6 +112,36 @@ def test_trace_open_missing_file(store):
     store.run_dir(run_id, create=True)
     r = jc.open_trace(run_id, "nope/trace.zip")
     assert not r["ok"] and "不存在" in r["error"]
+
+
+def test_trace_open_distinguishes_missing_viewer(store, monkeypatch):
+    run_id = store.new_run_id()
+    rd = store.run_dir(run_id, create=True)
+    os.makedirs(os.path.join(rd, "case"))
+    with open(os.path.join(rd, "case", "trace.zip"), "wb") as fh:
+        fh.write(b"PK")
+    monkeypatch.setattr(jc.importlib.util, "find_spec", lambda _name: None)
+    result = jc.open_trace(run_id, "case/trace.zip")
+    assert result["code"] == "E_TRACE_VIEWER_MISSING"
+
+
+def test_trace_open_distinguishes_immediate_viewer_exit(store, monkeypatch):
+    run_id = store.new_run_id()
+    rd = store.run_dir(run_id, create=True)
+    os.makedirs(os.path.join(rd, "case"))
+    with open(os.path.join(rd, "case", "trace.zip"), "wb") as fh:
+        fh.write(b"PK")
+
+    class Exited:
+        pid = 991001
+
+        @staticmethod
+        def poll():
+            return 1
+
+    monkeypatch.setattr(jc.subprocess, "Popen", lambda *_args, **_kwargs: Exited())
+    result = jc.open_trace(run_id, "case/trace.zip")
+    assert result["code"] == "E_TRACE_SPAWN_FAILED"
 
 
 def test_trace_open_returns_downgrade_command(store, no_real_gui_subprocess):

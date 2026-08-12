@@ -12,7 +12,8 @@ from __future__ import annotations
 import hashlib
 import re
 from typing import Any
-from urllib.request import Request, urlopen
+from urllib.parse import urljoin
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from urllib.error import HTTPError, URLError
 
 from server.journey import artifacts, redlines
@@ -25,27 +26,47 @@ _WRITE_HINTS = re.compile(r"(新增|创建|删除|修改|编辑|下单|支付|�
 _ROLE_HINTS = re.compile(r"(角色|权限|管理员|销售员|操作员|普通用户)")
 
 
+class _NoAutomaticRedirect(HTTPRedirectHandler):
+    """Expose 30x before a second request is sent so the host gate runs first."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
 def probe_target(base_url: str, timeout_s: int = 10) -> dict[str, Any]:
     """可达性探测 + 实例指纹素材。只发 GET /，不带凭证。"""
-    url = str(base_url or "").strip().rstrip("/")
-    if not redlines.host_key(url):
-        return {"reachable": False, "error": f"base_url 不是合法 http(s) 地址: {base_url!r}"}
-    try:
-        req = Request(url + "/", method="GET")
-        with urlopen(req, timeout=timeout_s) as resp:  # noqa: S310 - 目标即被测系统
-            status = resp.status
-            body = resp.read(4096)
-            final_url = resp.geturl()
-            headers = dict(resp.headers)
-    except HTTPError as exc:
-        status, body, final_url = exc.code, exc.read(4096) if exc.fp else b"", url
-        headers = dict(exc.headers or {})
-    except (URLError, OSError, ValueError) as exc:
-        return {"reachable": False, "error": str(exc)}
-    # 红线：探测期间若被重定向出等价类，如实报告（不算可达）
-    if final_url and not redlines.same_host(url, final_url):
-        return {"reachable": False,
-                "error": f"GET / 重定向落点越出等价类: {final_url}"}
+    validated = redlines.safe_target_url(base_url)
+    if not validated["ok"]:
+        return {"reachable": False, "error": validated["error"]}
+    url = validated["url"]
+    opener = build_opener(_NoAutomaticRedirect())
+    current = url + "/"
+    for _hop in range(6):
+        try:
+            req = Request(current, method="GET")
+            with opener.open(req, timeout=timeout_s) as resp:  # noqa: S310
+                status = resp.status
+                body = resp.read(4096)
+                final_url = resp.geturl()
+                headers = dict(resp.headers)
+            break
+        except HTTPError as exc:
+            headers = dict(exc.headers or {})
+            if 300 <= exc.code < 400 and headers.get("Location"):
+                next_url = urljoin(current, headers["Location"])
+                if not redlines.same_host(url, next_url):
+                    return {"reachable": False,
+                            "error": f"GET / 重定向落点越出等价类: {next_url}"}
+                current = next_url
+                continue
+            status = exc.code
+            body = exc.read(4096) if exc.fp else b""
+            final_url = current
+            break
+        except (URLError, OSError, ValueError) as exc:
+            return {"reachable": False, "error": str(exc)}
+    else:
+        return {"reachable": False, "error": "GET / 重定向次数超过 5 次"}
     text = body.decode("utf-8", "replace")
     title_m = re.search(r"<title[^>]*>([^<]{0,120})</title>", text, re.I)
     return {
@@ -113,7 +134,11 @@ def ingest(title: str, base_url: str, *, source_kind: str, source_ref: str,
            owner: str = "") -> dict[str, Any]:
     """建批次 + 落 intake_profile。tier 未给时只回确认卡数据（不落产物——
     档位是 intake_profile 的必备字段，人闸没走完就没有这个产物）。"""
-    probe = probe_target(base_url)
+    validated = redlines.safe_target_url(base_url)
+    if not validated["ok"]:
+        return {"ok": False, "error": validated["error"]}
+    safe_base_url = validated["url"]
+    probe = probe_target(safe_base_url)
     proposal = propose_tier(requirement_text)
     if not tier:
         return {"ok": False, "need": "tier_confirmation",
@@ -123,7 +148,19 @@ def ingest(title: str, base_url: str, *, source_kind: str, source_ref: str,
     if not probe.get("reachable"):
         # 溯源/能力锁：终点不可达 = 不建批次（fail-closed，不能对空气接单）
         return {"ok": False, "error": "接入终点不可达，不建批次", "probe": probe}
-    batch = artifacts.create_batch(title, owner=owner, base_url=base_url.rstrip("/"),
+    if requirement_text:
+        from server.journey.gates import credential_scan
+        requirement_scan = credential_scan.scan_text_content(
+            requirement_text, label="requirement.txt")
+        if not requirement_scan["ok"]:
+            return {
+                "ok": False,
+                "error": "需求正文疑似包含凭据，已在创建批次前拒绝；请移除或变量化后重试",
+                "credential_scan": {
+                    "entropy_hit_count": len(requirement_scan["entropy_hits"]),
+                },
+            }
+    batch = artifacts.create_batch(title, owner=owner, base_url=safe_base_url,
                                    environment_ref=environment_ref,
                                    source_ref=source_ref)
     bid = batch["batch_id"]
@@ -134,7 +171,7 @@ def ingest(title: str, base_url: str, *, source_kind: str, source_ref: str,
         with open(snap, "w", encoding="utf-8") as fh:
             fh.write(requirement_text)
     profile = artifacts.save_artifact(bid, "intake_profile", {
-        "base_url": base_url.rstrip("/"),
+        "base_url": safe_base_url,
         "environment_ref": environment_ref,
         "source": {"kind": source_kind, "ref": source_ref,
                    "content_digest": (text_digest(requirement_text)

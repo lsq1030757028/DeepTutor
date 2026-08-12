@@ -449,11 +449,17 @@ def append_result(run_dir: str, row: dict[str, Any]) -> None:
 
 
 def register_pid(run_dir: str, pid: int, kind: str) -> None:
-    # 单一登记入口同时写 run 台账与根级镜像，并绑定创建时间，防 PID 复用误杀。
-    from server.journey import process_registry
-    process_registry.register_pid(run_dir, pid, kind)
+    # Bundle 只含嵌入模块，不能反向依赖宿主源码树。
+    try:
+        from server.journey import pid_ledger
+    except ImportError:  # compiled self-contained bundle
+        import _pid_ledger as pid_ledger
+    pid_ledger.register_pid(run_dir, pid, kind)
 
 
 def deregister_pid(run_dir: str, pid: int) -> None:
-    from server.journey import process_registry
-    process_registry.deregister_pid(run_dir, pid)
+    try:
+        from server.journey import pid_ledger
+    except ImportError:  # compiled self-contained bundle
+        import _pid_ledger as pid_ledger
+    pid_ledger.deregister_pid(run_dir, pid)

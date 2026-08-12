@@ -236,7 +236,7 @@ def test_login_request_flows_from_material_through_job_to_adopted_delivery(
         return types.SimpleNamespace(
             scenario="登录后查询", picked_endpoints=[], skipped_reason="",
             cases=[{
-                "id": "TC-001",
+                "case_id": "TC-001",
                 "title": "查询",
                 "request": {"method": "GET", "url": "/api/x"},
                 "assertions": [{"kind": "status", "expect": 200}],
@@ -276,14 +276,14 @@ def test_login_request_flows_from_material_through_job_to_adopted_delivery(
 
 # ── 采纳：勾选是入库的唯一闸门，服务端也要守 ─────────────────────────────
 
-def _done_job(store, owner="alice", n=3):
+def _done_job(store, owner="alice", n=3, *, complete=True):
     job = store.create(owner)
     store.update(job.id, state=jobs_mod.DONE, result={
-        "cases": [{"id": f"TC-{i:03d}", "title": f"用例{i}",
+        "cases": [{"case_id": f"TC-{i:03d}", "title": f"用例{i}",
                    "request": {"method": "GET", "url": "/api/x"},
                    "assertions": [{"kind": "status", "expect": 200}]}
                   for i in range(1, n + 1)],
-        "notes": [], "calls_used": 2, "complete": True,
+        "notes": [], "calls_used": 2, "complete": complete,
     })
     return job
 
@@ -310,7 +310,42 @@ def test_adopt_only_writes_the_checked_cases(monkeypatch, as_alice, clean_store,
 
     out = gen.adopt_cases(job.id, gen.AdoptRequest(case_ids=["TC-001", "TC-003"]))
     assert out["adopted"] == 2
-    assert [c["id"] for c in seen["cases"]] == ["TC-001", "TC-003"]
+    assert [c["case_id"] for c in seen["cases"]] == ["TC-001", "TC-003"]
+
+
+def test_normalized_model_id_flows_through_job_to_adopt(
+        monkeypatch, as_alice, clean_store, tmp_path):
+    """Generation's id→case_id boundary is the contract consumed by adopt."""
+    from server.generate.case_shape import normalize_generated_cases
+    normalized, notes = normalize_generated_cases(
+        [{
+            "id": "TC-001", "title": "健康检查",
+            "request": {
+                "method": "GET", "url": "/health",
+                "assertions": [{"kind": "status", "expect": 200}],
+            },
+        }],
+        [{"id": "TC-001", "intent": "健康检查"}],
+    )
+    assert notes == []
+    assert normalized[0]["case_id"] == "TC-001" and "id" not in normalized[0]
+    job = clean_store.create("alice")
+    clean_store.update(job.id, state=jobs_mod.DONE, result={
+        "cases": normalized, "notes": [], "calls_used": 2, "complete": True,
+    })
+    seen = {}
+    from server import delivery as delivery_mod
+    monkeypatch.setattr(
+        delivery_mod, "save_delivery",
+        lambda cases, **_kwargs: seen.update(cases=cases) or {
+            "ok": True, "delivery_dir": str(tmp_path)})
+    monkeypatch.setattr(
+        "deeptutor.api.routers.test_workbench_paths.deliveries_root",
+        lambda: str(tmp_path))
+    result = gen.adopt_cases(
+        job.id, gen.AdoptRequest(case_ids=["TC-001"]))
+    assert result["adopted"] == 1
+    assert seen["cases"][0]["case_id"] == "TC-001"
 
 
 def test_adopt_writes_into_the_current_users_directory(monkeypatch, as_alice,
@@ -351,6 +386,17 @@ def test_adopting_an_unknown_id_is_an_error_not_a_silent_skip(monkeypatch, as_al
         gen.adopt_cases(job.id, gen.AdoptRequest(case_ids=["TC-001", "TC-999"]))
     assert exc.value.status_code == 400
     assert "TC-999" in str(exc.value.detail)
+
+
+def test_incomplete_generation_cannot_be_adopted(monkeypatch, as_alice,
+                                                  clean_store):
+    """Truncated output must stay visibly unshippable instead of losing cases."""
+    from fastapi import HTTPException
+    job = _done_job(clean_store, n=1, complete=False)
+    with pytest.raises(HTTPException) as exc:
+        gen.adopt_cases(job.id, gen.AdoptRequest(case_ids=["TC-001"]))
+    assert exc.value.status_code == 409
+    assert "不完整" in str(exc.value.detail)
 
 
 def test_cannot_adopt_from_an_unfinished_job(monkeypatch, as_alice, clean_store):

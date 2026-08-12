@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import html
 import json
+import importlib.util
 import os
 import subprocess
 import sys
+import time
 from typing import Any
 
 from starlette.requests import Request
@@ -113,7 +115,11 @@ def open_trace(run_id: str, trace_rel: str) -> dict[str, Any]:
     if os.path.commonpath([rd]) != os.path.commonpath([rd, abspath]):
         return {"ok": False, "error": "trace 路径越界"}
     if not os.path.isfile(abspath):
-        return {"ok": False, "error": "trace 文件不存在"}
+        return {"ok": False, "code": "E_TRACE_MISSING",
+                "error": "trace 文件不存在"}
+    if importlib.util.find_spec("playwright") is None:
+        return {"ok": False, "code": "E_TRACE_VIEWER_MISSING",
+                "error": "trace 文件存在，但当前机器未安装 Playwright 查看器"}
     command = f'python -m playwright show-trace "{abspath}"'
     started = False
     spawn_error = ""
@@ -124,12 +130,25 @@ def open_trace(run_id: str, trace_rel: str) -> dict[str, Any]:
     except OSError as exc:  # viewer 起不来不致命，用户走降级命令
         spawn_error = str(exc)
     else:
-        # 登记必须在 Popen 之后**立刻**发生，且失败要看得见。
+        # Popen 成功不等于 viewer 成功。模块缺失/浏览器缺失等故障会让
+        # 子进程立即退出；先做一次短握手，再把存活 PID 登记进回收账本。
+        time.sleep(0.15)
+        return_code = proc.poll()
+        if return_code is not None:
+            return {"ok": False, "code": "E_TRACE_SPAWN_FAILED",
+                    "error": "Playwright 查看器启动后立即退出",
+                    "command": command, "trace_path": abspath,
+                    "spawn_error": f"viewer exit={return_code}"}
+        # 登记必须在存活握手之后发生，且失败要看得见。
         # BB-501 现场教训：此处原先是一个大 `except Exception`，
         # 而 `preg.register_pid` 当时根本不存在 —— AttributeError 被吞掉，
         # 于是"起了进程但从未登记"，泄漏无从追。别把这个 except 再放宽。
         preg.register_pid(rd, proc.pid, "trace-viewer")
         started = True
+    if not started:
+        return {"ok": False, "code": "E_TRACE_SPAWN_FAILED",
+                "error": "Playwright 查看器启动失败", "command": command,
+                "trace_path": abspath, "spawn_error": spawn_error}
     return {"ok": True, "started": started, "command": command,
             "trace_path": abspath, "spawn_error": spawn_error}
 

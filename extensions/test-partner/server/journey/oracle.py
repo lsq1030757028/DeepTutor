@@ -45,6 +45,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 from typing import Any
 
 from server.journey import artifacts
@@ -98,6 +99,15 @@ class OracleError(RuntimeError):
                 "detail": self.detail}
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
+def _scrub_secret(text: str, secret: str) -> str:
+    return text.replace(secret, "<redacted>") if secret else text
+
+
 # ── 通道配置 ────────────────────────────────────────────────────────────────
 
 
@@ -136,11 +146,14 @@ def _http_json(url: str, body: dict[str, Any], *, timeout_s: int,
     if bearer:
         headers["Authorization"] = f"Bearer {bearer}"
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    opener = urllib.request.build_opener(_NoRedirect())
     try:
-        with urllib.request.urlopen(req, timeout=timeout_s) as resp:  # noqa: S310
-            return json.loads(resp.read().decode("utf-8"))
+        with opener.open(req, timeout=timeout_s) as resp:  # noqa: S310
+            raw = _scrub_secret(resp.read().decode("utf-8"), bearer)
+            return json.loads(raw)
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "replace")[:400]
+        detail = _scrub_secret(
+            exc.read().decode("utf-8", "replace")[:400], bearer)
         if exc.code in (401, 403):
             raise OracleError(
                 f"TAPD 通道拒绝了这次调用（HTTP {exc.code}）。令牌无权或没配。",
@@ -152,25 +165,39 @@ def _http_json(url: str, body: dict[str, Any], *, timeout_s: int,
                           code=E_ORACLE_FETCH_FAILED) from exc
 
 
-def warm_up(api_base: str = "", *, timeout_s: int = 30) -> bool:
+def warm_up(api_base: str = "", *, timeout_s: int = 30,
+            config: Any = None) -> bool:
     """预热 DT 的 MCP 连接（治 `ensure_started` 冷启动坑，ADR-M2-02 第 5 条末）。
 
     冷启动时首个调用可能拿到「未连接」字符串——那会被 `parse_mcp_payload` 判成
     `E_MCP_UNAVAILABLE` 而中止接入，用户看到的是一次莫名其妙的失败。先 GET 一次。
     """
-    base = (api_base or _api_base()).rstrip("/")
+    base = (api_base or _api_base(config)).rstrip("/")
     try:
-        req = urllib.request.Request(base + "/api/v1/settings/mcp", method="GET")
+        headers = {"Accept": "application/json"}
+        bearer = _deeptutor_bearer(config)
+        if bearer:
+            headers["Authorization"] = f"Bearer {bearer}"
+        req = urllib.request.Request(
+            base + "/api/v1/settings/mcp", headers=headers, method="GET")
         with urllib.request.urlopen(req, timeout=timeout_s) as resp:  # noqa: S310
             return 200 <= resp.status < 300
     except (urllib.error.URLError, OSError, ValueError):
         return False
 
 
-def _api_base() -> str:
+def _api_base(config: Any = None) -> str:
     from server.gateway.config import default_config
-    settings = default_config().load_settings().get("deeptutor") or {}
+    cfg = config or default_config()
+    settings = cfg.load_settings().get("deeptutor") or {}
     return str(settings.get("api_base") or "http://127.0.0.1:3782").rstrip("/")
+
+
+def _deeptutor_bearer(config: Any = None) -> str:
+    """Read the DeepTutor API token just-in-time; never persist or log it."""
+    from server.gateway.config import default_config
+    cfg = config or default_config()
+    return str(cfg.get_secret("DEEPTUTOR_TOKEN") or "").strip()
 
 
 def call_read_tool(tool: str, params: dict[str, Any], *,
@@ -184,9 +211,10 @@ def call_read_tool(tool: str, params: dict[str, Any], *,
     ch = channel or channel_config(config)
     transport = ch.get("transport") or "deeptutor_plugins"
     if transport == "deeptutor_plugins":
-        url = f"{_api_base()}/api/v1/plugins/tools/{_dt_tool_name(ch, tool)}/execute"
+        url = f"{_api_base(config)}/api/v1/plugins/tools/{_dt_tool_name(ch, tool)}/execute"
         envelope = _http_json(url, {"params": params},
-                              timeout_s=int(ch.get("timeout_s") or 60))
+                              timeout_s=int(ch.get("timeout_s") or 60),
+                              bearer=_deeptutor_bearer(config))
         if not isinstance(envelope, dict):
             raise OracleError("DT tool-execute 返回体不是对象", code=E_ORACLE_FETCH_FAILED)
         raw = envelope.get("content")
@@ -196,6 +224,12 @@ def call_read_tool(tool: str, params: dict[str, Any], *,
             raise OracleError("direct_http 传输缺 endpoint 配置",
                               code=E_ORACLE_FETCH_FAILED)
         bearer = _read_bearer(ch, config)
+        parts = urlsplit(endpoint)
+        if parts.scheme != "https" and parts.hostname not in {
+                "127.0.0.1", "localhost", "::1"}:
+            raise OracleError(
+                "direct_http 携带 Bearer 时只允许 HTTPS；本机 loopback 例外。",
+                code=E_ORACLE_FORBIDDEN)
         envelope = _http_json(endpoint, {"tool": tool, "params": params},
                               timeout_s=int(ch.get("timeout_s") or 60), bearer=bearer)
         raw = envelope.get("content") if isinstance(envelope, dict) else envelope

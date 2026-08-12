@@ -119,10 +119,15 @@ def test_truncated_outline_retries_with_fewer_cases(material):
 
 def test_truncated_detail_batch_halves_the_batch(material):
     cases = [{"id": f"TC-{i:03d}"} for i in range(1, 5)]
-    fake = FakeModel('{"cases": [{"id": "TC-001"', _detail(["TC-001", "TC-002"]))
+    fake = FakeModel(
+        '{"cases": [{"id": "TC-001"',
+        _detail(["TC-001", "TC-002"]),
+        _detail(["TC-003", "TC-004"]),
+    )
     out, notes = run(fill_details(fake, material, "s", cases, batch_size=4))
-    assert len(out) == 2
+    assert len(out) == 4
     assert "TC-003" not in fake.prompts[1], "第二次应当只带前半批"
+    assert "TC-003" in fake.prompts[2], "前半批成功后必须继续处理剩余条目"
 
 
 def test_truncation_twice_gives_up_instead_of_looping(material):

@@ -132,12 +132,12 @@ def test_unsigned_or_wrong_surface_ingest_has_zero_persistence(isolated):
     args = _ingest_args("不能落盘")
     before = _persisted(isolated)
     unsigned = main.journey_ingest(**args, bridge_context="")
-    assert unsigned["ok"] is False and unsigned["code"] == "E_BRIDGE_AUTH"
+    assert unsigned["ok"] is False and unsigned["code"] == "E_TRUST_CONTEXT_REQUIRED"
     chat = main.journey_ingest(
         **args,
         bridge_context=_token("alice", "journey_ingest", args, capability="chat"),
     )
-    assert chat["ok"] is False and chat["code"] == "E_BRIDGE_AUTH"
+    assert chat["ok"] is False and chat["code"] == "E_TRUST_CONTEXT_REQUIRED"
     assert _persisted(isolated) == before
 
 

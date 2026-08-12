@@ -164,6 +164,7 @@ def test_all_four_human_gates_are_prompted(language: str) -> None:
         "journey_ingest",  # 闸 1 的时序：定档必须在接入之前
         "clarifications",  # 闸 2 澄清：clarify 的记录参数
         "confirmed_by",  # 闸 3 采纳：adopt 的记录参数
+        "decided_by",  # 闸 4 写确认：write_confirm 的记录参数
         "write_confirm",  # 闸 4 写确认：events.jsonl 里的事件类型
     ):
         assert anchor in gates, f"{language} 人闸段缺锚 {anchor}"

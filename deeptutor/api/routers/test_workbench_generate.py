@@ -281,12 +281,17 @@ def adopt_cases(job_id: str, body: AdoptRequest) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="任务不存在。")
     if job.state != _jobs.DONE or not job.result:
         raise HTTPException(status_code=409, detail="这个任务还没有可采纳的结果。")
+    if job.result.get("complete") is not True:
+        raise HTTPException(
+            status_code=409,
+            detail="本次生成结果不完整，不能作为交付批次采纳。请重新生成后再确认。",
+        )
 
     wanted = [cid for cid in body.case_ids if cid]
     if not wanted:
         raise HTTPException(status_code=400, detail="一条都没勾选。请先选中要采纳的用例。")
 
-    by_id = {str(c.get("id")): c for c in job.result.get("cases") or []}
+    by_id = {str(c.get("case_id")): c for c in job.result.get("cases") or []}
     unknown = [cid for cid in wanted if cid not in by_id]
     if unknown:
         # 不静默忽略：勾了个不存在的编号，多半是页面和结果对不上了，

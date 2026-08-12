@@ -18,12 +18,18 @@ from __future__ import annotations
 import math
 import os
 import re
+import zipfile
 from typing import Any
 
 TEXT_EXT = {".json", ".jsonl", ".md", ".txt", ".py", ".html", ".csv", ".yaml",
             ".yml", ".log", ".ini", ".cfg", ".toml", ".xml", ".js", ".ts"}
 SKIP_DIRS = {"__pycache__", ".git", "node_modules", ".pytest_cache"}
 MAX_BYTES = 50 * 1024 * 1024
+SCAN_CHUNK_BYTES = 1024 * 1024
+MAX_ARCHIVE_ENTRIES = 2000
+MAX_ARCHIVE_MEMBER_BYTES = 64 * 1024 * 1024
+MAX_ARCHIVE_TOTAL_BYTES = 256 * 1024 * 1024
+MAX_ARCHIVE_RATIO = 200
 
 TOKEN = re.compile(r"[A-Za-z0-9+/=_\-]{20,}")
 HEX_RE = re.compile(r"^[0-9a-fA-F]{32,}$")
@@ -97,6 +103,108 @@ def _iter_files(root: str):
             yield os.path.join(dirpath, name)
 
 
+def _entropy_findings(text: str, label: str,
+                      allowed_reasons: dict[str, str]
+                      ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    hits: list[dict[str, Any]] = []
+    allowlisted: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for match in TOKEN.finditer(text):
+        token = match.group(0)
+        if token in seen:
+            continue
+        seen.add(token)
+        allowlist_reason = (_builtin_allowlist_reason(token)
+                            or allowed_reasons.get(token, ""))
+        if "/" in token and any(
+                seg.isalpha() and len(seg) >= 3 for seg in token.split("/")):
+            continue
+        has_digit = any(char.isdigit() for char in token)
+        has_alpha = any(char.isalpha() for char in token)
+        b64ish = any(char in "+=" for char in token)
+        if not ((has_digit and has_alpha) or b64ish):
+            continue
+        entropy = shannon_entropy(token)
+        if entropy < ENTROPY_THRESHOLD:
+            continue
+        finding = {
+            "file": label,
+            "token_preview": token[:6] + "…" + token[-4:],
+            "token": token,
+            "length": len(token),
+            "entropy": round(entropy, 2),
+        }
+        if allowlist_reason:
+            allowlisted.append({
+                key: value for key, value in {
+                    **finding, "allowlist_reason": allowlist_reason,
+                }.items() if key != "token"
+            })
+        else:
+            hits.append(finding)
+    return hits, allowlisted
+
+
+def scan_text_content(text: str, *, label: str = "payload") -> dict[str, Any]:
+    """Pre-persistence entropy gate for batch-side text/JSON payloads."""
+    entropy_hits, allowlisted_hits = _entropy_findings(text, label, {})
+    return {
+        "ok": not entropy_hits,
+        "entropy_hits": entropy_hits,
+        "allowlisted_hits": allowlisted_hits,
+    }
+
+
+def _scan_zip(path: str, rel: str, secrets: list[str],
+              allowed_reasons: dict[str, str]) -> tuple[
+                  list[dict[str, Any]], list[dict[str, Any]],
+                  list[dict[str, Any]], list[str]]:
+    """Scan archive members with explicit anti-zip-bomb limits."""
+    known: list[dict[str, Any]] = []
+    entropy: list[dict[str, Any]] = []
+    allowed: list[dict[str, Any]] = []
+    rejected: list[str] = []
+    total = 0
+    try:
+        with zipfile.ZipFile(path) as archive:
+            infos = archive.infolist()
+            if len(infos) > MAX_ARCHIVE_ENTRIES:
+                return known, entropy, allowed, [f"{rel}:too-many-entries"]
+            for info in infos:
+                label = f"{rel}!{info.filename}"
+                if info.is_dir():
+                    continue
+                total += info.file_size
+                ratio = info.file_size / max(info.compress_size, 1)
+                if info.file_size > MAX_ARCHIVE_MEMBER_BYTES or \
+                        total > MAX_ARCHIVE_TOTAL_BYTES or ratio > MAX_ARCHIVE_RATIO:
+                    rejected.append(f"{label}:unsafe-size-or-ratio")
+                    continue
+                data = archive.read(info)
+                for index, secret in enumerate(secrets):
+                    value = secret.encode("utf-8")
+                    offset = data.find(value)
+                    if offset >= 0:
+                        known.append({
+                            "file": label, "offset": offset,
+                            "secret_index": index, "secret_len": len(secret),
+                        })
+                # Playwright uses extension-less/member-specific names such as
+                # ``trace.network``.  Decode any valid UTF-8 member instead of
+                # relying on the outer filesystem extension allowlist.
+                try:
+                    text = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
+                new_hits, new_allowed = _entropy_findings(
+                    text, label, allowed_reasons)
+                entropy.extend(new_hits)
+                allowed.extend(new_allowed)
+    except (OSError, zipfile.BadZipFile, RuntimeError):
+        rejected.append(f"{rel}:invalid-archive")
+    return known, entropy, allowed, rejected
+
+
 def scan_tree(root: str, known_secrets: list[str] | None = None,
               allowlist: dict[str, str] | list[str] | None = None,
               skip_rel: list[str] | None = None) -> dict[str, Any]:
@@ -109,7 +217,10 @@ def scan_tree(root: str, known_secrets: list[str] | None = None,
       只对高熵启发式豁免。
     ok = 无 known 命中 且 无未放行的高熵命中。
     """
-    secrets = [s for s in (known_secrets or []) if s and len(s) >= MIN_SECRET_LEN]
+    # Known values are an exact zero-persistence contract.  Short values may be
+    # noisy, but silently dropping them would turn “scan passed” into a false
+    # claim.  Entropy heuristics retain their own length threshold below.
+    secrets = [str(s) for s in (known_secrets or []) if str(s)]
     secret_bytes = [s.encode("utf-8") for s in secrets]
     allowed_reasons = ({str(k): str(v).strip() for k, v in allowlist.items()}
                        if isinstance(allowlist, dict) else {})
@@ -117,76 +228,78 @@ def scan_tree(root: str, known_secrets: list[str] | None = None,
     known_hits: list[dict[str, Any]] = []
     entropy_hits: list[dict[str, Any]] = []
     allowlisted_hits: list[dict[str, Any]] = []
+    entropy_skipped_large_files: list[str] = []
+    archive_rejections: list[str] = []
     scanned = 0
     for path in _iter_files(root):
+        rel = os.path.relpath(path, root).replace("\\", "/")
         try:
-            if os.path.getsize(path) > MAX_BYTES:
-                continue
+            size = os.path.getsize(path)
             with open(path, "rb") as fh:
-                blob = fh.read()
+                found: set[int] = set()
+                overlap = b""
+                absolute = 0
+                max_secret_len = max((len(value) for value in secret_bytes), default=1)
+                while True:
+                    chunk = fh.read(SCAN_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    window = overlap + chunk
+                    window_start = absolute - len(overlap)
+                    for i, sb in enumerate(secret_bytes):
+                        if i in found:
+                            continue
+                        offset = window.find(sb)
+                        if offset >= 0:
+                            found.add(i)
+                            known_hits.append({
+                                "file": rel, "offset": window_start + offset,
+                                "secret_index": i,
+                                "secret_len": len(secrets[i]),
+                            })
+                    absolute += len(chunk)
+                    overlap = window[-(max_secret_len - 1):] \
+                        if max_secret_len > 1 else b""
+                blob = b""
+                if size <= MAX_BYTES and rel not in skip_set and \
+                        os.path.splitext(path)[1].lower() in TEXT_EXT:
+                    fh.seek(0)
+                    blob = fh.read()
         except OSError:
             continue
         scanned += 1
-        rel = os.path.relpath(path, root).replace("\\", "/")
-        for i, sb in enumerate(secret_bytes):
-            off = blob.find(sb)
-            if off >= 0:
-                known_hits.append({
-                    "file": rel, "offset": off,
-                    "secret_index": i,           # 只记序号，不回显值（红线 3）
-                    "secret_len": len(secrets[i]),
-                })
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".zip":
+            zip_known, zip_entropy, zip_allowed, zip_rejected = _scan_zip(
+                path, rel, secrets, allowed_reasons)
+            known_hits.extend(zip_known)
+            entropy_hits.extend(zip_entropy)
+            allowlisted_hits.extend(zip_allowed)
+            archive_rejections.extend(zip_rejected)
         if rel in skip_set:
             continue
-        ext = os.path.splitext(path)[1].lower()
         if ext not in TEXT_EXT:
+            continue
+        if size > MAX_BYTES:
+            entropy_skipped_large_files.append(rel)
             continue
         try:
             text = blob.decode("utf-8")
         except UnicodeDecodeError:
             continue
-        seen: set[str] = set()
-        for m in TOKEN.finditer(text):
-            token = m.group(0)
-            if token in seen:
-                continue
-            seen.add(token)
-            builtin_reason = _builtin_allowlist_reason(token)
-            explicit_reason = allowed_reasons.get(token, "")
-            allowlist_reason = builtin_reason or explicit_reason
-            # URL 路径形态排除：含 `/` 且有字母词段（如 58975/api/secret-echo）。
-            # 系统自有证据路径由 EVIDENCE_PATH_FORM 精确豁免，不在这里扩大通用路径面。
-            # ——路径不是凭据；真凭据（known-secret）由上面的精确匹配兜底(DoD 7 强保证)。
-            if "/" in token and any(
-                    seg.isalpha() and len(seg) >= 3 for seg in token.split("/")):
-                continue
-            # 密钥形态判据：字母+数字混排，或带 base64 专有符号——纯字母驼峰散文不算
-            has_digit = any(c.isdigit() for c in token)
-            has_alpha = any(c.isalpha() for c in token)
-            b64ish = any(c in "+=" for c in token)
-            if not ((has_digit and has_alpha) or b64ish):
-                continue
-            ent = shannon_entropy(token)
-            if ent >= ENTROPY_THRESHOLD:
-                hit = {
-                    "file": rel, "token_preview": token[:6] + "…" + token[-4:],
-                    "token": token, "length": len(token),
-                    "entropy": round(ent, 2),
-                }
-                if allowlist_reason:
-                    allowlisted_hits.append({
-                        k: v for k, v in {
-                            **hit, "allowlist_reason": allowlist_reason,
-                        }.items() if k != "token"
-                    })
-                else:
-                    entropy_hits.append(hit)
+        new_hits, new_allowed = _entropy_findings(
+            text, rel, allowed_reasons)
+        entropy_hits.extend(new_hits)
+        allowlisted_hits.extend(new_allowed)
     return {
-        "ok": not known_hits and not entropy_hits,
+        "ok": not known_hits and not entropy_hits and not archive_rejections,
         "known_hits": known_hits,
         "entropy_hits": entropy_hits,
         "allowlisted_hits": allowlisted_hits,
+        "entropy_skipped_large_files": entropy_skipped_large_files,
+        "archive_rejections": archive_rejections,
         "scanned_files": scanned,
         "note": ("known-secret 命中=阻断;entropy 命中须逐条 allowlist_reason 复核。"
+                 "大文件仍逐字节扫 known-secret，仅跳过高熵全文解码。"
                  "本扫描证明机制在场,不证明强度(hex 编码等形态可绕过允许清单)。"),
     }

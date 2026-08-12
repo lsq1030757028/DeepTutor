@@ -6,10 +6,40 @@ DoD#5（改需求一字后 adopt 被阻断且 caseset 未变）。
 """
 import json
 import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
 
 import pytest
 
 from server.journey import artifacts, oracle
+
+
+class _ConfigStub:
+    def __init__(self, token="dt-token-for-test"):
+        self.token = token
+
+    def load_settings(self):
+        return {"deeptutor": {"api_base": "http://deeptutor.test:8011"}}
+
+    def get_secret(self, key):
+        assert key == "DEEPTUTOR_TOKEN"
+        return self.token
+
+
+class _DirectConfigStub:
+    def __init__(self, token):
+        self.token = token
+
+    def get_secret(self, key):
+        assert key == "TAPD_DIRECT_TOKEN"
+        return self.token
+
+
+def _serve(handler):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server
 
 
 @pytest.fixture()
@@ -114,6 +144,126 @@ def test_tool_name_follows_configured_server_name():
     ch = dict(oracle.DEFAULT_CHANNEL, server_name="tapd-v2")
     assert oracle._dt_tool_name(ch, "get_stories_or_tasks") == \
         "mcp_tapd-v2_get_stories_or_tasks"
+
+
+def test_deeptutor_plugin_transport_sends_configured_auth(monkeypatch):
+    seen = {}
+
+    def fake_http(url, body, *, timeout_s, bearer=""):
+        seen.update(url=url, body=body, timeout_s=timeout_s, bearer=bearer)
+        return {"content": '{"data": []}'}
+
+    monkeypatch.setattr(oracle, "_http_json", fake_http)
+    result = oracle.call_read_tool(
+        "get_stories_or_tasks", {"workspace_id": "67600006"},
+        config=_ConfigStub(),
+    )
+    assert result == {"data": []}
+    assert seen["url"].startswith("http://deeptutor.test:8011/api/v1/plugins/")
+    assert seen["bearer"] == "dt-token-for-test"
+
+
+def test_warm_up_sends_configured_auth(monkeypatch):
+    seen = {}
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def fake_urlopen(request, timeout):
+        seen["authorization"] = request.get_header("Authorization")
+        seen["url"] = request.full_url
+        seen["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(oracle.urllib.request, "urlopen", fake_urlopen)
+    assert oracle.warm_up(config=_ConfigStub(), timeout_s=7)
+    assert seen == {
+        "authorization": "Bearer dt-token-for-test",
+        "url": "http://deeptutor.test:8011/api/v1/settings/mcp",
+        "timeout": 7,
+    }
+
+
+def test_direct_bearer_does_not_follow_redirect_to_another_origin():
+    token = "sentinel-direct-token"
+
+    class Sink(BaseHTTPRequestHandler):
+        hits = 0
+
+        def do_POST(self):  # noqa: N802
+            type(self).hits += 1
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    sink = _serve(Sink)
+
+    class Redirect(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{sink.server_port}/steal")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    source = _serve(Redirect)
+    channel = dict(
+        oracle.DEFAULT_CHANNEL,
+        transport="direct_http",
+        endpoint=f"http://127.0.0.1:{source.server_port}/mcp",
+        bearer_secret_key="TAPD_DIRECT_TOKEN",
+    )
+    try:
+        with pytest.raises(oracle.OracleError) as exc:
+            oracle.call_read_tool(
+                "get_stories_or_tasks", {}, channel=channel,
+                config=_DirectConfigStub(token))
+        assert exc.value.code == oracle.E_ORACLE_FETCH_FAILED
+        assert Sink.hits == 0
+        assert token not in str(exc.value) and token not in str(exc.value.detail)
+    finally:
+        source.shutdown()
+        sink.shutdown()
+
+
+def test_direct_bearer_is_scrubbed_from_error_payload():
+    token = "sentinel-error-token"
+
+    class EchoError(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(("echo=" + self.headers.get("Authorization", "")).encode())
+
+        def log_message(self, *_args):
+            pass
+
+    server = _serve(EchoError)
+    channel = dict(
+        oracle.DEFAULT_CHANNEL,
+        transport="direct_http",
+        endpoint=f"http://127.0.0.1:{server.server_port}/mcp",
+        bearer_secret_key="TAPD_DIRECT_TOKEN",
+    )
+    try:
+        with pytest.raises(oracle.OracleError) as exc:
+            oracle.call_read_tool(
+                "get_stories_or_tasks", {}, channel=channel,
+                config=_DirectConfigStub(token))
+        payload = exc.value.as_payload()
+        assert token not in json.dumps(payload)
+        assert "<redacted>" in json.dumps(payload)
+    finally:
+        server.shutdown()
 
 
 # ── 快照冻结 ────────────────────────────────────────────────────────────────

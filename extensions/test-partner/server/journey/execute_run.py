@@ -16,9 +16,9 @@ import os
 import subprocess
 import sys
 import time
-from typing import Any
+from typing import Any, Callable
 
-from server.journey import artifacts
+from server.journey import artifacts, redlines
 from server.journey import process_registry as preg
 from server.journey.gates import credential_scan
 from server.journey.gates import track_purity as _track_purity
@@ -33,6 +33,8 @@ EVIDENCE_FILES = {
     "db_snapshot": "db_snapshot.json",
 }
 RUN_META_NAME = "run-meta.json"
+MIN_TIMEOUT_S = 1
+MAX_TIMEOUT_S = 1200
 
 
 def _write_json_atomic(path: str, payload: dict[str, Any]) -> None:
@@ -49,6 +51,45 @@ def _read_json_object(path: str) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise ValueError(f"{os.path.basename(path)} 不是 JSON 对象")
     return body
+
+
+def _execution_verdict(rows: list[dict[str, Any]], pytest_rc: int,
+                       expected_case_ids: list[str]) -> tuple[str, dict[str, Any]]:
+    """Classify the run and prove every selected case produced exactly one row."""
+    counts: dict[str, int] = {}
+    actual_ids: list[str] = []
+    malformed_rows = 0
+    for row in rows:
+        outcome = str(row.get("outcome") or "")
+        case_id = str(row.get("case_id") or "")
+        if not outcome or not case_id:
+            malformed_rows += 1
+            continue
+        counts[outcome] = counts.get(outcome, 0) + 1
+        actual_ids.append(case_id)
+    expected = set(expected_case_ids)
+    actual = set(actual_ids)
+    duplicate_ids = sorted({case_id for case_id in actual if actual_ids.count(case_id) > 1})
+    integrity = {
+        "ok": pytest_rc == 0 and malformed_rows == 0 and not duplicate_ids
+        and actual == expected,
+        "pytest_returncode": pytest_rc,
+        "missing_case_ids": sorted(expected - actual),
+        "unexpected_case_ids": sorted(actual - expected),
+        "duplicate_case_ids": duplicate_ids,
+        "malformed_row_count": malformed_rows,
+    }
+    if counts.get("failed"):
+        verdict = "FAIL"
+    elif not integrity["ok"]:
+        verdict = "BLOCK"
+    elif counts.get("blocked") or counts.get("no_assertions"):
+        verdict = "BLOCK"
+    elif counts.get("passed") or counts.get("observed"):
+        verdict = "PASS"
+    else:
+        verdict = "BLOCK"
+    return verdict, {"counts": counts, **integrity}
 
 
 def _resume_contract_problem(run_dir: str, expected: dict[str, str]) -> str:
@@ -111,27 +152,45 @@ def write_authorization(batch_id: str, root: str | None = None, *,
 
     authorized: set[str] = set()
     dropped: list[dict[str, str]] = []
-    for e in artifacts.read_events(batch_id, owner=owner, root=root):
-        if e.get("type") != "write_confirm":
-            continue
-        digests = e.get("digests") or {}
-        claimed = list(e.get("case_ids") or [])
-        if e.get("case_id"):
-            claimed.append(e["case_id"])
-        for cid in claimed:
-            recorded = digests.get(cid)
-            if not recorded:
-                dropped.append({"case_id": cid, "at": str(e.get("at", "")),
-                                "reason": "确认事件没记 digest，认不出它同意的是什么内容"})
-            elif cid not in current:
-                dropped.append({"case_id": cid, "at": str(e.get("at", "")),
-                                "reason": "该用例已不在当前采纳集里"})
-            elif current[cid] != recorded:
-                dropped.append({"case_id": cid, "at": str(e.get("at", "")),
-                                "reason": "用例内容已变（digest 不符）——旧确认同意的不是"
-                                          "现在这条，须重新确认"})
-            else:
-                authorized.add(cid)
+    caseset_id = str(caseset.get("caseset_id") or "")
+    all_events = [event for event in artifacts.read_events(
+        batch_id, owner=owner, root=root)
+        if event.get("type") == "write_confirm"]
+    events = [event for event in all_events
+              if str(event.get("caseset_id") or "") == caseset_id]
+    if not events:
+        # Legacy or hand-written rows must never authorize a write, but their
+        # rejection belongs in the receipt so operators can distinguish a
+        # malformed/stale decision from no confirmation at all.
+        if all_events:
+            event = all_events[-1]
+            for cid in list(event.get("case_ids") or []):
+                dropped.append({
+                    "case_id": cid,
+                    "at": str(event.get("at", "")),
+                    "reason": "确认事件没记 digest 或 caseset_id，认不出它同意的是什么内容",
+                })
+        return {"authorized": authorized, "dropped": dropped}
+    # Each confirmation is a complete decision for the current caseset.  The
+    # latest serialized ledger row replaces the previous decision, so an empty
+    # selection is a real revoke-all rather than a no-op.
+    event = events[-1]
+    digests = event.get("digests") or {}
+    claimed = list(event.get("case_ids") or [])
+    for cid in claimed:
+        recorded = digests.get(cid)
+        if not recorded:
+            dropped.append({"case_id": cid, "at": str(event.get("at", "")),
+                            "reason": "确认事件没记 digest，认不出它同意的是什么内容"})
+        elif cid not in current:
+            dropped.append({"case_id": cid, "at": str(event.get("at", "")),
+                            "reason": "该用例已不在当前采纳集里"})
+        elif current[cid] != recorded:
+            dropped.append({"case_id": cid, "at": str(event.get("at", "")),
+                            "reason": "用例内容已变（digest 不符）——旧确认同意的不是"
+                                      "现在这条，须重新确认"})
+        else:
+            authorized.add(cid)
     return {"authorized": authorized, "dropped": dropped}
 
 
@@ -192,7 +251,14 @@ def detect_track(manifest: dict[str, Any]) -> str:
     它今天安全，只因为清单与运行时之间有了对拍闸。**别把清单改回手抄的**，
     否则运行时每新增一个 UI op，这里都会悄悄多放行一种越轨。
     """
-    for case in manifest.get("cases", []) or []:
+    cases = manifest.get("cases", []) or []
+    declared = {str(case.get("track") or "") for case in cases}
+    if len(declared) == 1 and declared <= {"api", "ui"}:
+        # compile-gate already proved declaration↔op consistency and that the
+        # bundle is single-track.  Actions are intentionally absent from the
+        # runtime manifest, so the frozen track field is the lossless source.
+        return declared.pop()
+    for case in cases:
         for action in case.get("actions", []) or []:
             if str(action.get("op", "")) in UI_TRACK_OPS:
                 return "ui"
@@ -338,7 +404,9 @@ def _build_evidence_bundle(batch_id: str, run_dir: str, fingerprint: str,
 def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
             case_ids: list[str] | None = None, resume_run_id: str = "",
             base_url_override: str = "", timeout_s: int = 900,
-            triggered_by: str = "fresh", root: str | None = None) -> dict[str, Any]:
+            triggered_by: str = "fresh", root: str | None = None,
+            reserved_run_id: str = "",
+            on_effect_boundary: Callable[[], None] | None = None) -> dict[str, Any]:
     """跑一趟。
 
     `triggered_by`（`fresh` / `regenerate-replay`）落进 run_receipt——
@@ -346,6 +414,14 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
     （设计稿 §5.2 第三层）。它**不参与幂等 key**：幂等看的是输入，
     不是谁按的按钮。
     """
+    try:
+        timeout_s = int(timeout_s)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "INVALID_TIMEOUT",
+                "detail": f"timeout_s 必须是 {MIN_TIMEOUT_S}..{MAX_TIMEOUT_S} 的整数"}
+    if not MIN_TIMEOUT_S <= timeout_s <= MAX_TIMEOUT_S:
+        return {"ok": False, "error": "INVALID_TIMEOUT",
+                "detail": f"timeout_s 必须在 {MIN_TIMEOUT_S}..{MAX_TIMEOUT_S} 秒"}
     batch = artifacts.load_batch(batch_id, root=root)
     owner = artifacts.safe_owner(batch.get("partition") or batch.get("owner"))
     # 解析到 batch 后立刻钉死 owner；后续不再走“跨 owner 扫描”兼容路径。
@@ -358,19 +434,34 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
                 "hint": "先跑 compile 产出 AutomationBundle"}
     with open(manifest_path, encoding="utf-8") as fh:
         manifest = json.load(fh)
-    base_url = (base_url_override or batch.get("base_url") or "").rstrip("/")
-    if not base_url:
-        return {"ok": False, "error": "NO_BASE_URL"}
+    manifest_case_ids = [str(item["case_id"]) for item in manifest["cases"]]
+    requested_case_ids = list(case_ids or manifest_case_ids)
+    unknown_case_ids = sorted(set(requested_case_ids) - set(manifest_case_ids))
+    if unknown_case_ids:
+        return {"ok": False, "error": "UNKNOWN_CASE_IDS",
+                "detail": unknown_case_ids}
+    selected_case_ids = [case_id for case_id in manifest_case_ids
+                         if case_id in set(requested_case_ids)]
+    test_names = [item["test_name"] for item in manifest["cases"]
+                  if item["case_id"] in set(selected_case_ids)]
+    if not test_names:
+        return {"ok": False, "error": "NO_CASES_SELECTED"}
+    raw_base_url = base_url_override or batch.get("base_url") or ""
+    validated_url = redlines.safe_target_url(raw_base_url)
+    if not validated_url["ok"]:
+        return {"ok": False, "error": "INVALID_BASE_URL",
+                "detail": validated_url["error"]}
+    base_url = validated_url["url"]
 
-    from server.journey import redlines
     contract = {
         "batch_id": batch_id,
         "owner_partition": owner,
         "caseset_id": str(manifest["caseset_id"]),
+        "caseset_sha256": str(manifest.get("caseset_sha256") or ""),
         "compiler_version": str(manifest["compiler_version"]),
         "base_url_host": redlines.host_key(base_url),
     }
-    run_id = resume_run_id or artifacts.new_run_id()
+    run_id = resume_run_id or reserved_run_id or artifacts.new_run_id()
     contract["run_id"] = run_id
     try:
         run_dir = artifacts.run_dir(
@@ -392,18 +483,14 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
 
     slot = preg.acquire_slot(run_id, run_dir, root=root)
     if not slot["ok"]:
+        if not resume_run_id:
+            artifacts.discard_fresh_run(
+                run_id, owner=owner, root=root)
         return slot
 
     variables = dict(variables or {})
     write_auth = write_authorization(batch_id, root, owner=owner)
     write_ok = write_auth["authorized"]
-    selected = case_ids or [m["case_id"] for m in manifest["cases"]]
-    test_names = [m["test_name"] for m in manifest["cases"]
-                  if m["case_id"] in selected]
-    if not test_names:
-        preg.release_slot(run_id, root=root)
-        return {"ok": False, "error": "NO_CASES_SELECTED"}
-
     env = dict(os.environ)
     env.update({
         "TP_BASE_URL": base_url,
@@ -422,6 +509,12 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
     started = artifacts.now_iso()
     t0 = time.time()
     try:
+        # The caller persists an execution intent before entering this
+        # function.  Advancing it here, immediately before pytest can issue a
+        # target request, closes the crash window without classifying earlier
+        # validation/slot failures as possible external writes.
+        if on_effect_boundary is not None:
+            on_effect_boundary()
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", "-q", "-c", "pytest.ini",
              "--tb=line", "-k", " or ".join(test_names), "."],
@@ -442,17 +535,10 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
         preg.release_slot(run_id, root=root)
 
     rows = _read_results(run_dir)
-    counts: dict[str, int] = {}
-    for r in rows:
-        counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1
-    if counts.get("failed"):
-        verdict = "FAIL"
-    elif counts.get("blocked") or counts.get("no_assertions") or pytest_rc == -1:
-        verdict = "BLOCK"
-    elif counts.get("passed") or counts.get("observed"):
-        verdict = "PASS"
-    else:
-        verdict = "BLOCK"
+    expected_case_ids = list(dict.fromkeys([*done_ids, *selected_case_ids]))
+    verdict, result_integrity = _execution_verdict(
+        rows, pytest_rc, expected_case_ids)
+    counts = result_integrity.pop("counts")
 
     # A2：执行期就地探针 —— 指纹锚的是**这一趟真正打的靶**，不是接入期那个。
     # 探针失败也如实记（status=unreachable），那正是类 1 故障场景要的语义。
@@ -474,6 +560,7 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
         "batch_id": batch_id,
         "owner_partition": owner,
         "caseset_id": manifest["caseset_id"],
+        "caseset_sha256": manifest.get("caseset_sha256", ""),
         "compiler_version": manifest["compiler_version"],
         "base_url_host": redlines.host_key(base_url),   # 收据只记 host，不记完整 URL
         # A2：两个指纹**并列，不互相冒充**。
@@ -498,6 +585,7 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
         "resumed": bool(resume_run_id),
         "selected_case_count": len(test_names),
         "counts": counts,
+        "result_integrity": result_integrity,
         "verdict": verdict,
         "pytest_returncode": pytest_rc,
         "pytest_tail": pytest_tail,
@@ -514,7 +602,18 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
     receipt_path = os.path.join(run_dir, "receipt.json")
     _write_json_atomic(receipt_path, receipt)
 
-    known_secrets = [str(v) for v in variables.values()]
+    def _secret_leaves(value: Any) -> list[str]:
+        if isinstance(value, dict):
+            return [leaf for item in value.values() for leaf in _secret_leaves(item)]
+        if isinstance(value, (list, tuple)):
+            return [leaf for item in value for leaf in _secret_leaves(item)]
+        if value is None:
+            return []
+        if isinstance(value, bool):
+            return ["true" if value else "false"]
+        return [str(value)]
+
+    known_secrets = list(dict.fromkeys(_secret_leaves(variables)))
 
     def _public_scan_report(scan: dict[str, Any], *, passes: int) -> dict[str, Any]:
         return {
@@ -526,6 +625,9 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
                 for h in scan["entropy_hits"]
             ],
             "allowlisted_hits": scan.get("allowlisted_hits", []),
+            "entropy_skipped_large_files": scan.get(
+                "entropy_skipped_large_files", []),
+            "archive_rejections": scan.get("archive_rejections", []),
             "scanned_files": scan["scanned_files"],
             "passes": passes,
             "note": scan["note"],
@@ -549,7 +651,7 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
     _write_json_atomic(os.path.join(run_dir, "credscan.json"),
                        _public_scan_report(scan2, passes=2))
     _write_json_atomic(receipt_path, receipt)
-    if run_id not in batch.get("run_ids", []):
-        batch.setdefault("run_ids", []).append(run_id)
-        artifacts.save_batch(batch, root=root)
+    # 同一批次允许并行跑不同输入；完成登记必须在批次级锁内重新读取并追加，
+    # 否则两边拿着开跑前的旧 batch 做 read-modify-write，会把其中一个 run_id 覆盖掉。
+    artifacts.append_run_id(batch_id, run_id, owner=owner, root=root)
     return {"ok": True, "run_id": run_id, "run_dir": run_dir, "receipt": receipt}

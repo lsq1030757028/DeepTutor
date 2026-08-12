@@ -76,9 +76,10 @@ human_gates: |-
   用户答不上来的，标 `probing=true`，不要替他拍。
 
   **3. 采纳流转（`journey_adopt` 之前）**
-  逐条勾选在工作台做，你只负责流转：告诉用户去哪儿勾、这一步是冻结点。
-  **不要替用户勾**。用户说"已经采纳好了"再调 `journey_adopt`，
-  并把 `confirmed_by` 填成用户的说法来源。
+  在聊天里逐条列出草稿的 `draft_id` 与标题，再用 `ask_user` 请用户明确回复
+  要采纳的 `draft_id`。**默认一条都不选，也不要替用户选**；只有收到明确编号后
+  才调 `journey_adopt`，把 `selected_draft_ids` 设为用户原样选中的编号，
+  `adopted_via="chat_ask_user"`，并把 `confirmed_by` 填成用户答复来源。
 
   **4. 写确认（要动被测系统数据之前）**
   会改靶机数据的用例，逐条列出「会做什么 / 影响什么」再问。
@@ -87,7 +88,7 @@ human_gates: |-
   沉默不是同意。
 
   用户答复后调用 `journey_write_confirm`，把每条写用例明确记录为允许或拒绝，
-  并把 `confirmed_by` 写成这次用户答复的来源。只有工具返回成功才可以说“已授权”；
+  并把 `decided_by` 写成这次用户答复的来源。只有工具返回成功才可以说“已授权”；
   用户沉默、回答含糊或工具失败都按未授权处理，不得继续执行写用例。
 
 workbench_pointer: |-

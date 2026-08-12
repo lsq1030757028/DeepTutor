@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 import time
 
 import pytest
@@ -195,6 +196,27 @@ def test_editing_a_case_marks_it_human_and_persists(root):
     # 复读一次：改动真落盘了，不是只改了返回值
     row = workbench.read_delivery(batch, root)["cases"][0]
     assert row["title"] == "改过的标题" and row["origin"] == "human"
+
+
+def test_concurrent_edits_to_different_cases_are_both_preserved(root):
+    batch = make_batch(root)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(
+            lambda args: workbench.update_case(batch, args[0], args[1], root),
+            [
+                ("TC-001", {"title": "并发改标题"}),
+                ("TC-002", {"expected": "并发改预期"}),
+            ],
+        ))
+
+    assert all(result["ok"] for result in results)
+    rows = {row["case_id"]: row for row in workbench.read_delivery(batch, root)["cases"]}
+    assert rows["TC-001"]["title"] == "并发改标题"
+    assert rows["TC-002"]["expected"] == "并发改预期"
+    assert rows["TC-001"]["origin"] == rows["TC-002"]["origin"] == "human"
+    batch_dir = os.path.join(root, batch)
+    assert not [name for name in os.listdir(batch_dir) if name.endswith(".tmp")]
 
 
 def test_identity_fields_cannot_be_edited(root):

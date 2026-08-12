@@ -39,6 +39,30 @@ def host_key(url: str) -> str:
     return f"{host.lower()}:{port}"
 
 
+def safe_target_url(url: str) -> dict[str, Any]:
+    """Validate a persistable target URL without echoing rejected secrets."""
+    raw = str(url or "").strip()
+    try:
+        parts = urlsplit(raw)
+        port = parts.port
+    except ValueError:
+        return {"ok": False, "error": "目标地址格式非法"}
+    if parts.scheme.lower() not in {"http", "https"} or not parts.hostname:
+        return {"ok": False, "error": "目标地址必须是 http(s) URL"}
+    if parts.username is not None or parts.password is not None:
+        return {"ok": False, "error": "目标地址不能内嵌用户名或密码"}
+    if parts.query or parts.fragment:
+        return {"ok": False, "error": "目标地址不能包含 query 或 fragment；敏感值请用变量"}
+    hostname = parts.hostname.lower()
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+    default_port = 443 if parts.scheme.lower() == "https" else 80
+    netloc = hostname if port in (None, default_port) else f"{hostname}:{port}"
+    path = parts.path or ""
+    normalized = f"{parts.scheme.lower()}://{netloc}{path}".rstrip("/")
+    return {"ok": True, "url": normalized}
+
+
 def same_host(base_url: str, url: str) -> bool:
     """等价类判定（默认单元素）：两边 host_key 非空且字面相等。"""
     a, b = host_key(base_url), host_key(url)

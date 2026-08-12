@@ -89,6 +89,7 @@ async def test_browser_routes_bind_current_owner_and_only_expose_safe_actions(mo
 
 
 def test_browser_routes_use_the_runtime_name_for_a_hyphenated_mcp_server() -> None:
-    assert wrapped_tool_name(
-        "test-partner", "journey_list_batches"
-    ) == "mcp_test-partner_journey_list_batches"
+    assert (
+        wrapped_tool_name("test-partner", "journey_list_batches")
+        == "mcp_test-partner_journey_list_batches"
+    )

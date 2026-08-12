@@ -15,6 +15,7 @@ import os
 from typing import Any
 
 from server.journey import artifacts
+from server.journey.digest import sha256_digest
 from server.journey.gates import evidence_gate, mechanical_check, verdict_projection
 
 
@@ -34,6 +35,39 @@ def project(run_id: str) -> dict[str, Any]:
             "ok": False,
             "stage": "credential_scan",
             "error": "凭据零落盘扫描未通过，禁止生成正式结论",
+        }
+    batch_id = str(receipt.get("batch_id") or "")
+    try:
+        batch = artifacts.load_batch(batch_id)
+        caseset = artifacts.load_artifact(batch_id, "approved_caseset")
+    except artifacts.ArtifactError as exc:
+        return {"ok": False, "stage": "run_identity",
+                "error": f"run 无法对账当前批次/采纳集：{exc}"}
+    expected_owner = artifacts.safe_owner(
+        batch.get("partition") or batch.get("owner"))
+    mismatches = []
+    if run_id not in (batch.get("run_ids") or []):
+        mismatches.append("run_ids")
+    if str(receipt.get("owner_partition") or "") != expected_owner:
+        mismatches.append("owner_partition")
+    if str(receipt.get("caseset_id") or "") != str(caseset.get("caseset_id") or ""):
+        mismatches.append("caseset_id")
+    if str(receipt.get("caseset_sha256") or "") != sha256_digest(caseset):
+        mismatches.append("caseset_sha256")
+    if mismatches:
+        return {
+            "ok": False,
+            "stage": "run_identity",
+            "error": "run 与当前批次/采纳集版本不一致，禁止投影正式结论",
+            "mismatches": mismatches,
+        }
+    integrity = receipt.get("result_integrity")
+    if isinstance(integrity, dict) and integrity.get("ok") is not True:
+        return {
+            "ok": False,
+            "stage": "run_integrity",
+            "error": "pytest 未完整产出每条已选用例的唯一结果，禁止生成正式结论",
+            "result_integrity": integrity,
         }
 
     bundle_path = os.path.join(run_dir, "evidence-bundle.json")

@@ -35,7 +35,8 @@ def _reservation_process(root, batch_id, marker_path, start_event, result_queue)
         with open(marker_path, "a", encoding="utf-8") as fh:
             fh.write("side-effect\n")
         time.sleep(0.1)
-        idempotency.record(batch_id, key, "execute", {"ok": True}, root=root)
+        idempotency.record(batch_id, key, "execute", {"ok": True},
+                           params={"scope": "all"}, root=root)
         result_queue.put("first")
 
 
@@ -265,7 +266,8 @@ def test_atomic_reservation_allows_one_thread_side_effect(store):
                 return "replay"
             side_effects.append("ran")
             time.sleep(0.05)
-            idempotency.record(bid, key, "execute", {"ok": True, "run_id": "r-1"})
+            idempotency.record(bid, key, "execute", {"ok": True, "run_id": "r-1"},
+                               params={"scope": "all"})
             return "first"
 
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -287,6 +289,10 @@ def test_execute_tool_holds_reservation_across_real_side_effect_boundary(
         return {"ok": True, "run_id": "r-1", "receipt": {"verdict": "PASS"}}
 
     monkeypatch.setattr(tools._execute, "execute", fake_execute)
+    monkeypatch.setattr(tools, "_bundle_state", lambda *_args: {
+        "bundle_sha256": "sha256:test", "caseset_id": "acs-test",
+        "compiler_version": "test",
+    })
 
     def invoke():
         barrier.wait()
@@ -298,6 +304,245 @@ def test_execute_tool_holds_reservation_across_real_side_effect_boundary(
     assert calls == ["ran"]
     assert sum(result.get("replayed") is True for result in results) == 7
     assert all(result["ok"] for result in results)
+
+
+def test_write_execute_crash_requires_reconciliation_without_second_effect(
+        store, monkeypatch):
+    """A crash after the target boundary must never auto-repeat a write."""
+    bid = artifacts.create_batch("write-crash", owner=TRUSTED_OWNER)["batch_id"]
+    calls = []
+
+    def crash_after_boundary(*_args, on_effect_boundary=None, **_kwargs):
+        calls.append("target-write")
+        assert on_effect_boundary is not None
+        on_effect_boundary()
+        raise RuntimeError("injected crash after target write")
+
+    monkeypatch.setattr(tools._execute, "execute", crash_after_boundary)
+    monkeypatch.setattr(tools, "_selected_authorized_write_risk",
+                        lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(tools, "_bundle_state", lambda *_args: {
+        "bundle_sha256": "sha256:test", "caseset_id": "acs-test",
+        "compiler_version": "test",
+    })
+
+    with pytest.raises(RuntimeError, match="injected crash"):
+        tools.execute(batch_id=bid, idempotency_key="write-crash-key",
+                      owner=TRUSTED_OWNER)
+    retry = tools.execute(batch_id=bid, idempotency_key="write-crash-key",
+                          owner=TRUSTED_OWNER)
+    assert retry["code"] == "E_EXECUTION_RECONCILIATION_REQUIRED"
+    assert calls == ["target-write"]
+
+
+def test_receipt_after_crash_is_recovered_without_second_execute(
+        store, monkeypatch):
+    """Crash after final receipt but before ledger record reuses that receipt."""
+    bid = artifacts.create_batch("receipt-crash", owner=TRUSTED_OWNER)["batch_id"]
+    calls = []
+
+    def finish_receipt(*_args, reserved_run_id="", on_effect_boundary=None,
+                       **_kwargs):
+        calls.append(reserved_run_id)
+        assert on_effect_boundary is not None
+        on_effect_boundary()
+        run_dir = artifacts.run_dir(
+            reserved_run_id, create=True, owner=TRUSTED_OWNER)
+        receipt = {
+            "run_id": reserved_run_id,
+            "batch_id": bid,
+            "owner_partition": TRUSTED_OWNER,
+            "credential_scan_passes": 2,
+            "credential_scan_ok": True,
+            "verdict": "PASS",
+        }
+        artifacts._write_json(  # noqa: SLF001 - fault-injection fixture
+            os.path.join(run_dir, "receipt.json"), receipt)
+        return {"ok": True, "run_id": reserved_run_id, "receipt": receipt}
+
+    monkeypatch.setattr(tools._execute, "execute", finish_receipt)
+    monkeypatch.setattr(tools, "_selected_authorized_write_risk",
+                        lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(tools, "_bundle_state", lambda *_args: {
+        "bundle_sha256": "sha256:test", "caseset_id": "acs-test",
+        "compiler_version": "test",
+    })
+    real_update = idempotency.update_execution_intent
+    crash_once = {"armed": True}
+
+    def fail_before_complete(*args, status, **kwargs):
+        if status == "complete" and crash_once["armed"]:
+            crash_once["armed"] = False
+            raise RuntimeError("injected crash before ledger")
+        return real_update(*args, status=status, **kwargs)
+
+    monkeypatch.setattr(idempotency, "update_execution_intent",
+                        fail_before_complete)
+    with pytest.raises(RuntimeError, match="before ledger"):
+        tools.execute(batch_id=bid, idempotency_key="receipt-crash-key",
+                      owner=TRUSTED_OWNER)
+    recovered = tools.execute(
+        batch_id=bid, idempotency_key="receipt-crash-key",
+        owner=TRUSTED_OWNER)
+    assert recovered["ok"] and recovered["recovered"] is True
+    assert recovered["run_id"] == calls[0]
+    assert calls == [calls[0]]
+    assert artifacts.load_batch(
+        bid, owner=TRUSTED_OWNER)["run_ids"] == [calls[0]]
+
+
+def test_same_batch_compile_and_adopt_are_resource_serialized(store, monkeypatch):
+    """Different tools/keys still mutate one batch as one ordered resource."""
+    bid = artifacts.create_batch("resource-race", owner=TRUSTED_OWNER)["batch_id"]
+    barrier = threading.Barrier(2)
+    state_lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def effect(result):
+        nonlocal active, max_active
+        with state_lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.05)
+        with state_lock:
+            active -= 1
+        return result
+
+    # Both public tool functions retain their real shared batch decorator; only
+    # deeper artifact prerequisites are replaced by deterministic boundaries.
+    monkeypatch.setattr(tools, "_guarded", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tools, "_artifact_state_digest",
+                        lambda *_args, **_kwargs: "sha256:" + "a" * 64)
+    monkeypatch.setattr(tools, "_batch_partition",
+                        lambda *_args, **_kwargs: TRUSTED_OWNER)
+    monkeypatch.setattr(
+        tools._compile, "compile_bundle",
+        lambda *_args, **_kwargs: effect({"ok": True}))
+    monkeypatch.setattr(
+        tools._adopt, "adopt",
+        lambda *_args, **_kwargs: effect({
+            "ok": True, "approved_caseset": {}, "cases_gate": {}}))
+
+    def compile_one():
+        barrier.wait()
+        return tools.compile_bundle(
+            batch_id=bid, idempotency_key="compile-k",
+            owner=TRUSTED_OWNER)
+
+    def adopt_one():
+        barrier.wait()
+        return tools.adopt(
+            batch_id=bid, selected_draft_ids=["d1"],
+            idempotency_key="adopt-k", skip_drift_check=True,
+            owner=TRUSTED_OWNER)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(compile_one)
+        second = pool.submit(adopt_one)
+        results = [first.result(timeout=5), second.result(timeout=5)]
+    assert all(result["ok"] for result in results)
+    assert max_active == 1
+
+
+def test_compile_replays_only_for_the_same_caseset_version(store, monkeypatch):
+    bid = artifacts.create_batch("compile-version", owner=TRUSTED_OWNER)["batch_id"]
+    state = {"digest": "sha256:" + "a" * 64}
+    calls = []
+    monkeypatch.setattr(tools, "_guarded", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tools, "_batch_partition",
+                        lambda *_args, **_kwargs: TRUSTED_OWNER)
+    monkeypatch.setattr(tools, "_artifact_state_digest",
+                        lambda *_args, **_kwargs: state["digest"])
+    monkeypatch.setattr(
+        tools._compile, "compile_bundle",
+        lambda *_args, **_kwargs: calls.append(state["digest"]) or {"ok": True})
+    first = tools.compile_bundle(batch_id=bid, owner=TRUSTED_OWNER)
+    replay = tools.compile_bundle(batch_id=bid, owner=TRUSTED_OWNER)
+    state["digest"] = "sha256:" + "b" * 64
+    second_version = tools.compile_bundle(batch_id=bid, owner=TRUSTED_OWNER)
+    assert first["ok"] and replay["replayed"] is True and second_version["ok"]
+    assert calls == ["sha256:" + "a" * 64, "sha256:" + "b" * 64]
+
+
+def test_adopt_replays_only_for_the_same_draft_version(store, monkeypatch):
+    bid = artifacts.create_batch("adopt-version", owner=TRUSTED_OWNER)["batch_id"]
+    state = {"digest": "sha256:" + "a" * 64}
+    calls = []
+    monkeypatch.setattr(tools, "_guarded", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tools, "_batch_partition",
+                        lambda *_args, **_kwargs: TRUSTED_OWNER)
+    monkeypatch.setattr(tools, "_artifact_state_digest",
+                        lambda *_args, **_kwargs: state["digest"])
+    monkeypatch.setattr(
+        tools._adopt, "adopt",
+        lambda *_args, **_kwargs: calls.append(state["digest"]) or {
+            "ok": True, "approved_caseset": {}, "cases_gate": {}})
+    first = tools.adopt(
+        batch_id=bid, selected_draft_ids=["d1"], skip_drift_check=True,
+        owner=TRUSTED_OWNER)
+    replay = tools.adopt(
+        batch_id=bid, selected_draft_ids=["d1"], skip_drift_check=True,
+        owner=TRUSTED_OWNER)
+    state["digest"] = "sha256:" + "b" * 64
+    second_version = tools.adopt(
+        batch_id=bid, selected_draft_ids=["d1"], skip_drift_check=True,
+        owner=TRUSTED_OWNER)
+    assert first["ok"] and replay["replayed"] is True and second_version["ok"]
+    assert calls == ["sha256:" + "a" * 64, "sha256:" + "b" * 64]
+
+
+def test_successful_readoption_invalidates_the_previous_bundle(store, monkeypatch):
+    bid = artifacts.create_batch("adopt-invalidates", owner=TRUSTED_OWNER)["batch_id"]
+    bundle = os.path.join(artifacts.batch_dir(
+        bid, owner=TRUSTED_OWNER), "bundle")
+    os.makedirs(bundle, exist_ok=True)
+    with open(os.path.join(bundle, "bundle.json"), "w", encoding="utf-8") as fh:
+        json.dump({"caseset_id": "old"}, fh)
+    monkeypatch.setattr(tools, "_guarded", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tools, "_batch_partition",
+                        lambda *_args, **_kwargs: TRUSTED_OWNER)
+    monkeypatch.setattr(tools, "_artifact_state_digest",
+                        lambda *_args, **_kwargs: "sha256:" + "a" * 64)
+    monkeypatch.setattr(
+        tools._adopt, "adopt", lambda *_args, **_kwargs: {
+            "ok": True, "approved_caseset": {"caseset_id": "new"},
+            "cases_gate": {}})
+    result = tools.adopt(
+        batch_id=bid, selected_draft_ids=["d1"], skip_drift_check=True,
+        owner=TRUSTED_OWNER)
+    assert result["ok"]
+    assert not os.path.exists(bundle)
+
+
+def test_execute_replays_only_for_the_same_bundle_version(store, monkeypatch):
+    bid = artifacts.create_batch("execute-version", owner=TRUSTED_OWNER)["batch_id"]
+    state = {"digest": "sha256:" + "a" * 64}
+    calls = []
+    monkeypatch.setattr(tools, "_guarded", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tools, "_batch_partition",
+                        lambda *_args, **_kwargs: TRUSTED_OWNER)
+    monkeypatch.setattr(tools, "_selected_authorized_write_risk",
+                        lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(tools, "_bundle_state", lambda *_args, **_kwargs: {
+        "bundle_sha256": state["digest"], "caseset_id": "acs-test",
+        "compiler_version": "test",
+    })
+
+    def fake_execute(*_args, reserved_run_id="", **_kwargs):
+        calls.append((state["digest"], reserved_run_id))
+        return {"ok": True, "run_id": reserved_run_id,
+                "receipt": {"verdict": "PASS"}}
+
+    monkeypatch.setattr(tools._execute, "execute", fake_execute)
+    first = tools.execute(batch_id=bid, owner=TRUSTED_OWNER)
+    replay = tools.execute(batch_id=bid, owner=TRUSTED_OWNER)
+    state["digest"] = "sha256:" + "b" * 64
+    second_version = tools.execute(batch_id=bid, owner=TRUSTED_OWNER)
+    assert first["ok"] and replay["replayed"] is True and second_version["ok"]
+    assert [digest for digest, _run in calls] == [
+        "sha256:" + "a" * 64, "sha256:" + "b" * 64]
+    assert calls[0][1] != calls[1][1]
 
 
 def test_atomic_reservation_allows_one_process_side_effect(tmp_path):
@@ -328,11 +573,13 @@ def test_same_explicit_key_is_scoped_by_tool(store):
     with idempotency.reservation(
             bid, "adopt", {}, "same-key") as (key, replay):
         assert replay is None
-        idempotency.record(bid, key, "adopt", {"ok": True, "from": "adopt"})
+        idempotency.record(bid, key, "adopt", {"ok": True, "from": "adopt"},
+                           params={})
     with idempotency.reservation(
             bid, "execute", {}, "same-key") as (key, replay):
         assert replay is None
-        idempotency.record(bid, key, "execute", {"ok": True, "from": "execute"})
+        idempotency.record(bid, key, "execute", {"ok": True, "from": "execute"},
+                           params={})
     assert idempotency.lookup(
         bid, "same-key", tool="adopt")["result"]["from"] == "adopt"
     assert idempotency.lookup(
@@ -348,4 +595,20 @@ def test_failed_reservation_without_record_is_released_for_retry(store):
     with idempotency.reservation(
             bid, "execute", {}, "retry-key") as (key, replay):
         assert replay is None
-        idempotency.record(bid, key, "execute", {"ok": True})
+        idempotency.record(bid, key, "execute", {"ok": True}, params={})
+
+
+def test_explicit_key_with_different_input_is_a_conflict(store):
+    bid = artifacts.create_batch("explicit-conflict")["batch_id"]
+    with idempotency.reservation(
+            bid, "execute", {"case_ids": ["a"]}, "operator-key") as (key, replay):
+        assert replay is None
+        idempotency.record(
+            bid, key, "execute", {"ok": True, "run_id": "r-a"},
+            params={"case_ids": ["a"]})
+
+    with idempotency.reservation(
+            bid, "execute", {"case_ids": ["b"]}, "operator-key") as (_key, replay):
+        assert replay is not None
+        assert replay["ok"] is False
+        assert replay["code"] == "E_IDEMPOTENCY_CONFLICT"

@@ -23,6 +23,7 @@ M1 把九原子工具做完了，但**没有任何对外调用面**：`@mcp.tool
 from __future__ import annotations
 
 from functools import wraps
+import json
 import os
 from typing import Any
 
@@ -114,6 +115,24 @@ def _requires_trusted_owner(fn):
     return wrapped
 
 
+def _serializes_batch_mutation(fn):
+    """Keep one batch's state transitions ordered while other batches can run."""
+    @wraps(fn)
+    def wrapped(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        batch_id = str(kwargs.get("batch_id") or "")
+        root = kwargs.get("root")
+        # Preserve the tool's own E_NO_BATCH contract.  Invalid or missing
+        # batches are validated by ``_guarded``; trying to derive a lock path
+        # first would make the outer owner wrapper misclassify that failure.
+        try:
+            artifacts.load_batch(batch_id, root=root)
+        except artifacts.ArtifactError:
+            return fn(*args, **kwargs)
+        with artifacts.batch_mutation_lock(batch_id, root=root):
+            return fn(*args, **kwargs)
+    return wrapped
+
+
 def _log_call(batch_id: str, tool: str, caller_surface: str,
               root: str | None = None) -> None:
     """把调用面记进 events.jsonl（DoD#8e-3：**信号，不当闸**）。
@@ -143,6 +162,65 @@ def _batch_partition(batch_id: str, root: str | None) -> str:
     """从已落盘批次取幂等/执行分区，不信任调用方自报 owner。"""
     batch = artifacts.load_batch(batch_id, root=root)
     return artifacts.safe_owner(batch.get("partition") or batch.get("owner"))
+
+
+def _artifact_state_digest(batch_id: str, kind: str,
+                           root: str | None = None) -> str:
+    return sha256_digest(artifacts.load_artifact(batch_id, kind, root=root))
+
+
+def _bundle_state(batch_id: str, root: str | None = None) -> dict[str, str]:
+    path = os.path.join(artifacts.batch_dir(batch_id, root=root), "bundle", "bundle.json")
+    with open(path, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    return {
+        "bundle_sha256": sha256_digest(manifest),
+        "caseset_id": str(manifest.get("caseset_id") or ""),
+        "compiler_version": str(manifest.get("compiler_version") or ""),
+    }
+
+
+def _selected_authorized_write_risk(batch_id: str,
+                                    case_ids: list[str] | None, *,
+                                    owner: str,
+                                    root: str | None = None) -> bool:
+    """Whether this exact execute request may send a confirmed write."""
+    try:
+        caseset = artifacts.load_artifact(
+            batch_id, "approved_caseset", owner=owner, root=root)
+    except artifacts.ArtifactError:
+        return False
+    selected = set(case_ids or [
+        str(case.get("case_id") or "") for case in caseset.get("cases") or []])
+    authorized = _execute.write_authorization(
+        batch_id, owner=owner, root=root)["authorized"]
+    return any(
+        str(case.get("case_id") or "") in selected
+        and str(case.get("case_id") or "") in authorized
+        and bool((case.get("side_effects") or {}).get("writes"))
+        for case in caseset.get("cases") or [])
+
+
+def _recover_completed_execute(batch_id: str, intent: dict[str, Any], *,
+                               owner: str, root: str | None = None
+                               ) -> dict[str, Any] | None:
+    """Recover the post-receipt/pre-ledger crash window without re-running."""
+    run_id = str(intent.get("run_id") or "")
+    try:
+        receipt_path = os.path.join(artifacts.run_dir(
+            run_id, owner=owner, root=root), "receipt.json")
+        with open(receipt_path, encoding="utf-8") as fh:
+            receipt = json.load(fh)
+    except (artifacts.ArtifactError, OSError, ValueError):
+        return None
+    if not isinstance(receipt, dict) or \
+            str(receipt.get("run_id") or "") != run_id or \
+            str(receipt.get("batch_id") or "") != batch_id or \
+            str(receipt.get("owner_partition") or owner) != owner or \
+            int(receipt.get("credential_scan_passes") or 0) < 2:
+        return None
+    artifacts.append_run_id(batch_id, run_id, owner=owner, root=root)
+    return _ok(run_id=run_id, receipt=receipt, recovered=True)
 
 
 # ── 1. ingest（唯一能创建批次；fail-closed 于可信 bridge）───────────────────
@@ -210,6 +288,7 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
 
 
 @_requires_trusted_owner
+@_serializes_batch_mutation
 def clarify(*, batch_id: str, rules: list[dict[str, Any]],
             confirmed_facts_md: str, clarifications: list[dict[str, Any]] | None = None,
             caller_surface: str = "unknown",
@@ -224,6 +303,7 @@ def clarify(*, batch_id: str, rules: list[dict[str, Any]],
 
 
 @_requires_trusted_owner
+@_serializes_batch_mutation
 def analyze(*, batch_id: str, example_map: list[dict[str, Any]],
             analysis_md: str, caller_surface: str = "unknown",
             root: str | None = None) -> dict[str, Any]:
@@ -236,6 +316,7 @@ def analyze(*, batch_id: str, example_map: list[dict[str, Any]],
 
 
 @_requires_trusted_owner
+@_serializes_batch_mutation
 def draft_cases(*, batch_id: str, cases: list[dict[str, Any]],
                 uncovered_rules: list[dict[str, Any]] | None = None,
                 caller_surface: str = "unknown",
@@ -251,6 +332,7 @@ def draft_cases(*, batch_id: str, cases: list[dict[str, Any]],
 
 
 @_requires_trusted_owner
+@_serializes_batch_mutation
 def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "",
           adopted_via: str = "workbench_selection", confirmed_by: str = "",
           idempotency_key: str = "", skip_drift_check: bool = False,
@@ -269,7 +351,11 @@ def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "
             return _err(drift["code"], drift["message"], detail=drift.get("detail"))
 
     params = {"selected_draft_ids": sorted(selected_draft_ids or []),
-              "caseset_slug": caseset_slug}
+              "caseset_slug": caseset_slug,
+              "case_draft_sha256": _artifact_state_digest(
+                  batch_id, "case_draft", root),
+              "intake_profile_sha256": _artifact_state_digest(
+                  batch_id, "intake_profile", root)}
     owner = _batch_partition(batch_id, root)
     with idempotency.reservation(batch_id, "adopt", params, idempotency_key,
                                  owner=owner, root=root) as (key, replay):
@@ -280,13 +366,19 @@ def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "
                          confirmed_by=confirmed_by)
         if not r.get("ok"):
             return _err("E_ADOPT_REJECTED", "采纳没过 cases_gate", detail=r)
+        # The bundle is a pure derivative of the approved caseset.  Keeping an
+        # older bundle after re-adoption would let execute run the previous
+        # cases while the UI shows the new frozen set.
+        artifacts.invalidate_bundle(batch_id, owner=owner, root=root)
         out = _ok(approved_caseset=r.get("approved_caseset"),
                   cases_gate=r.get("cases_gate"), idempotency_key=key)
-        idempotency.record(batch_id, key, "adopt", out, owner=owner, root=root)
+        idempotency.record(batch_id, key, "adopt", out, params=params,
+                           owner=owner, root=root)
         return out
 
 
 @_requires_trusted_owner
+@_serializes_batch_mutation
 def write_confirm(*, batch_id: str, case_ids: list[str] | None = None,
                   decided_by: str = "", confirmed_via: str = "ask_user_card",
                   caller_surface: str = "unknown",
@@ -359,6 +451,7 @@ def write_confirm(*, batch_id: str, case_ids: list[str] | None = None,
 
 
 @_requires_trusted_owner
+@_serializes_batch_mutation
 def compile_bundle(*, batch_id: str, idempotency_key: str = "",
                    caller_surface: str = "unknown",
                    root: str | None = None) -> dict[str, Any]:
@@ -366,7 +459,9 @@ def compile_bundle(*, batch_id: str, idempotency_key: str = "",
     if blocked:
         return blocked
     owner = _batch_partition(batch_id, root)
-    with idempotency.reservation(batch_id, "compile", {}, idempotency_key,
+    params = {"approved_caseset_sha256": _artifact_state_digest(
+        batch_id, "approved_caseset", root)}
+    with idempotency.reservation(batch_id, "compile", params, idempotency_key,
                                  owner=owner, root=root) as (key, replay):
         if replay is not None:
             return replay
@@ -374,11 +469,13 @@ def compile_bundle(*, batch_id: str, idempotency_key: str = "",
         if not r.get("ok"):
             return _err("E_COMPILE_REJECTED", "编译没过 compile-gate", detail=r)
         out = _ok(bundle=r, idempotency_key=key)
-        idempotency.record(batch_id, key, "compile", out, owner=owner, root=root)
+        idempotency.record(batch_id, key, "compile", out, params=params,
+                           owner=owner, root=root)
         return out
 
 
 @_requires_trusted_owner
+@_serializes_batch_mutation
 def execute(*, batch_id: str, variables: dict[str, Any] | None = None,
             case_ids: list[str] | None = None, base_url_override: str = "",
             resume_run_id: str = "", timeout_s: int = 900,
@@ -389,28 +486,91 @@ def execute(*, batch_id: str, variables: dict[str, Any] | None = None,
     `variables` 只把不可逆摘要纳入 key；既避免凭据落台账，也避免不同执行输入被
     错误重放。timeout 与执行范围同样属于 key，triggered_by 仍只作审计说明。
     """
+    try:
+        normalized_timeout = int(timeout_s)
+    except (TypeError, ValueError):
+        return _err("E_INVALID_TIMEOUT",
+                    f"timeout_s 必须是 {_execute.MIN_TIMEOUT_S}.."
+                    f"{_execute.MAX_TIMEOUT_S} 的整数")
+    if not _execute.MIN_TIMEOUT_S <= normalized_timeout <= _execute.MAX_TIMEOUT_S:
+        return _err("E_INVALID_TIMEOUT",
+                    f"timeout_s 必须在 {_execute.MIN_TIMEOUT_S}.."
+                    f"{_execute.MAX_TIMEOUT_S} 秒")
     blocked = _guarded(batch_id, "execute", caller_surface, root)
     if blocked:
         return blocked
     params = {"case_ids": sorted(case_ids or []),
               "base_url_override": base_url_override,
               "resume_run_id": resume_run_id,
-              "timeout_s": int(timeout_s),
-              "variables_sha256": sha256_digest(variables or {})}
+              "timeout_s": normalized_timeout,
+              "variables_sha256": sha256_digest(variables or {}),
+              **_bundle_state(batch_id, root)}
     owner = _batch_partition(batch_id, root)
     with idempotency.reservation(batch_id, "execute", params, idempotency_key,
                                  owner=owner, root=root) as (key, replay):
         if replay is not None:
             return replay
+        request_digest = sha256_digest(params)
+        run_id = resume_run_id or artifacts.new_run_id()
+        intent, created = idempotency.begin_execution_intent(
+            batch_id, key, request_digest, run_id,
+            write_risk=_selected_authorized_write_risk(
+                batch_id, case_ids, owner=owner, root=root),
+            owner=owner, root=root)
+        if str(intent.get("request_digest") or "") != request_digest:
+            return _err(
+                "E_IDEMPOTENCY_CONFLICT",
+                "这个执行 key 已绑定另一组输入；本次没有执行。",
+                idempotency_key=key)
+        recovered = _recover_completed_execute(
+            batch_id, intent, owner=owner, root=root)
+        if recovered is None and intent.get("status") == "complete":
+            candidate = intent.get("result")
+            if isinstance(candidate, dict):
+                recovered = dict(candidate)
+                recovered["recovered"] = True
+        if recovered is not None:
+            recovered["idempotency_key"] = key
+            recovered["triggered_by"] = triggered_by
+            idempotency.update_execution_intent(
+                batch_id, key, status="complete", result=recovered,
+                owner=owner, root=root)
+            idempotency.record(batch_id, key, "execute", recovered, params=params,
+                               owner=owner, root=root)
+            return recovered
+        if intent.get("status") in {"effect_started", "corrupt"} \
+                and bool(intent.get("write_risk")):
+            return _err(
+                "E_EXECUTION_RECONCILIATION_REQUIRED",
+                "上次执行可能已经向被测系统发送写请求，但没有留下完整收据。"
+                "为避免自动重复写入，本次已停止；请先人工核对目标系统后再决定。",
+                run_id=intent.get("run_id"), idempotency_key=key)
+        retry_resume = ""
+        reserved_run_id = str(intent.get("run_id") or run_id)
+        if not created and intent.get("status") == "effect_started":
+            retry_resume = reserved_run_id
+
+        def mark_effect_boundary() -> None:
+            idempotency.update_execution_intent(
+                batch_id, key, status="effect_started",
+                owner=owner, root=root)
+
         r = _execute.execute(batch_id, variables=variables, case_ids=case_ids,
-                             resume_run_id=resume_run_id,
-                             base_url_override=base_url_override, timeout_s=timeout_s,
-                             triggered_by=triggered_by, root=root)
+                             resume_run_id=resume_run_id or retry_resume,
+                             base_url_override=base_url_override,
+                             timeout_s=normalized_timeout,
+                             triggered_by=triggered_by, root=root,
+                             reserved_run_id=reserved_run_id,
+                             on_effect_boundary=mark_effect_boundary)
         if not r.get("ok"):
             return _err("E_EXECUTE_FAILED", str(r.get("error") or "执行失败"), detail=r)
         out = _ok(run_id=r.get("run_id"), receipt=r.get("receipt"),
                   idempotency_key=key, triggered_by=triggered_by)
-        idempotency.record(batch_id, key, "execute", out, owner=owner, root=root)
+        idempotency.update_execution_intent(
+            batch_id, key, status="complete", result=out,
+            owner=owner, root=root)
+        idempotency.record(batch_id, key, "execute", out, params=params,
+                           owner=owner, root=root)
         return out
 
 
@@ -443,6 +603,7 @@ def _trace_handle(run_dir: str, verdict: dict[str, Any]) -> str | None:
 
 
 @_requires_trusted_owner
+@_serializes_batch_mutation
 def coverage(*, batch_id: str, run_id: str = "", caller_surface: str = "unknown",
              root: str | None = None) -> dict[str, Any]:
     blocked = _guarded(batch_id, "coverage", caller_surface, root)
@@ -536,7 +697,8 @@ def open_trace(*, batch_id: str, run_id: str, trace_rel: str,
     from server.gateway import journey_console
     result = journey_console.open_trace(run_id, trace_rel)
     if not result.get("ok"):
-        return _err("E_TRACE_OPEN", str(result.get("error") or "trace 打开失败"))
+        return _err(str(result.get("code") or "E_TRACE_SPAWN_FAILED"),
+                    str(result.get("error") or "trace 打开失败"))
     # MCP/browser payload never returns the server's absolute path.
     # The host command contains an absolute artifact path. It is useful on the
     # host-only console but must not cross the authenticated browser/MCP bridge.

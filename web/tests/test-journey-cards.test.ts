@@ -16,6 +16,11 @@ import {
   journeyToolOf,
 } from "../components/test-journey/chat/extract";
 import { journeyCardCopy } from "../components/test-journey/chat/copy";
+import {
+  selectRun,
+  summarizeRun,
+  verdictParts,
+} from "../components/test-journey/types";
 import { extractStreamingQuizQuestions } from "../lib/quiz-types";
 
 type AnyEvent = Record<string, unknown>;
@@ -82,8 +87,8 @@ const DRAFT_OK = {
   case_draft: {
     batch_id: "b-1",
     cases: [
-      { case_id: "TC-001", title: "销售员甲只看到自己的 3 笔", source_anchor: { rule_id: "R1" } },
-      { case_id: "TC-007", title: "金额为负应被拒", source_anchor: { rule_id: "R9", probing: true } },
+      { draft_id: "D-001", title: "销售员甲只看到自己的 3 笔", source_anchor: { rule_id: "R1" } },
+      { draft_id: "D-007", title: "金额为负应被拒", source_anchor: { rule_id: "R9", probing: true } },
     ],
     uncovered_rules: [{ rule_id: "R5", reason: "本期不测导出" }],
   },
@@ -593,6 +598,23 @@ test("旅程页面只走专用鉴权路由，不持有任意 MCP 执行原语", 
   assert.match(client, /\/runs\/.*\/trace/);
 });
 
+test("生成审核与采纳只消费规范 case_id，不退回旧 id 字段", () => {
+  const flow = readFileSync(
+    path.resolve(process.cwd(), "components/test-workbench/NewBatchFlow.tsx"),
+    "utf8",
+  );
+  const adopt = readFileSync(
+    path.resolve(process.cwd(), "../deeptutor/api/routers/test_workbench_generate.py"),
+    "utf8",
+  );
+  assert.match(flow, /case_id\?: string/);
+  assert.ok(!/String\(c\.id\)/.test(flow));
+  assert.match(adopt, /c\.get\("case_id"\)/);
+  assert.ok(!/c\.get\("id"\)/.test(adopt));
+  assert.match(flow, /job\?\.result\?\.complete === false/);
+  assert.match(flow, /job\?\.result\?\.complete !== true/);
+});
+
 test("结果页把服务端 trace handle 接到专用打开接口，不再永久传 null", () => {
   const table = readFileSync(
     path.resolve(process.cwd(), "components/test-journey/ResultTable.tsx"),
@@ -601,6 +623,34 @@ test("结果页把服务端 trace handle 接到专用打开接口，不再永久
   assert.match(table, /traceRel=\{row\.trace_rel\}/);
   assert.match(table, /openJourneyTrace\(batchId, run\.run_id, row\.trace_rel\)/);
   assert.doesNotMatch(table, /traceRel=\{null\}/);
+});
+
+test("带原因的挂起结论仍计入挂起且徽标只使用四类主结论", () => {
+  const rows = [
+    { id: "a", verdict: "PENDING:needs-f9" },
+    { id: "b", verdict: "PENDING:needs-ui-surface" },
+    { id: "c", verdict: "PENDING:needs-deploy-anchor" },
+  ];
+  assert.deepEqual(summarizeRun(rows), {
+    total: 3,
+    passed: 0,
+    failed: 0,
+    pending: 3,
+    blocked: 0,
+    probing: 0,
+  });
+  assert.deepEqual(verdictParts(rows[0].verdict), {
+    code: "PENDING",
+    reason: "needs-f9",
+  });
+});
+
+test("新增执行会自动成为默认视图，用户点选的旧执行仍被保留", () => {
+  const first = { run_id: "r-first", receipt: null, verdicts: [] };
+  const second = { run_id: "r-second", receipt: null, verdicts: [] };
+  assert.equal(selectRun([first], null)?.run_id, "r-first");
+  assert.equal(selectRun([first, second], null)?.run_id, "r-second");
+  assert.equal(selectRun([first, second], "r-first")?.run_id, "r-first");
 });
 
 test("旅程列表与详情用请求代次挡住旧响应覆盖新页面", () => {

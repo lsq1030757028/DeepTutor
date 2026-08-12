@@ -1,8 +1,22 @@
 # -*- coding: utf-8 -*-
 """journey.artifacts 自测：批次状态对象、类型化产物信封、presence-derived stepper。"""
+from concurrent.futures import ThreadPoolExecutor
+import multiprocessing
+import os
+
 import pytest
 
 from server.journey import artifacts
+
+
+def _append_run_process(root, batch_id, run_id, owner, start_event, result_queue):
+    start_event.wait(10)
+    try:
+        artifacts.append_run_id(
+            batch_id, run_id, owner=owner, root=root)
+        result_queue.put((run_id, "ok"))
+    except Exception as exc:  # pragma: no cover - parent reports child detail
+        result_queue.put((run_id, f"{type(exc).__name__}: {exc}"))
 
 
 @pytest.fixture()
@@ -20,6 +34,52 @@ def test_create_and_load_batch(store):
     assert loaded["title"] == "白月SMS 一期"
     assert loaded["owner"] == ""  # 0009 预留字段在场
     assert loaded["run_ids"] == []
+
+
+def test_concurrent_run_registration_keeps_every_run(store):
+    owner = "thread-owner"
+    meta = store.create_batch("并发执行", owner=owner)
+    run_ids = [f"r-20260813-thread{i:02d}" for i in range(16)]
+
+    with ThreadPoolExecutor(max_workers=len(run_ids)) as pool:
+        list(pool.map(
+            lambda rid: store.append_run_id(
+                meta["batch_id"], rid, owner=owner),
+            run_ids,
+        ))
+
+    loaded = store.load_batch(meta["batch_id"], owner=owner)
+    assert set(loaded["run_ids"]) == set(run_ids)
+    assert len(loaded["run_ids"]) == len(run_ids)
+    leftovers = [name for name in os.listdir(store.batch_dir(
+        meta["batch_id"], owner=owner)) if name.endswith(".tmp")]
+    assert leftovers == []
+
+
+def test_concurrent_process_run_registration_keeps_every_run(tmp_path):
+    root = str(tmp_path)
+    owner = "process-owner"
+    meta = artifacts.create_batch("跨进程并发执行", owner=owner, root=root)
+    run_ids = [f"r-20260813-proc{i:02d}" for i in range(6)]
+    ctx = multiprocessing.get_context("spawn")
+    start_event = ctx.Event()
+    result_queue = ctx.Queue()
+    workers = [ctx.Process(
+        target=_append_run_process,
+        args=(root, meta["batch_id"], rid, owner, start_event, result_queue),
+    ) for rid in run_ids]
+    for worker in workers:
+        worker.start()
+    start_event.set()
+    results = [result_queue.get(timeout=20) for _ in workers]
+    for worker in workers:
+        worker.join(timeout=20)
+        assert worker.exitcode == 0
+
+    assert all(status == "ok" for _rid, status in results), results
+    loaded = artifacts.load_batch(meta["batch_id"], owner=owner, root=root)
+    assert set(loaded["run_ids"]) == set(run_ids)
+    assert len(loaded["run_ids"]) == len(run_ids)
 
 
 def test_batch_id_path_escape_blocked(store):
