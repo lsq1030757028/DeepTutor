@@ -16,10 +16,36 @@
         "extensions/test-partner/tests/test_scope_guard.py"
       ],
       "granted_by": "main 2026-08-12 归属裁定"
+    },
+    "m2-build3": {
+      "owner": "主证据 + 白盒 + 镜像复验（后端旅程）",
+      "allow": [
+        "extensions/test-partner/server/journey/",
+        "extensions/test-partner/tests/test_journey_",
+        "extensions/test-partner/tests/test_execute",
+        "extensions/test-partner/tests/test_gate",
+        "extensions/test-partner/scripts/regression_gate.sh",
+        "extensions/test-partner/scripts/deductions.py",
+        "extensions/test-partner/scripts/known-deductions.json",
+        "agent-lab-runs/deeptutor-absorb-m2-20260810/",
+        "Dockerfile"
+      ],
+      "granted_by": "main 2026-08-12 并行分工 + 0032 镜像重建授权 Dockerfile fork 块",
+      "_note": "cases.jsonl 三线共写，只 append；agent-lab-runs 目录三线都写各自证据子目录，暂存冲突靠只 add 具体文件规避"
+    },
+    "m2-i18n": {
+      "owner": "前端 i18n 抽取 + 触点断言守",
+      "allow": [
+        "web/components/test-journey/",
+        "web/app/(workspace)/test-journey/",
+        "web/locales/en/app.json",
+        "web/locales/zh/app.json",
+        "web/components/chat/home/ChatMessages.tsx",
+        "tests/core/test_fork_capabilities_runtime.py"
+      ],
+      "granted_by": "main 2026-08-12 并行分工",
+      "_note": "ChatMessages.tsx 与 locales 是既有登记触点行，i18n 在既有行内改动不新增登记行"
     }
   },
-  "_pending": [
-    "m2-build3 / m2-i18n 两条线的前缀由 main 补：本文件不替别人声明独占区——",
-    "替人声明等于替人担保，声明错了会把真越界放行。"
-  ]
+  "_pending": []
 }
