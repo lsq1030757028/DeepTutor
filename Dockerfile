@@ -110,9 +110,12 @@ RUN pip install --upgrade pip && \
 # ============================================
 FROM python:3.11-slim AS production
 
+ARG DEEPTUTOR_BUILD_REVISION=unknown
+
 # Labels
 LABEL maintainer="DeepTutor Team" \
-      description="DeepTutor: AI-Powered Personalized Learning Assistant"
+      description="DeepTutor: AI-Powered Personalized Learning Assistant" \
+      org.opencontainers.image.revision="${DEEPTUTOR_BUILD_REVISION}"
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
