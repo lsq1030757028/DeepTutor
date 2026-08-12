@@ -36,6 +36,18 @@ def case_slug(case_id: str) -> str:
 def _finish(runner: rt.CaseRunner, extra: dict[str, Any]) -> dict[str, Any]:
     row = runner.result()
     row.update(extra)
+    # required_evidence=db_snapshot 的真实落点。它必须来自本次执行刚得到的
+    # before/after/delta，而不是投影阶段根据 PASS 反推或补写。
+    if row.get("db_metrics"):
+        case_dir = os.path.join(ctx()["run_dir"], str(extra["evidence_dir"]))
+        os.makedirs(case_dir, exist_ok=True)
+        with open(os.path.join(case_dir, "db_snapshot.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump({
+                "schema_version": "1.0",
+                "case_id": row.get("case_id"),
+                "metrics": row["db_metrics"],
+            }, fh, ensure_ascii=False, indent=1)
     rt.append_result(ctx()["run_dir"], row)
     return row
 

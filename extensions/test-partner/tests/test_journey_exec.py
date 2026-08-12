@@ -290,6 +290,25 @@ def test_execute_credscan_catches_echoed_secret(store, target):
     assert scan["known_hits"] == []
 
 
+def test_execute_security_scan_failure_blocks_receipt_and_projection(
+        store, target, monkeypatch):
+    bid = build_batch(store, target, [api_case("d1"), api_case("d2")])
+    assert compile_bundle.compile_bundle(bid)["ok"]
+    monkeypatch.setattr(execute_run.credential_scan, "scan_tree", lambda *_a, **_kw: {
+        "ok": False, "known_hits": [],
+        "entropy_hits": [{"file": "x.json", "token": "opaque",
+                          "token_preview": "opaq…aque", "length": 32,
+                          "entropy": 4.2}],
+        "allowlisted_hits": [], "scanned_files": 1, "note": "blocked",
+    })
+    r = execute_run.execute(bid)
+    assert r["receipt"]["counts"] == {"passed": 2}
+    assert r["receipt"]["credential_scan_ok"] is False
+    assert r["receipt"]["verdict"] == "BLOCK"
+    p = project_verdicts.project(r["run_id"])
+    assert not p["ok"] and p["stage"] == "credential_scan"
+
+
 def test_execute_resume_skips_done(store, target):
     cases = [api_case("d1"), api_case("d2")]
     bid = build_batch(store, target, cases)
@@ -394,6 +413,21 @@ def test_coverage_ledger_built(store, target):
     assert ledger["summary"]["covered"] == 1
     assert ledger["summary"]["pass"] == 2
     assert ledger["done"]
+    assert ledger["business_result"]["status"] == "PASS"
+    assert ledger["business_result"]["ready_for_acceptance"]
+
+
+def test_coverage_design_done_does_not_masquerade_as_business_done(store, target):
+    bid, r = executed_run(store, target)
+    # 未走正式投影：规则映射可以完整，但业务结果必须明确 PENDING。
+    c = coverage.build_coverage(bid, r["run_id"])
+    assert c["ok"]
+    ledger = store.load_artifact(bid, "coverage_ledger")
+    assert ledger["done"] is True
+    assert ledger["summary"]["official_verdicts"] == 0
+    assert ledger["business_result"]["status"] == "PENDING"
+    assert ledger["business_result"]["conclusive"] is False
+    assert ledger["business_result"]["ready_for_acceptance"] is False
 
 
 def test_coverage_gap_unexplained_not_done(store, target):
@@ -435,7 +469,9 @@ def ui_case(draft_id):
 
 def test_ui_track_real_browser(store, target):
     pytest.importorskip("playwright")
-    bid, r = run_chain(store, target, [ui_case("d1"), api_case("d2")],
+    # track-purity 要求单批次单轨；浏览器集成用两条 UI case，不能拿 API case
+    # 只为凑标准档最小用例数，否则测试本身构造的是生产编译器明确拒绝的输入。
+    bid, r = run_chain(store, target, [ui_case("d1"), ui_case("d2")],
                        timeout_s=180)
     rec = r["receipt"]
     assert rec["verdict"] == "PASS", rec

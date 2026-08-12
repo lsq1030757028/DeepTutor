@@ -354,7 +354,14 @@ class CaseRunner:
         got = value["rows"][0][0] if value["rows"] else None
         if got is None:
             raise CaseBlocked(f"守恒量 {metric!r} 的基线查询零行——无法建立基线")
-        self.db_metrics[metric] = {"sql": sql, "before": got}
+        # `_query` 只在进程内供复查使用；落盘证据只保留 scrub 后的已渲染 SQL。
+        # 否则 SQL 中一旦含变量占位，结果卡要么无法复核实际查询，要么会把变量值
+        # 原样落盘。执行值与证据值分开保存，二者都不冒充对方。
+        self.db_metrics[metric] = {
+            "_query": sql,
+            "sql": self._scrub(self._render(sql)),
+            "before": got,
+        }
         self.observations.append(f"db_snapshot {metric}={got}")
 
     def _op_expect_db_delta(self, a: dict[str, Any]) -> None:
@@ -365,7 +372,7 @@ class CaseRunner:
             raise CaseBlocked(
                 f"守恒量 {metric!r} 没有基线：expect_db_delta 必须配一个先行的 "
                 f"db_snapshot。缺基线时求出来的差是拿 0 当起点算的，会假绿。")
-        after_res = self._db_query({"sql": base["sql"]})
+        after_res = self._db_query({"sql": base["_query"]})
         after = after_res["rows"][0][0] if after_res["rows"] else None
         if after is None:
             raise CaseBlocked(f"守恒量 {metric!r} 的复查零行")
@@ -374,7 +381,17 @@ class CaseRunner:
         except TypeError:
             raise CaseBlocked(f"守恒量 {metric!r} 不是可相减的类型")
         want = a["delta"]
-        self._record_assert(f"db_delta:{metric}", want, actual, actual == want)
+        passed = actual == want
+        # 这组 before/after/delta 是 `db_snapshot.json` 的事实来源。此前只在断言里
+        # 留 actual、在 metrics 里留 before，执行器虽声明需要 db_snapshot，却永远
+        # 产不出该证据文件，真实通过的写用例会被正式投影降成 PENDING。
+        base.update({
+            "after": after,
+            "delta": actual,
+            "expected_delta": want,
+            "passed": passed,
+        })
+        self._record_assert(f"db_delta:{metric}", want, actual, passed)
 
     # ── 收尾 ────────────────────────────────────────────────────────────
     def result(self) -> dict[str, Any]:
@@ -400,8 +417,10 @@ class CaseRunner:
             "aborted_third_party_requests": self.aborted_requests,
             "http_transcript": self.http_transcript,
             "db_transcript": self.db_transcript,
-            "db_metrics": {k: {"sql": v["sql"], "before": v["before"]}
-                           for k, v in self.db_metrics.items()},
+            "db_metrics": {
+                k: {mk: mv for mk, mv in v.items() if not mk.startswith("_")}
+                for k, v in self.db_metrics.items()
+            },
             "observations": self.observations,
             "source_case_digest": self.meta.get("source_case_digest"),
             "oracle_digest": self.meta.get("oracle_digest"),
@@ -430,11 +449,11 @@ def append_result(run_dir: str, row: dict[str, Any]) -> None:
 
 
 def register_pid(run_dir: str, pid: int, kind: str) -> None:
-    os.makedirs(run_dir, exist_ok=True)
-    with open(os.path.join(run_dir, "pids.json"), "a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"pid": pid, "kind": kind, "at": time.time()}) + "\n")
+    # 单一登记入口同时写 run 台账与根级镜像，并绑定创建时间，防 PID 复用误杀。
+    from server.journey import process_registry
+    process_registry.register_pid(run_dir, pid, kind)
 
 
 def deregister_pid(run_dir: str, pid: int) -> None:
-    with open(os.path.join(run_dir, "pids.json"), "a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"pid": pid, "kind": "closed", "at": time.time()}) + "\n")
+    from server.journey import process_registry
+    process_registry.deregister_pid(run_dir, pid)

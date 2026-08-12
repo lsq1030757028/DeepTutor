@@ -47,7 +47,9 @@
 
 **我错在**：§一理由 2「extensions 容器内要真跑就都得有 mcp/yaml/pydantic」是**未验证的前提直接写进裁定**——这是本会话我第三次同类（前两次：凭二手转述断言 0012 不成立→被 0027 推翻；凭没找到断言凭据不存在→0029）。执行者的「落地前先验前提」纪律第三次兜住了我的裁定。这条纪律（动手/下裁定前先验前提成不成立）对 manager 自己同样适用，不只对执行者。
 
-**改甲**：M2 **不改 Dockerfile**。本次镜像重建的真实交付物 = **前端**（富卡 + i18n）；server 侧跑宿主、已带本轮改动 live，不靠重建。DoD#8b/8c 冒烟本就是「容器前端 + 宿主服务端」。L3/E19/实体闸/缺陷出口在宿主已实证（1400 passed），不在容器验范围。
+**改甲**：M2 **不改主 Dockerfile**。extensions server 侧跑宿主、已带本轮改动 live，不靠重建；L3/E19/实体闸/缺陷出口在宿主已实证（1400 passed），不在容器验范围。
+
+**2026-08-12 运行态复验补充**：上句“本次镜像重建的真实交付物 = 前端”范围过窄，已被真实聊天集成证伪。`Test` picker 来自新前端，但能力注册表和 `deeptutor.agents.test` 运行在容器 Python 内；仅覆盖前端时，用户可以选择 Test，服务端 turn 随即记录 `Unknown capability: test`。因此临时 overlay 制品必须同时覆盖当前 `deeptutor/` Python 运行时代码，并在构建期真 import `TestCapability`、核对注册键。这个补充不改变“extensions server 仍跑宿主”与“不污染主 Python 依赖”的结论。
 
 **「extensions 入容器」随 L6 一起进 M3**：正解是丙——给 extensions 在容器建独立 venv（装 mcp 2.0，与 DT 隔离，像 tapd-mcp 那样）+ 平台改容器内 stdio 拉起。登记为 M3 前置第 3 条。这本就是 0012「进容器 + stdio」那条一直没落地的半拉子，归位到 M3 一起做。
 

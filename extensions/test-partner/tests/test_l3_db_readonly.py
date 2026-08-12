@@ -6,10 +6,40 @@
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from server.journey import db_readonly as dbro
 from server.journey.gates import track_purity
+
+
+def test_conservation_runtime_retains_before_after_delta_for_evidence(tmp_path,
+                                                                     monkeypatch):
+    """守恒断言通过后必须有可独立落盘的 before/after/delta，不只是一格 PASS。"""
+    from server.journey import pw_harness, pw_runtime
+
+    ctx = {"base_url": "http://x", "variables": {"baseUrl": "http://x"},
+           "run_dir": str(tmp_path), "write_authorized": set(),
+           "done_cases": set(), "scrub_pairs": []}
+    runner = pw_runtime.CaseRunner(
+        ctx, {"case_id": "x/R1-C001", "track": "api"}, page=None)
+    values = iter([10, 11])
+    monkeypatch.setattr(runner, "_db_query", lambda _a: {
+        "rows": [[next(values)]], "row_count": 1, "truncated": False})
+    runner._op_db_snapshot({"metric": "roles", "sql": "SELECT count(*) FROM roles"})
+    runner._op_expect_db_delta({"metric": "roles", "delta": 1})
+
+    monkeypatch.setattr(pw_harness, "_CTX", ctx)
+    pw_harness._finish(runner, {"evidence_dir": "x__r1__c001"})
+    evidence = json.loads(
+        (tmp_path / "x__r1__c001" / "db_snapshot.json").read_text(encoding="utf-8"))
+    metric = evidence["metrics"]["roles"]
+    assert metric == {
+        "sql": "SELECT count(*) FROM roles", "before": 10, "after": 11,
+        "delta": 1, "expected_delta": 1, "passed": True,
+    }
+    assert "_query" not in json.dumps(evidence)
 
 
 # ── 白名单：放行面 ────────────────────────────────────────────────────────

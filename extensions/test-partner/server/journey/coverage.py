@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import json
+import os
 from typing import Any
 
 from server.journey import artifacts
@@ -112,7 +114,33 @@ def build_coverage(batch_id: str, run_id: str = "") -> dict[str, Any]:
 
     n_pass = sum(1 for r in rows for c in r["cases"] if c["verdict"] == "PASS")
     n_official = sum(1 for r in rows for c in r["cases"]
-                     if c["verdict"] in ("PASS", "FAIL"))
+                      if c["verdict"] in ("PASS", "FAIL"))
+    decision_cases = [c for r in rows for c in r["cases"] if not c["probing"]]
+    pending_cases = [c["case_id"] for c in decision_cases
+                     if c["verdict"] not in ("PASS", "FAIL")]
+    failed_cases = [c["case_id"] for c in decision_cases if c["verdict"] == "FAIL"]
+    receipt: dict[str, Any] = {}
+    if run_id:
+        try:
+            with open(os.path.join(artifacts.run_dir(run_id), "receipt.json"),
+                      encoding="utf-8") as fh:
+                receipt = json.load(fh)
+        except (OSError, ValueError):
+            receipt = {}
+    security_ok = receipt.get("credential_scan_ok") is True
+    official_complete = bool(decision_cases) and not pending_cases
+    if not security_ok:
+        business_status = "BLOCKED"
+        business_reason = "凭据零落盘扫描未通过或缺失"
+    elif not official_complete:
+        business_status = "PENDING"
+        business_reason = "仍有决策用例没有正式 PASS/FAIL 结论"
+    elif failed_cases:
+        business_status = "FAIL"
+        business_reason = "存在正式 FAIL 结论"
+    else:
+        business_status = "PASS"
+        business_reason = "全部决策用例已有正式 PASS，且凭据扫描通过"
     ledger_payload = {
         "run_id": run_id,
         "rules": rows,
@@ -133,6 +161,20 @@ def build_coverage(batch_id: str, run_id: str = "") -> dict[str, Any]:
                                    if r["status"] == "gap_unexplained"),
             "official_verdicts": n_official,
             "pass": n_pass,
+        },
+        # `done` 只回答覆盖设计有没有无解释缺口，不能再被上层当作业务验收完成。
+        # 业务是否可交付由这一块单独给出，避免“覆盖 done + 官方结论 0”的假绿表述。
+        "business_result": {
+            "status": business_status,
+            "reason": business_reason,
+            "conclusive": business_status in ("PASS", "FAIL"),
+            "ready_for_acceptance": business_status == "PASS",
+            "passed": business_status == "PASS",
+            "decision_case_count": len(decision_cases),
+            "official_complete": official_complete,
+            "pending_cases": pending_cases,
+            "failed_cases": failed_cases,
+            "credential_scan_ok": security_ok,
         },
         "done": not problems,
         "problems": problems,

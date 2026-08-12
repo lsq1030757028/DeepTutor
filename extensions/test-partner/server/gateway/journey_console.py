@@ -184,11 +184,12 @@ async function detailView(id){
  const b=d.batch;let h=`<p><a href="?">← 批次列表</a></p>`;
  h+=`<div class="card"><h3 style="margin:.2em 0">${esc(b.title)} <span class="muted">${b.batch_id}</span></h3>`+
     `<div>${stepper(b.stepper)}</div><p class="muted">靶 host: ${esc(b.base_url_host)} · owner: ${esc(b.owner)||'(未分区,M2)'} · 建于 ${esc(b.created_at)}</p></div>`;
- if(d.coverage){const s=d.coverage.summary;h+=`<div class="card"><h3 style="margin:.2em 0">覆盖图</h3>`+
-   `<p>规则 ${s.total_rules} · <span class="covered">已覆盖 ${s.covered}</span> · <span class="declared_uncovered">显式不覆盖 ${s.declared_uncovered}</span> · <span class="gap_unexplained">无解释缺口 ${s.gap_unexplained}</span> · 官方结论 ${s.official_verdicts}（PASS ${s.pass}）</p>`+
+  if(d.coverage){const s=d.coverage.summary,br=d.coverage.business_result||{};h+=`<div class="card"><h3 style="margin:.2em 0">覆盖图</h3>`+
+    `<p>覆盖设计 ${d.coverage.done?'已收口':'未收口'} · 规则 ${s.total_rules} · <span class="covered">已覆盖 ${s.covered}</span> · <span class="declared_uncovered">显式不覆盖 ${s.declared_uncovered}</span> · <span class="gap_unexplained">无解释缺口 ${s.gap_unexplained}</span></p>`+
+    `<p><strong>业务结果</strong> <span class="v ${(br.status||'PENDING').split(':')[0]}">${br.status||'PENDING'}</span> · ${esc(br.reason||'尚无业务判定')} · 官方结论 ${s.official_verdicts}（PASS ${s.pass}）</p>`+
    '<table><tr><th>规则</th><th>状态</th><th>用例/verdict 或 gap 原因</th></tr>'+
    d.coverage.rules.map(r=>`<tr><td>${esc(r.rule_id)}<br><span class="muted">${esc(r.statement)}</span></td><td class="${r.status}">${r.status}</td><td>${r.cases.length?r.cases.map(c=>`${esc(c.case_id)} <span class="v ${c.verdict.split(':')[0]}">${c.verdict}</span>`).join('<br>'):esc(r.gap_reason)||'—'}</td></tr>`).join('')+'</table></div>'}
- (d.runs||[]).forEach(run=>{h+=`<div class="card"><h3 style="margin:.2em 0">执行 ${run.run_id} <span class="v ${(run.receipt.verdict||'').split(':')[0]}">${run.receipt.verdict||''}</span></h3>`+
+ (d.runs||[]).forEach(run=>{h+=`<div class="card"><h3 style="margin:.2em 0">执行过程 ${run.run_id} <span class="v ${(run.receipt.verdict||'').split(':')[0]}">${run.receipt.verdict||''}</span></h3>`+
    `<p class="muted">${JSON.stringify(run.receipt.counts||{})} · 凭据零落盘扫描 ${run.receipt.credential_scan_ok?'✓':'✗'}</p>`+
    '<table><tr><th>用例</th><th>verdict</th><th>trace</th></tr>'+
    run.verdicts.map(v=>`<tr><td>${esc(v.id)}<br><span class="muted">${esc(v.note)}</span></td><td><span class="v ${v.verdict.split(':')[0]}">${v.verdict}</span></td><td>${v.trace_rel?`<button onclick="openTrace('${run.run_id}','${v.trace_rel.replace(/\\\\/g,'/')}',this)">打开 trace</button>`:'<span class="muted">API 轨(无trace)</span>'}</td></tr>`).join('')+'</table></div>'});

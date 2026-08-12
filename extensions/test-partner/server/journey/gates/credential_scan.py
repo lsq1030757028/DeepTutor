@@ -44,6 +44,15 @@ ID_FORM = re.compile(
 #: 第二次就会去关掉它——**误报是让闸被关掉的最短路径**，所以按形态豁免，
 #: 而不是让使用者绕着走。known-secret 仍然全量精确匹配、不受任何豁免影响。
 CASE_ID_FORM = re.compile(r"^[a-z0-9-]+/R[0-9]+-C[0-9]{3}$")
+# API 回包里的公开对象标识。它们与 journey id 一样可出现在日志/URL/响应里，
+# 不是认证材料；known-secret 精确匹配仍在形态豁免之前执行，不受这些规则影响。
+PREFIXED_UUID_FORM = re.compile(
+    r"^[a-z][a-z0-9]{1,15}_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.I)
+PREFIXED_HEX_ID_FORM = re.compile(r"^[a-z][a-z0-9]{1,15}_[0-9a-f]{20,64}$", re.I)
+SLUG_HEX_ID_FORM = re.compile(r"^[a-z0-9][a-z0-9_-]{2,48}-[0-9a-f]{8,64}$", re.I)
+EVIDENCE_PATH_FORM = re.compile(
+    r"^[a-z0-9_]+/(?:result|transcript|db_snapshot|final_dom)$", re.I)
 ENTROPY_THRESHOLD = 3.8   # bits/char；base64 随机串 ~6，英文单词 ~2-3
 MIN_SECRET_LEN = 4
 
@@ -58,10 +67,27 @@ def shannon_entropy(s: str) -> float:
     return -sum((c / n) * math.log2(c / n) for c in freq.values())
 
 
+def _builtin_allowlist_reason(token: str) -> str:
+    """返回内建形态豁免理由；空串表示不豁免。"""
+    checks = (
+        (SHA_PREFIXED, "sha256 digest"),
+        (HEX_RE, "hex digest/commit shape"),
+        (PLACEHOLDER, "template placeholder"),
+        (ID_FORM, "journey public id"),
+        (CASE_ID_FORM, "journey case id"),
+        (PREFIXED_UUID_FORM, "public prefixed UUID"),
+        (PREFIXED_HEX_ID_FORM, "public prefixed hex object id"),
+        (SLUG_HEX_ID_FORM, "public slug with short object id"),
+        (EVIDENCE_PATH_FORM, "journey evidence path"),
+    )
+    for pattern, reason in checks:
+        if pattern.match(token):
+            return reason
+    return ""
+
+
 def _is_allowlisted(token: str) -> bool:
-    return bool(SHA_PREFIXED.match(token) or HEX_RE.match(token)
-                or PLACEHOLDER.match(token) or ID_FORM.match(token)
-                or CASE_ID_FORM.match(token))
+    return bool(_builtin_allowlist_reason(token))
 
 
 def _iter_files(root: str):
@@ -72,12 +98,12 @@ def _iter_files(root: str):
 
 
 def scan_tree(root: str, known_secrets: list[str] | None = None,
-              allowlist: list[str] | None = None,
+              allowlist: dict[str, str] | list[str] | None = None,
               skip_rel: list[str] | None = None) -> dict[str, Any]:
     """扫描目录树。返回 {ok, known_hits, entropy_hits, scanned_files}。
 
     known_secrets：已知凭据值清单（值本身，不落盘本报告——命中只记文件与偏移）。
-    allowlist：额外放行的具体 token（须由复核人逐条给出，fail-closed）。
+    allowlist：额外放行的具体 token→reason；旧式无理由 list 不再放行（fail-closed）。
     skip_rel：豁免的相对路径（如 bundle 内嵌的确定性运行时源码——其完整性由
       manifest 里登记的 sha256 保证，长标识符不是凭据）；known_secrets 仍全量扫，
       只对高熵启发式豁免。
@@ -85,10 +111,12 @@ def scan_tree(root: str, known_secrets: list[str] | None = None,
     """
     secrets = [s for s in (known_secrets or []) if s and len(s) >= MIN_SECRET_LEN]
     secret_bytes = [s.encode("utf-8") for s in secrets]
-    allowed = set(allowlist or [])
+    allowed_reasons = ({str(k): str(v).strip() for k, v in allowlist.items()}
+                       if isinstance(allowlist, dict) else {})
     skip_set = set(skip_rel or [])
     known_hits: list[dict[str, Any]] = []
     entropy_hits: list[dict[str, Any]] = []
+    allowlisted_hits: list[dict[str, Any]] = []
     scanned = 0
     for path in _iter_files(root):
         try:
@@ -120,10 +148,14 @@ def scan_tree(root: str, known_secrets: list[str] | None = None,
         seen: set[str] = set()
         for m in TOKEN.finditer(text):
             token = m.group(0)
-            if token in seen or token in allowed or _is_allowlisted(token):
+            if token in seen:
                 continue
             seen.add(token)
-            # URL 路径形态排除：含 `/` 且有字母词段（如 58975/api/secret-echo）
+            builtin_reason = _builtin_allowlist_reason(token)
+            explicit_reason = allowed_reasons.get(token, "")
+            allowlist_reason = builtin_reason or explicit_reason
+            # URL 路径形态排除：含 `/` 且有字母词段（如 58975/api/secret-echo）。
+            # 系统自有证据路径由 EVIDENCE_PATH_FORM 精确豁免，不在这里扩大通用路径面。
             # ——路径不是凭据；真凭据（known-secret）由上面的精确匹配兜底(DoD 7 强保证)。
             if "/" in token and any(
                     seg.isalpha() and len(seg) >= 3 for seg in token.split("/")):
@@ -136,15 +168,24 @@ def scan_tree(root: str, known_secrets: list[str] | None = None,
                 continue
             ent = shannon_entropy(token)
             if ent >= ENTROPY_THRESHOLD:
-                entropy_hits.append({
+                hit = {
                     "file": rel, "token_preview": token[:6] + "…" + token[-4:],
                     "token": token, "length": len(token),
                     "entropy": round(ent, 2),
-                })
+                }
+                if allowlist_reason:
+                    allowlisted_hits.append({
+                        k: v for k, v in {
+                            **hit, "allowlist_reason": allowlist_reason,
+                        }.items() if k != "token"
+                    })
+                else:
+                    entropy_hits.append(hit)
     return {
         "ok": not known_hits and not entropy_hits,
         "known_hits": known_hits,
         "entropy_hits": entropy_hits,
+        "allowlisted_hits": allowlisted_hits,
         "scanned_files": scanned,
         "note": ("known-secret 命中=阻断;entropy 命中须逐条 allowlist_reason 复核。"
                  "本扫描证明机制在场,不证明强度(hex 编码等形态可绕过允许清单)。"),

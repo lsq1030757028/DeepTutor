@@ -22,6 +22,20 @@ def project(run_id: str) -> dict[str, Any]:
     run_dir = artifacts.run_dir(run_id)
     if not os.path.isdir(run_dir):
         return {"ok": False, "error": f"run 不存在:{run_id}"}
+    receipt_path = os.path.join(run_dir, "receipt.json")
+    try:
+        with open(receipt_path, encoding="utf-8") as fh:
+            receipt = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "stage": "run_receipt",
+                "error": f"run_receipt 不可读:{exc}"}
+    if receipt.get("credential_scan_ok") is not True:
+        return {
+            "ok": False,
+            "stage": "credential_scan",
+            "error": "凭据零落盘扫描未通过，禁止生成正式结论",
+        }
+
     bundle_path = os.path.join(run_dir, "evidence-bundle.json")
     gate1 = evidence_gate.check_bundle_file(bundle_path, run_dir)
     if gate1["status"] != "ready-for-judge":

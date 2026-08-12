@@ -52,7 +52,48 @@ def test_explicit_allowlist_fail_closed(tmp_path):
     token = "kJ8x2Qw9zR4tYv7uB3nM5pL6sD1fG0hA"
     (tmp_path / "x.txt").write_text(token, encoding="utf-8")
     assert not cs.scan_tree(str(tmp_path))["ok"]           # 默认拦
-    assert cs.scan_tree(str(tmp_path), allowlist=[token])["ok"]  # 逐条放行后过
+    # 只给 token 不给理由仍然拦；逐条 token→reason 才能放行。
+    assert not cs.scan_tree(str(tmp_path), allowlist=[token])["ok"]
+    r = cs.scan_tree(str(tmp_path), allowlist={token: "公开测试夹具 id"})
+    assert r["ok"]
+    assert r["allowlisted_hits"][0]["allowlist_reason"] == "公开测试夹具 id"
+
+
+def test_public_response_ids_are_allowlisted_with_machine_reason(tmp_path):
+    public_ids = [
+        "req_5d9a11aa-e12a-4a1b-af01-123456789abc",
+        "custom_98765432-123a-4bd2-b5bc-abcdef123456",
+        "mm_76db97c3d2b54a4f89cdb7d8ae9",
+        "5-flash-qiqiuser-4a1b68fc1234567890abcdef12345678",
+    ]
+    (tmp_path / "response.json").write_text(
+        json.dumps({"ids": public_ids}), encoding="utf-8")
+    r = cs.scan_tree(str(tmp_path))
+    assert r["ok"], r["entropy_hits"]
+    assert len(r["allowlisted_hits"]) == len(public_ids)
+    assert all(h["allowlist_reason"] for h in r["allowlisted_hits"])
+
+
+def test_public_id_shape_does_not_hide_a_known_secret(tmp_path):
+    secret = "req_5d9a11aa-e12a-4a1b-af01-123456789abc"
+    (tmp_path / "leak.json").write_text(secret, encoding="utf-8")
+    r = cs.scan_tree(str(tmp_path), known_secrets=[secret])
+    assert not r["ok"] and r["known_hits"]
+
+
+def test_db_snapshot_evidence_path_is_not_a_secret(tmp_path):
+    path = "queenie__ko__custom__r5__c001/db_snapshot.json"
+    (tmp_path / "bundle.json").write_text(
+        json.dumps({"evidence": [path]}), encoding="utf-8")
+    r = cs.scan_tree(str(tmp_path))
+    assert r["ok"]
+    assert r["allowlisted_hits"][0]["allowlist_reason"] == "journey evidence path"
+
+
+def test_arbitrary_high_entropy_slash_token_is_not_hidden_as_a_path(tmp_path):
+    token = "ab12CD34ef56GH78/ij90KL12mn34OP56"
+    (tmp_path / "x.txt").write_text(token, encoding="utf-8")
+    assert not cs.scan_tree(str(tmp_path))["ok"]
 
 
 def test_plain_prose_not_flagged(tmp_path):

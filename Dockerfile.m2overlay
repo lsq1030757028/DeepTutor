@@ -1,0 +1,48 @@
+# M2 覆盖构建（临时·因 docker build 网络受限绕行）
+#
+# 背景：完整 `docker build -f Dockerfile` 在 production/python-base 阶段跑 apt-get，
+# 撞 Debian 镜像 502；docker build 内的 next/font 又取不到 Google Fonts。二者都是
+# **构建环境网络受限**，非代码问题。宿主网络正常（清掉失效的 HTTP_PROXY=127.0.0.1:7890 后
+# `npm run build` 在宿主 exit 0），故前端在宿主构建、这里只做**纯 COPY 覆盖，零网络**。
+#
+# 绕行原理（逐条核过）：
+#   1. 0032 §一定甲 = 不改 Dockerfile → 系统依赖/pip/TAPD 与既有基镜像一致；
+#   2. 本次真实交付物 = 当前 DeepTutor Python 运行时（含 test capability）+
+#      前端（富卡+i18n，宿主已 build）+ 当前 extensions 代码；
+#   3. 基镜像 deeptutor:p3-full 已含全部 apt/pip/TAPD 层（不含本轮改动）。
+# 新前端 + 当前 extensions 覆盖到既有基 = 与完整重建等价（且把基 OS 包钉住更可复现）。
+# 临时件，Debian/字体网络恢复后可用完整 Dockerfile 复刻并删除本文件。
+
+FROM deeptutor:p3-full
+WORKDIR /app
+
+# 当前 DeepTutor Python 运行时。不能只覆盖前端：页面的能力 picker 与服务端
+# BUILTIN_CAPABILITY_CLASSES 是两份独立注册表；只更新前端会让用户选到 Test，
+# 发出请求后却得到 `Unknown capability: test`，形成“页面可用、业务不可用”的假绿。
+COPY --chown=deeptutor:deeptutor deeptutor/ ./deeptutor/
+
+RUN python -c "from deeptutor.runtime.bootstrap.builtin_capabilities import BUILTIN_CAPABILITY_CLASSES as c; assert c.get('test') == 'deeptutor.agents.test.capability:TestCapability'; from deeptutor.agents.test.capability import TestCapability; assert TestCapability.manifest.name == 'test'"
+
+# 新前端。当前仓库是多层工作区，Next standalone 会保留 tracing root，
+# 真正可运行根位于 standalone/DeepTutor/web/；复制上层目录会把新构建埋到
+# /app/web/DeepTutor/web，而 supervisor 仍从 /app/web 启动旧 server.js。
+COPY --chown=deeptutor:deeptutor web/.next/standalone/DeepTutor/web/ ./web/
+COPY --chown=deeptutor:deeptutor web/.next/static/ ./web/.next/static/
+COPY --chown=deeptutor:deeptutor web/public/ ./web/public/
+
+# 构建期守护：overlay 必须覆盖运行根，且不能再次生成曾导致 /test-journey 404
+# 的嵌套副本。失败即让镜像构建变红，避免只靠浏览器冒烟发现。
+RUN test -f /app/web/server.js \
+    && test -d "/app/web/.next/server/app/(workspace)/test-journey" \
+    && test ! -d /app/web/DeepTutor/web \
+    && test "$(stat -c '%U:%G' /app/web/.next)" = "deeptutor:deeptutor"
+
+# 当前 extensions（server = 本轮 L3/E19/实体闸/缺陷出口/code_anchor；skills = 缺陷出口剧本）。
+# 即便当前服务端仍在宿主运行，镜像内副本也保持与应用进程相同的非 root 所有权，
+# 避免后续切换为容器内独立 venv 时继承一层隐蔽的权限债。
+COPY --chown=deeptutor:deeptutor extensions/test-partner/server/ ./extensions/test-partner/server/
+COPY --chown=deeptutor:deeptutor extensions/test-partner/skills/ ./extensions/test-partner/skills/
+
+RUN chown -R deeptutor:deeptutor /app/extensions/test-partner/server /app/extensions/test-partner/skills \
+    && test "$(stat -c '%U:%G' /app/extensions/test-partner/server)" = "deeptutor:deeptutor" \
+    && test "$(stat -c '%U:%G' /app/extensions/test-partner/skills)" = "deeptutor:deeptutor"

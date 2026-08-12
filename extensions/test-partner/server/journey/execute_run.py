@@ -241,6 +241,9 @@ def _build_evidence_bundle(batch_id: str, run_dir: str, fingerprint: str,
         if os.path.isfile(os.path.join(case_dir, "transcript.json")):
             evidence.append(slug + "/transcript.json")
             etypes.append("http")
+        if os.path.isfile(os.path.join(case_dir, "db_snapshot.json")):
+            evidence.append(slug + "/db_snapshot.json")
+            etypes.append("db")
         outcome = r.get("outcome")
         if outcome == "passed":
             verdict = "pass"
@@ -382,9 +385,15 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
                    "entropy_hits": [
                        {k: h[k] for k in ("file", "token_preview", "length", "entropy")}
                        for h in scan["entropy_hits"]],
+                   "allowlisted_hits": scan.get("allowlisted_hits", []),
                    "scanned_files": scan["scanned_files"], "note": scan["note"]}
     with open(os.path.join(run_dir, "credscan.json"), "w", encoding="utf-8") as fh:
         json.dump(scan_report, fh, ensure_ascii=False, indent=1)
+
+    # 凭据扫描是执行红线，不是装饰性附注。此前扫描失败时收据仍写 PASS，
+    # 上层极易把“pytest 跑完”误报成“结果可交付”。
+    if not scan["ok"]:
+        verdict = "BLOCK"
 
     from server.journey import redlines
     receipt = {

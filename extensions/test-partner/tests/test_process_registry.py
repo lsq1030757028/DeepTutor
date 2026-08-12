@@ -18,9 +18,15 @@ from server.journey import artifacts
 from server.journey import process_registry as preg
 
 
+def test_pid_alive_probe_is_non_destructive_for_current_process():
+    """Windows 回归：存活探针不能用 os.kill(pid, 0) 把被检查进程终止。"""
+    assert preg._pid_alive(os.getpid()) is True
+
+
 @pytest.fixture()
 def root(tmp_path, monkeypatch):
     monkeypatch.setattr(artifacts, "WORKBENCH_ROOT", str(tmp_path))
+    monkeypatch.setattr(preg, "_process_instance_id", lambda pid: f"test:{pid}")
     return str(tmp_path)
 
 
@@ -68,7 +74,7 @@ def test_orphan_reap_kills_only_its_own_registered_pids(root, tmp_path, monkeypa
     """构造「run_dir 已删但 PID 仍在」，断言该 PID 被回收且**只有它**被回收。"""
     killed = []
     monkeypatch.setattr(preg, "_kill_registered",
-                        lambda pid: (killed.append(pid), True)[1])
+                        lambda pid, instance_id: (killed.append(pid), True)[1])
     mine = str(tmp_path / "runs" / "r-mine")
     other = str(tmp_path / "runs" / "r-other")
     preg.register_pid(mine, 111, "chromium")
@@ -83,7 +89,7 @@ def test_orphan_reap_does_not_prefix_match_run_dirs(root, tmp_path, monkeypatch)
     """`r-1` 与 `r-11` 是两个 run。前缀匹配会误伤——这里钉死是全等匹配。"""
     killed = []
     monkeypatch.setattr(preg, "_kill_registered",
-                        lambda pid: (killed.append(pid), True)[1])
+                        lambda pid, instance_id: (killed.append(pid), True)[1])
     preg.register_pid(str(tmp_path / "runs" / "r-1"), 111, "chromium")
     preg.register_pid(str(tmp_path / "runs" / "r-11"), 222, "chromium")
     preg.reap_orphans(str(tmp_path / "runs" / "r-1"))
@@ -94,7 +100,7 @@ def test_reap_stale_falls_back_to_mirror_when_dir_is_gone(root, tmp_path, monkey
     """旧版在这里直接跳过（`if run_dir and os.path.isdir(run_dir)`），PID 就此无人认领。"""
     killed = []
     monkeypatch.setattr(preg, "_kill_registered",
-                        lambda pid: (killed.append(pid), True)[1])
+                        lambda pid, instance_id: (killed.append(pid), True)[1])
     rd = str(tmp_path / "runs" / "r-gone")
     preg.register_pid(rd, 999, "chromium")
     # 活跃标记指向一个已经不存在的目录，且宿主 PID 已死
@@ -110,12 +116,45 @@ def test_reap_stale_falls_back_to_mirror_when_dir_is_gone(root, tmp_path, monkey
 def test_reaped_pids_are_not_retried_next_round(root, tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(preg, "_kill_registered",
-                        lambda pid: (calls.append(pid), True)[1])
+                        lambda pid, instance_id: (calls.append(pid), True)[1])
     rd = str(tmp_path / "runs" / "r-1")
     preg.register_pid(rd, 555, "chromium")
     preg.reap_orphans(rd)
     preg.reap_orphans(rd)
     assert calls == [555]
+
+
+def test_pid_reuse_is_never_killed(root, tmp_path, monkeypatch):
+    """登记后 PID 被复用时，当前无关进程不得进入终止函数。"""
+    rd = str(tmp_path / "runs" / "r-reused")
+    preg.register_pid(rd, 777, "chromium")
+    monkeypatch.setattr(preg, "_process_instance_id", lambda pid: "test:new-instance")
+    killed = []
+    monkeypatch.setattr(preg, "_kill_registered",
+                        lambda pid, instance_id: (killed.append(pid), True)[1])
+
+    out = preg.reap_orphans(rd)
+
+    assert out["identity_mismatch"] == [777]
+    assert out["reaped"] == []
+    assert killed == []
+
+
+def test_legacy_pid_without_instance_identity_fails_closed(root, tmp_path, monkeypatch):
+    """旧台账只有 PID 时宁可少回收，也不能猜测并终止当前进程。"""
+    rd = str(tmp_path / "runs" / "r-legacy")
+    os.makedirs(rd, exist_ok=True)
+    with open(os.path.join(rd, "pids.json"), "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"pid": 888, "kind": "chromium", "at": 1}) + "\n")
+    killed = []
+    monkeypatch.setattr(preg, "_kill_registered",
+                        lambda pid, instance_id: (killed.append(pid), True)[1])
+
+    out = preg.reap_run(rd)
+
+    assert out["identity_unverified"] == [888]
+    assert out["reaped"] == []
+    assert killed == []
 
 
 def test_mirror_file_is_not_counted_as_an_active_slot(root, tmp_path):

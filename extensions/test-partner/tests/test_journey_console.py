@@ -43,6 +43,13 @@ def test_list_empty(store):
     assert jc.list_batches_payload() == {"ok": True, "batches": []}
 
 
+def test_console_distinguishes_execution_coverage_and_business_result():
+    html = jc._PAGE
+    assert "覆盖设计" in html
+    assert "业务结果" in html
+    assert "执行过程" in html
+
+
 def test_batch_detail_with_stepper_and_coverage(store):
     meta = store.create_batch("白月一期", base_url="http://127.0.0.1:8047")
     bid = meta["batch_id"]
