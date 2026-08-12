@@ -13,14 +13,16 @@
 
 import { useState } from "react";
 import { Check, ChevronRight, Circle, MinusCircle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import type { Segment, StepCell } from "@/components/test-journey/types";
 import { nextAction, projectSegments } from "@/components/test-journey/types";
 
 function CellRow({ cell }: { cell: StepCell }) {
+  const { t } = useTranslation();
   const why = cell.missing_prereq
-    ? `缺前置：${cell.missing_prereq}`
-    : cell.blocked_reason || "尚未产出";
+    ? t("Missing prerequisite: {{artifact}}", { artifact: cell.missing_prereq })
+    : cell.blocked_reason || t("Not produced yet");
   return (
     <li className="flex items-start gap-2 py-1.5">
       {cell.present ? (
@@ -45,6 +47,7 @@ function CellRow({ cell }: { cell: StepCell }) {
 }
 
 function SegmentBlock({ segment }: { segment: Segment }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const done = segment.cells.filter((c) => c.present).length;
   const tone =
@@ -72,7 +75,7 @@ function SegmentBlock({ segment }: { segment: Segment }) {
           <Circle className={`h-4 w-4 shrink-0 ${tone}`} />
         )}
         <span className="flex-1 text-sm font-medium text-[var(--foreground)]">
-          {segment.label}
+          {t(segment.label)}
         </span>
         <span className="text-xs text-[var(--muted-foreground)]">
           {done}/{segment.cells.length}
@@ -90,19 +93,23 @@ function SegmentBlock({ segment }: { segment: Segment }) {
 }
 
 export default function ArtifactLedger({ cells }: { cells: StepCell[] }) {
+  const { t } = useTranslation();
   const segments = projectSegments(cells);
   const next = nextAction(cells);
   return (
     <div className="space-y-4">
       {/* 第一眼只回答一件事：这条旅程现在轮到我做什么 */}
       <div className="rounded-xl border border-[var(--border)] bg-[var(--muted)] px-4 py-3">
-        <p className="text-xs text-[var(--muted-foreground)]">当前该你做的</p>
+        <p className="text-xs text-[var(--muted-foreground)]">{t("Your next action")}</p>
         <p className="mt-1 text-sm text-[var(--foreground)]">
           {next
-            ? `${next.label}${
-                next.missing_prereq ? `（先补上「${next.missing_prereq}」）` : ""
-              }`
-            : "九格都齐了，这条旅程可以收口。"}
+            ? next.missing_prereq
+              ? t("{{label}} (produce “{{prereq}}” first)", {
+                  label: next.label,
+                  prereq: next.missing_prereq,
+                })
+              : next.label
+            : t("All nine cells are filled — this journey can be closed out.")}
         </p>
       </div>
       <div className="space-y-2">
@@ -111,7 +118,9 @@ export default function ArtifactLedger({ cells }: { cells: StepCell[] }) {
         ))}
       </div>
       <p className="text-xs text-[var(--muted-foreground)]">
-        账本按产物存在性推导，不记进度——格子亮代表那份产物真的在盘上。
+        {t(
+          "The ledger is derived from artifact existence, not from progress — a lit cell means that artifact is really on disk.",
+        )}
       </p>
     </div>
   );

@@ -10,6 +10,10 @@
 //
 // **禁止**在 web/ 全树出现 3789 或 host.docker.internal（ADR-M2-01 G3 有断言守着）。
 
+// 本模块不是组件、拿不到 `useTranslation`，所以用全局实例上的 `i18n.t`——
+// 本仓既有写法（`components/memory/useMemoryRun.ts`、`context/UnifiedChatContext.tsx`）。
+import i18n from "i18next";
+
 import { apiFetch, apiUrl } from "@/lib/api";
 
 /** MCP 服务器条目名。换条目名时只改这里。 */
@@ -68,7 +72,7 @@ const MCP_ERROR_PREFIX = "(MCP ";
 export function parseToolEnvelope(raw: unknown): JourneyEnvelope {
   if (raw === null || raw === undefined) {
     return { ok: false, code: JourneyErrorCode.GATEWAY_DOWN,
-      message: "后端没有返回内容。" };
+      message: i18n.t("The backend returned no content.") };
   }
   const envelope = raw as { success?: boolean; content?: unknown; detail?: unknown };
   if (typeof envelope.detail === "string" && envelope.content === undefined) {
@@ -78,7 +82,7 @@ export function parseToolEnvelope(raw: unknown): JourneyEnvelope {
   const content = envelope.content;
   if (typeof content !== "string" || content.trim() === "") {
     return { ok: false, code: JourneyErrorCode.MCP_UNAVAILABLE,
-      message: "MCP 通道没有返回业务数据。" };
+      message: i18n.t("The MCP channel returned no business data.") };
   }
   if (content.trimStart().startsWith(MCP_ERROR_PREFIX)) {
     return { ok: false, code: JourneyErrorCode.MCP_UNAVAILABLE,
@@ -89,11 +93,13 @@ export function parseToolEnvelope(raw: unknown): JourneyEnvelope {
     parsed = JSON.parse(content);
   } catch {
     return { ok: false, code: JourneyErrorCode.MCP_UNAVAILABLE,
-      message: `返回的不是合法 JSON：${content.slice(0, 120)}` };
+      message: i18n.t("Response is not valid JSON: {{snippet}}", {
+        snippet: content.slice(0, 120),
+      }) };
   }
   if (typeof parsed !== "object" || parsed === null) {
     return { ok: false, code: JourneyErrorCode.MCP_UNAVAILABLE,
-      message: "返回的 JSON 是裸标量，不构成业务载荷。" };
+      message: i18n.t("The returned JSON is a bare scalar, not a business payload.") };
   }
   const body = parsed as Record<string, unknown>;
   return {
@@ -121,19 +127,25 @@ export async function callJourney(
   } catch (error) {
     // 连 DT 后端都没连上——这与「连上了但 MCP 断」是两种病，说法必须不同。
     return { ok: false, code: JourneyErrorCode.GATEWAY_DOWN,
-      message: `连不上后端：${(error as Error).message}` };
+      message: i18n.t("Cannot reach the backend: {{message}}", {
+        message: (error as Error).message,
+      }) };
   }
   if (response.status === 404) {
     return { ok: false, code: JourneyErrorCode.MCP_UNAVAILABLE,
-      message: `DT 里找不到工具 ${tool}。多半是 test-partner 这条 MCP 条目没连上——`
-        + `去 MCP Services 页面把它停用再启用一次，工具清单才会重新拉取。` };
+      message: i18n.t(
+        "DeepTutor cannot find the tool {{tool}}. Most likely the test-partner MCP entry is not connected — disable and re-enable it on the MCP Services page so the tool list is fetched again.",
+        { tool },
+      ) };
   }
   let payload: unknown = null;
   try {
     payload = await response.json();
   } catch {
     return { ok: false, code: JourneyErrorCode.GATEWAY_DOWN,
-      message: `后端返回了非 JSON（HTTP ${response.status}）。` };
+      message: i18n.t("The backend returned non-JSON (HTTP {{status}}).", {
+        status: response.status,
+      }) };
   }
   return parseToolEnvelope(payload);
 }

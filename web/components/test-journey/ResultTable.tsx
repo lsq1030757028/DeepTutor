@@ -10,32 +10,41 @@
 //   3. 「断到哪层」与「证据」合成一列——两列分开时用户要自己在两处之间做关联。
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import TraceLauncher from "@/components/test-journey/TraceLauncher";
 import type { RunRow, VerdictRow } from "@/components/test-journey/types";
 import { runTrack, summarizeRun } from "@/components/test-journey/types";
 
+/**
+ * `label` 是 i18n 键。四种结论与聊天富卡共用同一批 `journey.verdict.*` 键——
+ * 同一个结论在两个面上必须是同一个词，否则用户要在两处各学一套说法。
+ */
 const VERDICT_STYLE: Record<string, { label: string; className: string }> = {
-  PASS: { label: "通过", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300" },
-  FAIL: { label: "不通过", className: "bg-red-100 text-red-800 dark:bg-red-950/50 dark:text-red-300" },
-  PENDING: { label: "挂起", className: "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300" },
-  BLOCK: { label: "拦下", className: "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300" },
-  BLOCKED: { label: "拦下", className: "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300" },
+  PASS: { label: "journey.verdict.pass", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300" },
+  FAIL: { label: "journey.verdict.fail", className: "bg-red-100 text-red-800 dark:bg-red-950/50 dark:text-red-300" },
+  PENDING: { label: "journey.verdict.pending", className: "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300" },
+  BLOCK: { label: "journey.verdict.blocked", className: "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300" },
+  BLOCKED: { label: "journey.verdict.blocked", className: "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300" },
 };
 
 function VerdictBadge({ verdict }: { verdict: string }) {
-  const style = VERDICT_STYLE[String(verdict).toUpperCase()] ?? {
-    label: verdict,
-    className: "bg-[var(--muted)] text-[var(--muted-foreground)]",
-  };
+  const { t } = useTranslation();
+  const known = VERDICT_STYLE[String(verdict).toUpperCase()];
+  // 认不出来的结论码原样显示——**不许翻译、不许归到四种里的任何一种**。
+  const label = known ? t(known.label) : verdict;
+  const className = known
+    ? known.className
+    : "bg-[var(--muted)] text-[var(--muted-foreground)]";
   return (
-    <span className={`inline-block rounded px-1.5 py-0.5 text-xs ${style.className}`}>
-      {style.label}
+    <span className={`inline-block rounded px-1.5 py-0.5 text-xs ${className}`}>
+      {label}
     </span>
   );
 }
 
 function EvidenceCell({ row }: { row: VerdictRow }) {
+  const { t } = useTranslation();
   const refs = (row.evidence ?? []).map((e) => e?.ref).filter(Boolean) as string[];
   return (
     <div className="text-xs text-[var(--muted-foreground)]">
@@ -43,21 +52,24 @@ function EvidenceCell({ row }: { row: VerdictRow }) {
         <span className="mr-1.5 rounded bg-[var(--muted)] px-1 py-0.5">{row.layer}</span>
       ) : null}
       {refs.length ? (
-        <span className="font-mono">{refs.join("、")}</span>
+        <span className="font-mono">{refs.join(t("journey.listSeparator"))}</span>
       ) : (
         // 没有证据指针的"通过"是最贵的假绿，这里必须说出来
-        <span className="text-amber-700 dark:text-amber-400">无证据指针</span>
+        <span className="text-amber-700 dark:text-amber-400">{t("No evidence pointer")}</span>
       )}
     </div>
   );
 }
 
 export default function ResultTable({ runs }: { runs: RunRow[] }) {
+  const { t } = useTranslation();
   const [index, setIndex] = useState(runs.length - 1);
   if (runs.length === 0) {
     return (
       <p className="rounded-xl border border-[var(--border)] px-4 py-6 text-center text-sm text-[var(--muted-foreground)]">
-        这条批次还没有执行过。执行完成后，逐条结论与它凭什么会出现在这里。
+        {t(
+          "This batch has never been run. Once a run finishes, each verdict and what backs it will appear here.",
+        )}
       </p>
     );
   }
@@ -71,7 +83,9 @@ export default function ResultTable({ runs }: { runs: RunRow[] }) {
     <div className="space-y-3">
       {runs.length > 1 ? (
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs text-[var(--muted-foreground)]">趟次</span>
+          <span className="text-xs text-[var(--muted-foreground)]">
+            {t("journey.label.attempts")}
+          </span>
           {runs.map((r, i) => (
             <button
               key={r.run_id}
@@ -91,25 +105,38 @@ export default function ResultTable({ runs }: { runs: RunRow[] }) {
 
       <div className="flex flex-wrap gap-x-5 gap-y-1 rounded-xl border border-[var(--border)] px-4 py-3 text-sm">
         <span className="text-[var(--foreground)]">
-          通过 {summary.passed}/{summary.total}
+          {t("Pass {{passed}}/{{total}}", {
+            passed: summary.passed,
+            total: summary.total,
+          })}
         </span>
         {summary.failed ? (
-          <span className="text-red-700 dark:text-red-400">不通过 {summary.failed}</span>
+          <span className="text-red-700 dark:text-red-400">
+            {t("Fail {{count}}", { count: summary.failed })}
+          </span>
         ) : null}
         {summary.pending ? (
-          <span className="text-amber-700 dark:text-amber-400">挂起 {summary.pending}</span>
+          <span className="text-amber-700 dark:text-amber-400">
+            {t("Pending {{count}}", { count: summary.pending })}
+          </span>
         ) : null}
         {summary.blocked ? (
-          <span className="text-amber-700 dark:text-amber-400">拦下 {summary.blocked}</span>
+          <span className="text-amber-700 dark:text-amber-400">
+            {t("Blocked {{count}}", { count: summary.blocked })}
+          </span>
         ) : null}
         {summary.probing ? (
           <span className="text-[var(--muted-foreground)]">
-            探测 {summary.probing}（不计入通过率）
+            {t("Probe {{count}} (excluded from the pass rate)", {
+              count: summary.probing,
+            })}
           </span>
         ) : null}
         {track ? (
           <span className="text-[var(--muted-foreground)]">
-            轨道 {track === "api" ? "接口" : "界面"}
+            {t("Track {{track}}", {
+              track: track === "api" ? t("journey.track.api") : t("journey.track.ui"),
+            })}
           </span>
         ) : null}
       </div>
@@ -118,10 +145,10 @@ export default function ResultTable({ runs }: { runs: RunRow[] }) {
         <table className="w-full min-w-[760px] text-sm">
           <thead>
             <tr className="border-b border-[var(--border)] text-left text-xs text-[var(--muted-foreground)]">
-              <th className="px-3 py-2 font-medium">编号</th>
-              <th className="px-3 py-2 font-medium">结论</th>
-              <th className="px-3 py-2 font-medium">凭什么</th>
-              <th className="px-3 py-2 font-medium">回放</th>
+              <th className="px-3 py-2 font-medium">{t("journey.col.caseId")}</th>
+              <th className="px-3 py-2 font-medium">{t("journey.col.verdict")}</th>
+              <th className="px-3 py-2 font-medium">{t("journey.col.evidence")}</th>
+              <th className="px-3 py-2 font-medium">{t("journey.col.trace")}</th>
             </tr>
           </thead>
           <tbody>
@@ -133,7 +160,8 @@ export default function ResultTable({ runs }: { runs: RunRow[] }) {
                   {/* 挂起/拦下没写理由 = 没给结论。这里把缺失说出来而不是留白 */}
                   {["PENDING", "BLOCK", "BLOCKED"].includes(String(row.verdict).toUpperCase()) ? (
                     <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                      {row.note || "（未写明为什么挂起——这条要补）"}
+                      {row.note ||
+                        t("(No reason recorded for holding this one — it must be filled in)")}
                     </p>
                   ) : row.note ? (
                     <p className="mt-1 text-xs text-[var(--muted-foreground)]">{row.note}</p>
@@ -156,14 +184,19 @@ export default function ResultTable({ runs }: { runs: RunRow[] }) {
       {probingRows.length ? (
         <div className="rounded-xl border border-dashed border-[var(--border)] px-4 py-3">
           <p className="text-xs text-[var(--muted-foreground)]">
-            探测项 {probingRows.length} 条 —— 需求正文撑不住的预期，只作观察，
-            <span className="text-[var(--foreground)]">不进通过率、不作判据</span>。
+            {t(
+              "{{count}} probing cases — expectations the requirement body cannot support, recorded as observations only: ",
+              { count: probingRows.length },
+            )}
+            <span className="text-[var(--foreground)]">
+              {t("out of the pass rate and not used as criteria")}
+            </span>
           </p>
           <ul className="mt-1.5 space-y-1">
             {probingRows.map((row) => (
               <li key={row.id} className="text-xs text-[var(--muted-foreground)]">
                 <span className="font-mono">{row.id}</span>
-                <span className="ml-2">{row.note || "（无观察记录）"}</span>
+                <span className="ml-2">{row.note || t("(No observation recorded)")}</span>
               </li>
             ))}
           </ul>

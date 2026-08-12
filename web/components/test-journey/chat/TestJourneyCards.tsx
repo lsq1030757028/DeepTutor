@@ -31,7 +31,7 @@
 
 import { AlertTriangle, FlaskConical, Loader2, Quote } from "lucide-react";
 
-import { JOURNEY_CARD_COPY as C } from "./copy";
+import { useJourneyCardCopy, type JourneyCardCopy } from "./copy";
 import type { JourneyState, RunState } from "./extract";
 
 // ── 骨架 ───────────────────────────────────────────────────────────────────
@@ -189,13 +189,14 @@ function CaseRow({
 // ── 卡一 · 规则清单（形态由共用骨架推导，稿未直接画）────────────────────────
 
 function RulesCard({ state }: { state: JourneyState }) {
+  const C = useJourneyCardCopy();
   const { rules } = state;
   if (rules.length === 0) return null;
   return (
     <ResultCard
       tone="ok"
       title={C.rules.title}
-      meta={<Chip>{`${rules.length} ${C.rules.countSuffix}`}</Chip>}
+      meta={<Chip>{C.rules.count(rules.length)}</Chip>}
       boundary={C.rules.boundary}
       action={<WorkbenchLink batchId={state.batchId} label={C.rules.action} />}
     >
@@ -239,6 +240,7 @@ function RulesCard({ state }: { state: JourneyState }) {
 // ── 卡二 · 用例草稿概览（流式）────────────────────────────────────────────
 
 function DraftCard({ state }: { state: JourneyState }) {
+  const C = useJourneyCardCopy();
   const draft = state.draft;
   const live = state.pending === "draft_cases";
   if (!draft && !live) return null;
@@ -247,7 +249,7 @@ function DraftCard({ state }: { state: JourneyState }) {
     <ResultCard
       tone={live ? "live" : "ok"}
       title={live ? C.draft.titleLive : C.draft.titleDone}
-      meta={cases.length > 0 ? <Chip>{`${cases.length} ${C.draft.unit}`}</Chip> : null}
+      meta={cases.length > 0 ? <Chip>{C.draft.count(cases.length)}</Chip> : null}
       boundary={C.draft.boundary}
       action={
         <WorkbenchLink
@@ -286,7 +288,7 @@ function DraftCard({ state }: { state: JourneyState }) {
 
 // ── 卡三 · 执行进度与结论摘要（流式）──────────────────────────────────────
 
-function verdictMeta(run: RunState) {
+function verdictMeta(run: RunState, C: JourneyCardCopy) {
   const d = run.distribution;
   const out: React.ReactNode[] = [];
   if (d.PASS) out.push(<Chip key="p" tone="ok">{`${C.run.pass} ${d.PASS}`}</Chip>);
@@ -299,6 +301,7 @@ function verdictMeta(run: RunState) {
 }
 
 function RunCard({ state }: { state: JourneyState }) {
+  const C = useJourneyCardCopy();
   const run = state.run;
   const live = state.pending === "execute" || state.pending === "project";
   if (!run && !live) return null;
@@ -313,7 +316,7 @@ function RunCard({ state }: { state: JourneyState }) {
       </Chip>,
     );
   }
-  if (run) meta.push(...verdictMeta(run));
+  if (run) meta.push(...verdictMeta(run, C));
 
   // 没跑投影就没有可信的通过/没过。这里**不拿收据里的 pytest 计数冒充结论**——
   // 那是两个层次的东西，混起来正是"把我们其实没验说成验过了"的那一步。
@@ -379,6 +382,7 @@ function RunCard({ state }: { state: JourneyState }) {
 // ── 卡四 · 覆盖收口摘要 ───────────────────────────────────────────────────
 
 function CoverageCard({ state }: { state: JourneyState }) {
+  const C = useJourneyCardCopy();
   const cov = state.coverage;
   if (!cov) return null;
   const s = cov.summary;
@@ -446,6 +450,7 @@ function CoverageCard({ state }: { state: JourneyState }) {
 // ── 错误：工具明说自己失败了，或返回的不是业务数据 ─────────────────────────
 
 function ErrorCard({ state }: { state: JourneyState }) {
+  const C = useJourneyCardCopy();
   if (state.errors.length === 0) return null;
   return (
     <section className="mt-3 rounded-xl border border-red-500/40 bg-red-500/5 px-3.5 py-3 text-sm">

@@ -1,80 +1,125 @@
-// [fork] 聊天富卡的**全部**中文文案，集中一处。
+"use client";
+
+// [fork] 聊天富卡的**全部**文案，集中一处。
 //
-// ## 为什么现在是硬编码，以及它为什么不算绿
+// ## 键的组织方式
 //
-// 薄壳这一期文案统一走中文硬编码不走 `t()`，理由是薄壳未经 UAT、文案大概率要改，
-// 现在补 i18n 等于做两遍。**这是已登记的合 main 阻断项，不是"可以这样"**——
-// UAT 可以带中文硬编码，合 main 不可以（manager 0020 禁美化口径：已知缺口
-// 不许标绿）。定稿后从本文件一次性抽 `t()` 键，成对写进
-// `web/locales/{en,zh}/app.json`。
+// 跟本仓既有习惯走：**英文原文即键**（`locales/{en,zh}/app.json` 是平铺表，
+// 3000+ 条里绝大多数都是这个形态，M1 测试工作台那批 fork 键也是）。
+// 只有两种情况改用 `journey.*` 点分键——这也是本仓既有的第二形态
+// （`settingsTour.*` / `research.stage.*` / `codex.oauth.*`）：
+//   1. 英文短词与既有键**撞车且语义不同**（Pending 已被"待应用"占了、
+//      Trace 已被"追踪"占了、Source 已被"来源"占了、Running 已被"运行中"占了）；
+//   2. 单独拿出来看不出说的是哪件事的短标签（表头、状态词）。
+// 撞车的键直接复用会让别处的中文变错——这不是风格洁癖，是真会错的地方。
 //
-// 集中放置就是为了让那次抽取是**一个文件的机械动作**，而不是满仓找中文串。
-// 施工纪律：卡片组件里**不许出现裸中文字面量**，一律从这里取。
+// ## 施工纪律
+//
+// 卡片组件里**不许出现裸字面量**，一律从这里取。集中放置的目的没变：
+// 文案要改时是一个文件的机械动作，不是满仓找串。
+//
+// ## 为什么是工厂函数不是常量
+//
+// `t` 只能从 React 上下文里拿。导出两个入口：
+//   · `journeyCardCopy(t)` —— 纯工厂，测试可以喂任意 `t`（含 `i18n.t`）；
+//   · `useJourneyCardCopy()` —— 组件用的 hook 包装。
+// 纯工厂在场，渲染测试就不必为了拿一句文案去起 React 上下文。
+
+import type { TFunction } from "i18next";
+import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 
 /** 页脚那句边界说明是强制的（交互稿 §6f）。 */
-export const JOURNEY_CARD_COPY = {
-  // ── 卡一 · 规则清单（澄清结果）─────────────────────────────────────────
-  rules: {
-    title: "已澄清的规则",
-    countSuffix: "条规则",
-    probing: "探测",
-    probingHint: "探测性：需求正文撑不住的预期，不进 PASS 判据",
-    noQuote: "缺原文依据",
-    boundary: "只读。逐行原因与不覆盖声明在工作台写。",
-    action: "在工作台看规则表",
-  },
+export function journeyCardCopy(t: TFunction) {
+  return {
+    // ── 卡一 · 规则清单（澄清结果）─────────────────────────────────────────
+    rules: {
+      title: t("Clarified rules"),
+      count: (n: number) => t("{{count}} rules", { count: n }),
+      probing: t("journey.badge.probe"),
+      probingHint: t(
+        "Probing: an expectation the requirement body cannot support. Excluded from PASS criteria.",
+      ),
+      noQuote: t("No source quote"),
+      boundary: t(
+        "Read-only. Per-rule reasons and out-of-scope declarations are written in the workbench.",
+      ),
+      action: t("Open rule table in workbench"),
+    },
 
-  // ── 卡二 · 用例草稿概览（流式）────────────────────────────────────────
-  draft: {
-    titleLive: "正在生成用例",
-    titleDone: "用例草稿写好了",
-    unit: "条",
-    probing: "探测",
-    business: "业务",
-    uncovered: (n: number) => `另有 ${n} 条规则声明了不测`,
-    boundary: "这里只看，勾选采纳在工作台",
-    action: "去采纳",
-    actionPending: "去采纳（生成完才能点）",
-  },
+    // ── 卡二 · 用例草稿概览（流式）────────────────────────────────────────
+    draft: {
+      titleLive: t("Drafting test cases"),
+      titleDone: t("Case draft is ready"),
+      count: (n: number) => t("{{count}} cases", { count: n }),
+      probing: t("journey.badge.probe"),
+      business: t("journey.badge.business"),
+      uncovered: (n: number) =>
+        t("{{count}} further rules are declared out of scope", { count: n }),
+      boundary: t("Read-only here. Selecting and adopting happens in the workbench."),
+      action: t("Adopt cases"),
+      actionPending: t("Adopt cases (available once drafting finishes)"),
+    },
 
-  // ── 卡三 · 执行进度与结论摘要（流式）──────────────────────────────────
-  run: {
-    titleLive: "正在执行",
-    titleDone: "执行完成",
-    attempt: (n: number) => `第 ${n} 趟`,
-    replay: "重放",
-    replayHint: "这一趟是编辑重发触发的重放，不是新一趟",
-    drift: "靶机与接入时不是同一台",
-    driftHint: "换环境跑是合法的，但结论要按这一趟真正打的靶读",
-    pass: "通过",
-    fail: "没过",
-    pending: "挂起",
-    blocked: "受阻",
-    notProjected: "结论还没投影——这一趟只有执行计数，没有可信的通过/没过",
-    selected: (n: number) => `选了 ${n} 条`,
-    boundary: "摘要级。证据、断言层、trace 都在工作台",
-    action: "看完整结果表",
-  },
+    // ── 卡三 · 执行进度与结论摘要（流式）──────────────────────────────────
+    run: {
+      titleLive: t("journey.run.titleLive"),
+      titleDone: t("Run finished"),
+      attempt: (n: number) => t("Attempt {{n}}", { n }),
+      replay: t("Replay"),
+      replayHint: t(
+        "This attempt is a replay triggered by editing and resending, not a new attempt",
+      ),
+      drift: t("Target is not the machine recorded at intake"),
+      driftHint: t(
+        "Running against another environment is legitimate, but read the verdicts against the target this attempt actually hit",
+      ),
+      pass: t("journey.verdict.pass"),
+      fail: t("journey.verdict.fail"),
+      pending: t("journey.verdict.pending"),
+      blocked: t("journey.verdict.blocked"),
+      notProjected: t(
+        "Verdicts are not projected yet — this attempt has execution counts only, no trustworthy pass/fail",
+      ),
+      selected: (n: number) => t("{{count}} cases selected", { count: n }),
+      boundary: t(
+        "Summary level. Evidence, assertion layer and traces are all in the workbench.",
+      ),
+      action: t("Open full result table"),
+    },
 
-  // ── 卡四 · 覆盖收口摘要 ───────────────────────────────────────────────
-  coverage: {
-    titleDone: "覆盖可以收口了",
-    titleGap: "覆盖还差一点才能收口",
-    ruleCount: (n: number) => `${n} 条规则`,
-    covered: "有用例",
-    declared: "说明了不测",
-    gap: "没测也没说",
-    boundary: "只读。写不覆盖声明去工作台——声明会跟着交付物交出去。",
-    action: "去处理它",
-    actionDone: "在工作台看收口",
-  },
+    // ── 卡四 · 覆盖收口摘要 ───────────────────────────────────────────────
+    coverage: {
+      titleDone: t("Coverage is ready to close out"),
+      titleGap: t("Coverage is not ready to close out yet"),
+      ruleCount: (n: number) => t("{{count}} rules", { count: n }),
+      covered: t("journey.coverage.covered"),
+      declared: t("journey.coverage.declared"),
+      gap: t("journey.coverage.gap"),
+      boundary: t(
+        "Read-only. Write out-of-scope declarations in the workbench — they ship with the deliverable.",
+      ),
+      action: t("Resolve the gaps"),
+      actionDone: t("Open closure in workbench"),
+    },
 
-  // ── 通用 ───────────────────────────────────────────────────────────────
-  common: {
-    /** 工具明说自己失败了，或返回的不是业务数据。**不猜、不补默认值。** */
-    errorTitle: "这一步没成",
-    errorUnavailable: "工具通道没返回业务数据（未连接 / 超时 / 半截都会长这样）",
-    batchPrefix: "批次",
-    openWorkbench: "在工作台打开这条旅程",
-  },
-} as const;
+    // ── 通用 ───────────────────────────────────────────────────────────────
+    common: {
+      /** 工具明说自己失败了，或返回的不是业务数据。**不猜、不补默认值。** */
+      errorTitle: t("This step did not succeed"),
+      errorUnavailable: t(
+        "The tool channel returned no business data (not connected / timed out / truncated all look like this)",
+      ),
+      batchPrefix: t("journey.label.batch"),
+      openWorkbench: t("Open this journey in the workbench"),
+    },
+  };
+}
+
+export type JourneyCardCopy = ReturnType<typeof journeyCardCopy>;
+
+/** 组件侧入口。`t` 变了（切语言）才重算。 */
+export function useJourneyCardCopy(): JourneyCardCopy {
+  const { t } = useTranslation();
+  return useMemo(() => journeyCardCopy(t), [t]);
+}

@@ -10,6 +10,7 @@
 // **不要**再在别处做第二张规则视图。
 
 import { AlertCircle, FlaskConical, Quote } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface Rule {
   rule_id: string;
@@ -33,28 +34,32 @@ interface Props {
   coverage?: CoverageRow[];
 }
 
+/** `label` 是 i18n 键，覆盖三态与富卡那边共用同一批键（同一概念同一个词）。 */
 const STATUS_TEXT: Record<string, { label: string; className: string }> = {
   covered: {
-    label: "有用例",
+    label: "journey.coverage.covered",
     className: "text-emerald-700 dark:text-emerald-400",
   },
   declared_uncovered: {
-    label: "说明了不测",
+    label: "journey.coverage.declared",
     className: "text-amber-700 dark:text-amber-400",
   },
   gap_unexplained: {
     // 这一类是唯一会挡收口的：没测、也没说为什么不测
-    label: "没测也没说",
+    label: "journey.coverage.gap",
     className: "font-semibold text-red-700 dark:text-red-400",
   },
 };
 
 export default function RuleTable({ rules, exampleCounts, coverage }: Props) {
+  const { t } = useTranslation();
   const coverageById = new Map((coverage ?? []).map((c) => [c.rule_id, c]));
   if (rules.length === 0) {
     return (
       <p className="rounded-xl border border-[var(--border)] px-4 py-6 text-center text-sm text-[var(--muted-foreground)]">
-        还没有澄清出规则。规则来自需求正文，在聊天里走一次澄清就会出现在这里。
+        {t(
+          "No rules clarified yet. Rules come from the requirement body — run one clarification in chat and they will show up here.",
+        )}
       </p>
     );
   }
@@ -63,17 +68,17 @@ export default function RuleTable({ rules, exampleCounts, coverage }: Props) {
       <table className="w-full min-w-[720px] text-sm">
         <thead>
           <tr className="border-b border-[var(--border)] text-left text-xs text-[var(--muted-foreground)]">
-            <th className="px-3 py-2 font-medium">规则</th>
-            <th className="px-3 py-2 font-medium">依据</th>
-            <th className="px-3 py-2 font-medium">例子</th>
-            <th className="px-3 py-2 font-medium">覆盖</th>
+            <th className="px-3 py-2 font-medium">{t("journey.col.rule")}</th>
+            <th className="px-3 py-2 font-medium">{t("journey.col.source")}</th>
+            <th className="px-3 py-2 font-medium">{t("journey.col.examples")}</th>
+            <th className="px-3 py-2 font-medium">{t("journey.col.coverage")}</th>
           </tr>
         </thead>
         <tbody>
           {rules.map((rule) => {
             const cov = coverageById.get(rule.rule_id);
             const status = STATUS_TEXT[cov?.status ?? ""] ?? {
-              label: "未收口",
+              label: "journey.coverage.notClosed",
               className: "text-[var(--muted-foreground)]",
             };
             return (
@@ -88,11 +93,13 @@ export default function RuleTable({ rules, exampleCounts, coverage }: Props) {
                     </span>
                     {rule.probing ? (
                       <span
-                        title="探测性：需求正文撑不住的预期，不进 PASS 判据"
+                        title={t(
+                          "Probing: an expectation the requirement body cannot support. Excluded from PASS criteria.",
+                        )}
                         className="inline-flex items-center gap-0.5 rounded bg-[var(--muted)] px-1 py-0.5 text-[10px] text-[var(--muted-foreground)]"
                       >
                         <FlaskConical className="h-3 w-3" />
-                        探测
+                        {t("journey.badge.probe")}
                       </span>
                     ) : null}
                   </div>
@@ -105,11 +112,11 @@ export default function RuleTable({ rules, exampleCounts, coverage }: Props) {
                       <span className="line-clamp-3">{rule.source_quote}</span>
                     </span>
                   ) : rule.probing ? (
-                    <span>无原文依据（已标探测性）</span>
+                    <span>{t("No source quote (marked probing)")}</span>
                   ) : (
                     <span className="flex gap-1 text-amber-700 dark:text-amber-400">
                       <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
-                      缺依据
+                      {t("Missing source")}
                     </span>
                   )}
                 </td>
@@ -117,13 +124,13 @@ export default function RuleTable({ rules, exampleCounts, coverage }: Props) {
                   {exampleCounts?.[rule.rule_id] ?? 0}
                 </td>
                 <td className="px-3 py-2.5 text-xs">
-                  <span className={status.className}>{status.label}</span>
+                  <span className={status.className}>{t(status.label)}</span>
                   {cov?.reason ? (
                     <p className="mt-0.5 text-[var(--muted-foreground)]">{cov.reason}</p>
                   ) : null}
                   {cov?.case_ids?.length ? (
                     <p className="mt-0.5 font-mono text-[10px] text-[var(--muted-foreground)]">
-                      {cov.case_ids.join("、")}
+                      {cov.case_ids.join(t("journey.listSeparator"))}
                     </p>
                   ) : null}
                 </td>

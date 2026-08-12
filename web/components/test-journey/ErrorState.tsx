@@ -11,7 +11,9 @@
 //   · trace 打不开（TRACE_MISSING/…）vs 本轨压根没有 trace（TRACE_NOT_APPLICABLE）
 // 每一对合并了都违反 0021 红线六。
 
+import type { TFunction } from "i18next";
 import { AlertTriangle, Info } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { JourneyErrorCode } from "@/components/test-journey/client";
 
@@ -22,72 +24,119 @@ interface Explained {
   neutral?: boolean;
 }
 
-const EXPLANATIONS: Record<string, Explained> = {
-  [JourneyErrorCode.GATEWAY_DOWN]: {
-    what: "测试伙伴的服务进程不在。不是「连上了但出错」，是宿主机上那个常驻进程压根没起来。",
-    next: "在宿主机上跑 extensions/test-partner/scripts/start_server.cmd 把它拉起来，再刷新本页。",
-  },
-  [JourneyErrorCode.MCP_UNAVAILABLE]: {
-    what: "服务进程在，但 DeepTutor 到它的 MCP 通道断了。两件事分开说：进程活着，通道没通。",
-    next: "去 MCP Services 页面把 test-partner 这条停用再启用一次，强制重连并重新拉取工具清单。",
-  },
-  [JourneyErrorCode.ORACLE_FETCH_FAILED]: {
-    what: "TAPD 需求拉取失败——请求发出去了，没拿回可用的内容。",
-    next: "确认 TAPD 那条 MCP 条目连着、令牌没过期，然后重试。需求正文没拿到之前不会建批次。",
-  },
-  [JourneyErrorCode.ORACLE_NOT_FOUND]: {
-    what: "TAPD 里没有这条需求。需求号或工作区对不上。",
-    next: "核对需求号与工作区 ID 再试一次。",
-  },
-  [JourneyErrorCode.ORACLE_FORBIDDEN]: {
-    what: "TAPD 拒绝了这次读取——令牌对这个工作区没有权限。",
-    next: "换一个有该工作区读权限的令牌，在配置页重新保存。",
-  },
-  [JourneyErrorCode.ORACLE_FIELD_MISSING]: {
-    what: "取回的需求行里没有正文字段。**这是取数侧的问题，不是需求方没写正文**——"
-      + "多半是字段白名单没带上 description，或者换通道后参数口径变了。",
-    next: "这条要工程侧修，不用去催需求。把这条错误连同需求号报给负责取数的人。",
-  },
-  [JourneyErrorCode.ORACLE_BODY_EMPTY]: {
-    what: "字段要到了，需求正文**确实是空的**。这条需求在 TAPD 里只有标题。",
-    next: "找需求方补正文。空正文不能当判据来源——拿它当 oracle 会让后面所有结论建立在标题上。",
-  },
-  [JourneyErrorCode.ORACLE_DRIFT]: {
-    what: "需求在你澄清之后被改过了。用旧快照冻结用例，会让判据指向一份已经不存在的需求。",
-    next: "重新澄清一遍再采纳。这里没有「照旧继续」的选项——有那个开关，这道闸就等于不存在。",
-  },
-  [JourneyErrorCode.GATE_REQUIRED]: {
-    what: "这个动作需要一张旅程门票，当前这一轮没有。",
-    next: "回聊天选「测试」模式开一趟旅程，批次从那里创建。",
-  },
-  [JourneyErrorCode.NO_BATCH]: {
-    what: "找不到这个批次。",
-    next: "回列表页挑一个既有批次，或从「测试」模式新开一趟。",
-  },
-  [JourneyErrorCode.TRACE_NOT_APPLICABLE]: {
-    what: "这一趟走的是接口轨，**按设计就没有 trace**——不是打不开，是本来就不产。",
-    next: "接口轨的证据是 HTTP 报文与断言结果，在结果表里逐条看。",
-    neutral: true,
-  },
-  [JourneyErrorCode.TRACE_MISSING]: {
-    what: "这条用例没有留下 trace 文件。",
-    next: "重跑一趟；如果重跑后仍然没有，看执行日志确认录制是否被关掉了。",
-  },
-  [JourneyErrorCode.TRACE_VIEWER_MISSING]: {
-    what: "trace 文件在，但本机没装能打开它的查看器。这与「文件不见了」是两回事。",
-    next: "用下面这条命令在本机打开，或先装 Playwright 再用按钮。",
-  },
-  [JourneyErrorCode.TRACE_SPAWN_FAILED]: {
-    what: "查看器装了，但这次没起来。",
-    next: "用下面这条命令手动打开。",
-  },
-};
+/**
+ * 码 → 文案。**按互斥错误码取，不按字符串猜**（设计稿 §4.3）。
+ * 取的时机是渲染时而不是模块加载时——加载时 `t` 还没有语言。
+ */
+function explanations(t: TFunction): Record<string, Explained> {
+  return {
+    [JourneyErrorCode.GATEWAY_DOWN]: {
+      what: t(
+        "The test partner service process is not running. This is not “connected but erroring” — the resident process on the host never started.",
+      ),
+      next: t(
+        "Run extensions/test-partner/scripts/start_server.cmd on the host to bring it up, then reload this page.",
+      ),
+    },
+    [JourneyErrorCode.MCP_UNAVAILABLE]: {
+      what: t(
+        "The service process is up, but DeepTutor's MCP channel to it is down. Two separate things: the process is alive, the channel is not.",
+      ),
+      next: t(
+        "Disable and re-enable the test-partner entry on the MCP Services page to force a reconnect and re-fetch the tool list.",
+      ),
+    },
+    [JourneyErrorCode.ORACLE_FETCH_FAILED]: {
+      what: t(
+        "Fetching the TAPD requirement failed — the request went out, nothing usable came back.",
+      ),
+      next: t(
+        "Check that the TAPD MCP entry is connected and the token has not expired, then retry. No batch is created until the requirement body is in hand.",
+      ),
+    },
+    [JourneyErrorCode.ORACLE_NOT_FOUND]: {
+      what: t("TAPD has no such requirement. The story ID or the workspace does not match."),
+      next: t("Check the story ID and workspace ID, then try again."),
+    },
+    [JourneyErrorCode.ORACLE_FORBIDDEN]: {
+      what: t(
+        "TAPD refused this read — the token has no permission on this workspace.",
+      ),
+      next: t(
+        "Switch to a token with read access to that workspace and save it again on the settings page.",
+      ),
+    },
+    [JourneyErrorCode.ORACLE_FIELD_MISSING]: {
+      what: t(
+        "The fetched requirement row has no body field. **This is a fetch-side problem, not a missing write-up** — most likely the field allowlist omits description, or the parameters changed when the channel changed.",
+      ),
+      next: t(
+        "Engineering has to fix this one; do not chase the requirement author. Report this error together with the story ID to whoever owns the fetch path.",
+      ),
+    },
+    [JourneyErrorCode.ORACLE_BODY_EMPTY]: {
+      what: t(
+        "The field came back and the requirement body **really is empty**. This story has nothing but a title in TAPD.",
+      ),
+      next: t(
+        "Ask the requirement author to write the body. An empty body cannot serve as criteria — using it as the oracle would build every later verdict on a title.",
+      ),
+    },
+    [JourneyErrorCode.ORACLE_DRIFT]: {
+      what: t(
+        "The requirement changed after you clarified it. Freezing cases against the old snapshot would point the criteria at a requirement that no longer exists.",
+      ),
+      next: t(
+        "Clarify again before adopting. There is deliberately no “continue anyway” option here — with that switch, this gate would not exist.",
+      ),
+    },
+    [JourneyErrorCode.GATE_REQUIRED]: {
+      what: t("This action needs a journey ticket, and this turn does not have one."),
+      next: t(
+        "Go back to chat, pick the Test mode and start a journey — batches are created there.",
+      ),
+    },
+    [JourneyErrorCode.NO_BATCH]: {
+      what: t("This batch cannot be found."),
+      next: t(
+        "Pick an existing batch from the list page, or start a new journey from the Test mode.",
+      ),
+    },
+    [JourneyErrorCode.TRACE_NOT_APPLICABLE]: {
+      what: t(
+        "This attempt ran on the API track, which **by design produces no trace** — nothing is broken, there is simply nothing to open.",
+      ),
+      next: t(
+        "Evidence on the API track is the HTTP exchange and the assertion results; read them row by row in the result table.",
+      ),
+      neutral: true,
+    },
+    [JourneyErrorCode.TRACE_MISSING]: {
+      what: t("This case left no trace file behind."),
+      next: t(
+        "Run it again; if there is still no trace, check the execution log to see whether recording was turned off.",
+      ),
+    },
+    [JourneyErrorCode.TRACE_VIEWER_MISSING]: {
+      what: t(
+        "The trace file is there, but this machine has no viewer installed to open it. That is a different thing from “the file is gone”.",
+      ),
+      next: t(
+        "Open it locally with the command below, or install Playwright first and then use the button.",
+      ),
+    },
+    [JourneyErrorCode.TRACE_SPAWN_FAILED]: {
+      what: t("The viewer is installed but did not start this time."),
+      next: t("Open it manually with the command below."),
+    },
+  };
+}
 
-export function explain(code: string, fallback?: string): Explained {
+export function explain(t: TFunction, code: string, fallback?: string): Explained {
   return (
-    EXPLANATIONS[code] ?? {
-      what: fallback || "发生了一个没有归类的错误。",
-      next: "把这条错误码报给工程侧：" + code,
+    explanations(t)[code] ?? {
+      what: fallback || t("An unclassified error occurred."),
+      next: t("Report this error code to engineering: {{code}}", { code }),
     }
   );
 }
@@ -102,7 +151,8 @@ interface Props {
 }
 
 export default function ErrorState({ code, message, detail, onRetry, retryLabel }: Props) {
-  const { what, next, neutral } = explain(code, message);
+  const { t } = useTranslation();
+  const { what, next, neutral } = explain(t, code, message);
   const Icon = neutral ? Info : AlertTriangle;
   const tone = neutral
     ? "border-[var(--border)] bg-[var(--muted)]"
@@ -124,16 +174,20 @@ export default function ErrorState({ code, message, detail, onRetry, retryLabel 
             </code>
           ) : null}
           {message && message !== what ? (
-            <p className="text-xs text-[var(--muted-foreground)]">服务端原话：{message}</p>
+            <p className="text-xs text-[var(--muted-foreground)]">
+              {t("Server said: {{message}}", { message })}
+            </p>
           ) : null}
-          <p className="text-xs text-[var(--muted-foreground)]">错误码 {code}</p>
+          <p className="text-xs text-[var(--muted-foreground)]">
+            {t("Error code {{code}}", { code })}
+          </p>
           {onRetry ? (
             <button
               type="button"
               onClick={onRetry}
               className="mt-1 rounded-md border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--foreground)] hover:bg-[var(--muted)]"
             >
-              {retryLabel || "重试"}
+              {retryLabel || t("Retry")}
             </button>
           ) : null}
         </div>

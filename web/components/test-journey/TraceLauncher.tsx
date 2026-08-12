@@ -14,6 +14,7 @@
 // 正是交互稿点名的错法（「没装」与「装了但坏了」要分开说，同理）。
 
 import { PlayCircle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import ErrorState, { explain } from "@/components/test-journey/ErrorState";
 import { JourneyErrorCode } from "@/components/test-journey/client";
@@ -38,10 +39,11 @@ export default function TraceLauncher({
   onOpen,
   compact,
 }: Props) {
+  const { t } = useTranslation();
   const fallback = (code: string, short: string) =>
     compact ? (
       <span
-        title={explain(code).next}
+        title={explain(t, code).next}
         className="text-xs text-[var(--muted-foreground)]"
       >
         {short}
@@ -52,14 +54,17 @@ export default function TraceLauncher({
 
   // 接口轨：先于一切判断。不产 trace 不是故障，别让用户去点一个注定失败的按钮。
   if (track === "api") {
-    return fallback(JourneyErrorCode.TRACE_NOT_APPLICABLE, "本轨无回放");
+    return fallback(
+      JourneyErrorCode.TRACE_NOT_APPLICABLE,
+      t("journey.trace.notApplicable"),
+    );
   }
   if (errorCode) {
-    return fallback(errorCode, "回放打不开");
+    return fallback(errorCode, t("journey.trace.cannotOpen"));
   }
   if (!traceRel) {
     // 轨道判不出来时也走这条：说「没有留下回放」而不是断言它坏了
-    return fallback(JourneyErrorCode.TRACE_MISSING, "无回放文件");
+    return fallback(JourneyErrorCode.TRACE_MISSING, t("journey.trace.noFile"));
   }
   return (
     <div className="space-y-2">
@@ -69,7 +74,7 @@ export default function TraceLauncher({
         className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--foreground)] hover:bg-[var(--muted)]"
       >
         <PlayCircle className="h-3.5 w-3.5" />
-        打开回放
+        {t("Open trace")}
       </button>
       {command ? (
         // 降级路径始终在场：按钮依赖本机装了查看器，命令谁都能复制

@@ -13,6 +13,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, MessageSquare, RefreshCw } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import ArtifactLedger from "@/components/test-journey/ArtifactLedger";
 import ErrorState from "@/components/test-journey/ErrorState";
@@ -24,10 +25,11 @@ import type { RunRow, StepCell } from "@/components/test-journey/types";
 
 type Tab = "ledger" | "rules" | "results";
 
+/** `label` 是 i18n 键，渲染时才 `t()`——模块加载时还没有语言。 */
 const TABS: { id: Tab; label: string }[] = [
-  { id: "ledger", label: "账本" },
-  { id: "rules", label: "规则" },
-  { id: "results", label: "结果" },
+  { id: "ledger", label: "journey.tab.ledger" },
+  { id: "rules", label: "journey.tab.rules" },
+  { id: "results", label: "journey.tab.results" },
 ];
 
 interface BatchPayload {
@@ -39,6 +41,7 @@ interface BatchPayload {
 }
 
 export default function JourneyDetail({ batchId }: { batchId: string }) {
+  const { t } = useTranslation();
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("ledger");
   const [payload, setPayload] = useState<BatchPayload | null>(null);
@@ -123,7 +126,7 @@ export default function JourneyDetail({ batchId }: { batchId: string }) {
           className="inline-flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
-          全部旅程
+          {t("All journeys")}
         </Link>
         <div className="flex items-center gap-2">
           <button
@@ -132,7 +135,7 @@ export default function JourneyDetail({ batchId }: { batchId: string }) {
             className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border)] px-2.5 py-1.5 text-xs text-[var(--foreground)] hover:bg-[var(--muted)]"
           >
             <MessageSquare className="h-3.5 w-3.5" />
-            继续对话
+            {t("Continue in chat")}
           </button>
           <button
             type="button"
@@ -140,7 +143,7 @@ export default function JourneyDetail({ batchId }: { batchId: string }) {
             className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border)] px-2.5 py-1.5 text-xs text-[var(--foreground)] hover:bg-[var(--muted)]"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-            刷新
+            {t("Refresh")}
           </button>
         </div>
       </div>
@@ -170,7 +173,7 @@ export default function JourneyDetail({ batchId }: { batchId: string }) {
                     : "border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
                 }`}
               >
-                {entry.label}
+                {t(entry.label)}
               </button>
             ))}
           </div>
@@ -179,12 +182,16 @@ export default function JourneyDetail({ batchId }: { batchId: string }) {
             <div className="space-y-5">
               <ArtifactLedger cells={payload.stepper ?? []} />
               <div>
-                <h2 className="mb-2 text-sm font-medium text-[var(--foreground)]">需求接入</h2>
+                <h2 className="mb-2 text-sm font-medium text-[var(--foreground)]">
+                  {t("Requirement intake")}
+                </h2>
                 <IntakePanel
                   batchId={batchId}
                   oracle={{
                     present: Boolean(oracleSource.content_digest),
-                    summary: oracleSource.content_digest ? "已冻结快照" : "未拉取",
+                    summary: oracleSource.content_digest
+                      ? t("Snapshot frozen")
+                      : t("Not pulled"),
                     storyId: String(oracleSource.story_id ?? ""),
                     workspaceId: String(oracleSource.workspace_id ?? ""),
                     title: String(oracleSource.title ?? ""),
@@ -193,15 +200,19 @@ export default function JourneyDetail({ batchId }: { batchId: string }) {
                   }}
                   clarify={{
                     present: rules.length > 0,
-                    summary: rules.length ? `${rules.length} 条规则` : "未澄清",
+                    summary: rules.length
+                      ? t("{{count}} rules", { count: rules.length })
+                      : t("Not clarified"),
                     ruleCount: rules.length,
                     probingCount: rules.filter((r) => r.probing).length,
                   }}
                   analysis={{
                     present: Object.keys(exampleCounts).length > 0,
                     summary: Object.keys(exampleCounts).length
-                      ? `${Object.values(exampleCounts).reduce((a, b) => a + b, 0)} 个 Example`
-                      : "未分析",
+                      ? t("{{count}} examples", {
+                          count: Object.values(exampleCounts).reduce((a, b) => a + b, 0),
+                        })
+                      : t("Not analyzed"),
                     exampleCount: Object.values(exampleCounts).reduce((a, b) => a + b, 0),
                   }}
                   onContinueInChat={continueInChat}

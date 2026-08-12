@@ -11,6 +11,7 @@
 
 import { ChevronRight, ExternalLink } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 interface SectionState {
   present: boolean;
@@ -79,53 +80,61 @@ export default function IntakePanel({
   analysis,
   onContinueInChat,
 }: Props) {
+  const { t } = useTranslation();
   return (
     <div className="space-y-2">
-      <Section label="① 从 TAPD 拉需求" state={oracle} defaultOpen>
+      <Section label={t("① Pull the requirement from TAPD")} state={oracle} defaultOpen>
         {oracle.present ? (
           <dl className="space-y-1 text-xs text-[var(--muted-foreground)]">
             <div>
-              <dt className="inline">需求：</dt>
+              <dt className="inline">{t("journey.intake.requirement")}</dt>
               <dd className="inline text-[var(--foreground)]">{oracle.title || "—"}</dd>
             </div>
             <div>
-              <dt className="inline">出处：</dt>
+              <dt className="inline">{t("journey.intake.origin")}</dt>
               <dd className="inline font-mono">
                 {oracle.workspaceId}/{oracle.storyId}
               </dd>
             </div>
             <div>
-              <dt className="inline">快照时间：</dt>
+              <dt className="inline">{t("journey.intake.snapshotTime")}</dt>
               <dd className="inline font-mono">{oracle.fetchedAt || "—"}</dd>
             </div>
             <div>
-              <dt className="inline">内容摘要：</dt>
+              <dt className="inline">{t("journey.intake.contentDigest")}</dt>
               {/* digest 是漂移闸比对的对象——需求被改一个字，采纳就会被挡下 */}
               <dd className="inline break-all font-mono">{oracle.digest || "—"}</dd>
             </div>
           </dl>
         ) : (
           <p className="text-xs text-[var(--muted-foreground)]">
-            还没有拉过需求。在聊天里选「测试」模式，给一个需求号就会拉取并冻结一份快照。
+            {t(
+              "No requirement pulled yet. Pick the Test mode in chat and give a story ID; it will be fetched and frozen into a snapshot.",
+            )}
           </p>
         )}
       </Section>
 
-      <Section label="② 澄清记录" state={clarify}>
+      <Section label={t("② Clarification record")} state={clarify}>
         <p className="text-xs text-[var(--muted-foreground)]">
           {clarify.present
-            ? `澄清出 ${clarify.ruleCount ?? 0} 条规则，其中 ${
-                clarify.probingCount ?? 0
-              } 条是探测性（正文撑不住，不进判据）。规则本身在「规则」页签看——那是它的唯一权威视图。`
-            : "还没有澄清。问答发生在聊天里，这一屏只报结果。"}
+            ? t(
+                "Clarified {{rules}} rules, of which {{probing}} are probing (unsupported by the body, excluded from criteria). The rules themselves live in the Rules tab — their single authoritative view.",
+                { rules: clarify.ruleCount ?? 0, probing: clarify.probingCount ?? 0 },
+              )
+            : t(
+                "No clarification yet. The Q&A happens in chat; this screen only reports the outcome.",
+              )}
         </p>
       </Section>
 
-      <Section label="③ 测试分析" state={analysis}>
+      <Section label={t("③ Test analysis")} state={analysis}>
         <p className="text-xs text-[var(--muted-foreground)]">
           {analysis.present
-            ? `逐规则给出了 ${analysis.exampleCount ?? 0} 个判别 Example。`
-            : "还没有分析。"}
+            ? t("{{count}} discriminating examples given, rule by rule.", {
+                count: analysis.exampleCount ?? 0,
+              })
+            : t("No analysis yet.")}
         </p>
       </Section>
 
@@ -136,7 +145,7 @@ export default function IntakePanel({
           className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border)] px-2.5 py-1.5 text-xs text-[var(--foreground)] hover:bg-[var(--muted)]"
         >
           <ExternalLink className="h-3.5 w-3.5" />
-          带着这个批次继续对话
+          {t("Continue the conversation with this batch")}
           <span className="font-mono text-[10px] text-[var(--muted-foreground)]">{batchId}</span>
         </button>
       ) : null}

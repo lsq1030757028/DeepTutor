@@ -36,6 +36,7 @@ export type SegmentId = "intake" | "cases" | "run" | "closure";
 
 export interface Segment {
   id: SegmentId;
+  /** i18n 键，不是上屏文案。渲染方自己 `t()`。 */
   label: string;
   /** 段内格子（服务端九格的子集），顺序即服务端顺序。 */
   cells: StepCell[];
@@ -46,15 +47,19 @@ export interface Segment {
 /**
  * 四段各自罩住哪几格。**这是投影表，不是新的状态源。**
  * 覆盖收口独立成段是因为它回答的是"能不能收工"，与"跑没跑"是两个问题。
+ *
+ * `label` 存的是 **i18n 键**（英文原文即键，本仓平铺表的既有形态），
+ * 不是可直接上屏的文案——本模块是纯投影层，不进 React 上下文、拿不到 `t`。
+ * 渲染方（ArtifactLedger / JourneyList）负责 `t(segment.label)`。
  */
 const SEGMENT_MAP: { id: SegmentId; label: string; artifacts: string[] }[] = [
-  { id: "intake", label: "接入与澄清",
+  { id: "intake", label: "journey.segment.intake",
     artifacts: ["intake_profile", "business_frame", "test_analysis"] },
-  { id: "cases", label: "用例",
+  { id: "cases", label: "journey.segment.cases",
     artifacts: ["case_draft", "approved_caseset", "automation_bundle"] },
-  { id: "run", label: "执行",
+  { id: "run", label: "journey.segment.run",
     artifacts: ["run_receipt", "verdicts"] },
-  { id: "closure", label: "收口",
+  { id: "closure", label: "journey.segment.closure",
     artifacts: ["coverage_ledger"] },
 ];
 

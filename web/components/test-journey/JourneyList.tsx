@@ -11,6 +11,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import ErrorState from "@/components/test-journey/ErrorState";
 import { callJourney } from "@/components/test-journey/client";
@@ -18,15 +19,18 @@ import type { BatchSummary } from "@/components/test-journey/types";
 import { projectSegments } from "@/components/test-journey/types";
 
 function SegmentBar({ batch }: { batch: BatchSummary }) {
+  const { t } = useTranslation();
   const segments = projectSegments(batch.stepper ?? []);
   return (
     <div className="flex flex-wrap gap-1">
       {segments.map((segment) => (
         <span
           key={segment.id}
-          title={`${segment.label}：${segment.cells.filter((c) => c.present).length}/${
-            segment.cells.length
-          }`}
+          title={t("{{label}}: {{done}}/{{total}}", {
+            label: t(segment.label),
+            done: segment.cells.filter((c) => c.present).length,
+            total: segment.cells.length,
+          })}
           className={`rounded px-1.5 py-0.5 text-[11px] ${
             segment.status === "done"
               ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300"
@@ -35,7 +39,7 @@ function SegmentBar({ batch }: { batch: BatchSummary }) {
                 : "bg-[var(--muted)] text-[var(--muted-foreground)]"
           }`}
         >
-          {segment.label}
+          {t(segment.label)}
         </span>
       ))}
     </div>
@@ -43,6 +47,7 @@ function SegmentBar({ batch }: { batch: BatchSummary }) {
 }
 
 export default function JourneyList() {
+  const { t } = useTranslation();
   const [batches, setBatches] = useState<BatchSummary[]>([]);
   const [error, setError] = useState<{ code: string; message?: string } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -85,9 +90,13 @@ export default function JourneyList() {
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold text-[var(--foreground)]">测试旅程</h1>
+          <h1 className="text-xl font-semibold text-[var(--foreground)]">
+            {t("Test journeys")}
+          </h1>
           <p className="mt-1 text-sm text-[var(--muted-foreground)]">
-            一条需求从接入到收口的全过程。每条旅程一张卡，点进去看账本、规则和结论。
+            {t(
+              "The whole path of one requirement, from intake to closure. One card per journey — open it for the ledger, the rules and the verdicts.",
+            )}
           </p>
         </div>
         <button
@@ -96,7 +105,7 @@ export default function JourneyList() {
           className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--border)] px-2.5 py-1.5 text-xs text-[var(--foreground)] hover:bg-[var(--muted)]"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-          刷新
+          {t("Refresh")}
         </button>
       </div>
 
@@ -104,10 +113,11 @@ export default function JourneyList() {
 
       {!error && !loading && batches.length === 0 ? (
         <div className="rounded-xl border border-[var(--border)] px-4 py-8 text-center">
-          <p className="text-sm text-[var(--foreground)]">还没有任何测试旅程。</p>
+          <p className="text-sm text-[var(--foreground)]">{t("No test journeys yet.")}</p>
           <p className="mt-1 text-sm text-[var(--muted-foreground)]">
-            去聊天里选「测试」模式，给一个 TAPD 需求号就能开一趟。
-            批次只能从那里创建——这一屏是它的另一个窗口，不是第二个入口。
+            {t(
+              "Pick the Test mode in chat and give a TAPD story ID to start one. Batches can only be created there — this screen is another window onto them, not a second entry point.",
+            )}
           </p>
         </div>
       ) : null}
@@ -121,14 +131,15 @@ export default function JourneyList() {
             >
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <span className="text-sm font-medium text-[var(--foreground)]">
-                  {batch.title || "未命名批次"}
+                  {batch.title || t("Untitled batch")}
                 </span>
                 <span className="font-mono text-[11px] text-[var(--muted-foreground)]">
                   {batch.batch_id}
                 </span>
               </div>
               <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                {batch.base_url || "未指定靶"} · {batch.run_count} 趟执行 ·{" "}
+                {batch.base_url || t("No target specified")} ·{" "}
+                {t("{{count}} attempts run", { count: batch.run_count })} ·{" "}
                 {batch.created_at}
               </p>
               <div className="mt-2">

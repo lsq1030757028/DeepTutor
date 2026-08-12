@@ -5,6 +5,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { createInstance, type i18n as I18n } from "i18next";
 
 import {
   TEST_CAPABILITY,
@@ -12,7 +15,7 @@ import {
   extractJourneyState,
   journeyToolOf,
 } from "../components/test-journey/chat/extract";
-import { JOURNEY_CARD_COPY } from "../components/test-journey/chat/copy";
+import { journeyCardCopy } from "../components/test-journey/chat/copy";
 import { extractStreamingQuizQuestions } from "../lib/quiz-types";
 
 type AnyEvent = Record<string, unknown>;
@@ -416,14 +419,59 @@ test("性能回归：不慢于 quiz 那条既有流式路径的 2 倍", () => {
 //
 // 注意用 `createElement` 不写 JSX：本文件是 .ts，写 JSX 要改测试编译配置，
 // 那是为了测试改产线配置，不划算。
+//
+// ## 文案外提之后：断的是**渲染出来的那一份**
+//
+// 卡片文案已从硬编码改成 `t()`，所以渲染必须带一个真的 i18n 实例
+// （`I18nextProvider` 注入，`useTranslation` 从上下文取）。资源直接从
+// `locales/{en,zh}/app.json` 读盘——**不从组件里反推**，否则键写错了两边一起错，
+// 测试就成了自证。语言两种都渲一遍：只渲一种，另一种缺键会静默漏成"显示键名"。
 
-test("真渲染：四张卡出得来，页脚的边界说明每张都在", async () => {
+const LOCALES = {
+  en: JSON.parse(
+    readFileSync(path.resolve(process.cwd(), "locales/en/app.json"), "utf8"),
+  ) as Record<string, string>,
+  zh: JSON.parse(
+    readFileSync(path.resolve(process.cwd(), "locales/zh/app.json"), "utf8"),
+  ) as Record<string, string>,
+};
+
+async function makeI18n(lng: "en" | "zh"): Promise<I18n> {
+  const instance = createInstance();
+  await instance.init({
+    lng,
+    fallbackLng: false,
+    keySeparator: false,
+    nsSeparator: false,
+    interpolation: { escapeValue: false },
+    resources: {
+      en: { translation: LOCALES.en },
+      zh: { translation: LOCALES.zh },
+    },
+  });
+  return instance;
+}
+
+async function renderCards(state: unknown, lng: "en" | "zh") {
   const { createElement } = await import("react");
   const { renderToStaticMarkup } = await import("react-dom/server");
+  const { I18nextProvider } = await import("react-i18next");
   const { default: TestJourneyCards } = await import(
     "../components/test-journey/chat/TestJourneyCards"
   );
+  const i18n = await makeI18n(lng);
+  const html = renderToStaticMarkup(
+    createElement(
+      I18nextProvider,
+      { i18n },
 
+      createElement(TestJourneyCards, { state } as any),
+    ),
+  );
+  return { html, copy: journeyCardCopy(i18n.t) };
+}
+
+test("真渲染：四张卡出得来，页脚的边界说明每张都在（中英各一遍）", async () => {
   const state = extract([
     toolResult("clarify", CLARIFY_OK),
     toolResult("draft_cases", DRAFT_OK),
@@ -432,69 +480,75 @@ test("真渲染：四张卡出得来，页脚的边界说明每张都在", async
     toolResult("coverage", COVERAGE_GAP),
   ]);
   assert.ok(state);
-  const html = renderToStaticMarkup(createElement(TestJourneyCards, { state }));
 
-  // 四张卡的标题各出现一次。
-  assert.match(html, /已澄清的规则/);
-  assert.match(html, /用例草稿写好了/);
-  assert.match(html, /执行完成/);
-  assert.match(html, /覆盖还差一点才能收口/);
+  for (const lng of ["zh", "en"] as const) {
+    const { html, copy } = await renderCards(state, lng);
 
-  // **页脚那句边界说明是强制的**——它回答"为什么这张卡不让我在这儿改"。
-  for (const boundary of [
-    JOURNEY_CARD_COPY.rules.boundary,
-    JOURNEY_CARD_COPY.draft.boundary,
-    JOURNEY_CARD_COPY.run.boundary,
-    JOURNEY_CARD_COPY.coverage.boundary,
-  ]) {
-    assert.ok(html.includes(boundary), `缺边界说明：${boundary}`);
+    // 四张卡的标题各出现一次。
+    for (const title of [
+      copy.rules.title,
+      copy.draft.titleDone,
+      copy.run.titleDone,
+      copy.coverage.titleGap,
+    ]) {
+      assert.ok(html.includes(title), `${lng}: 缺卡标题 ${title}`);
+    }
+
+    // **页脚那句边界说明是强制的**——它回答"为什么这张卡不让我在这儿改"。
+    for (const boundary of [
+      copy.rules.boundary,
+      copy.draft.boundary,
+      copy.run.boundary,
+      copy.coverage.boundary,
+    ]) {
+      assert.ok(html.includes(boundary), `${lng}: 缺边界说明 ${boundary}`);
+    }
+
+    // 页脚按钮指向这条旅程的工作台页，不是空 href。
+    assert.match(html, /href="\/test-journey\/b-1"/);
+    // 探测项标出来了，且规则行带原文依据（原文来自数据，不翻译）。
+    assert.ok(html.includes(copy.rules.probing), `${lng}: 探测徽标没出现`);
+    assert.match(html, /仅可见本人订单/);
+    // 结论分布上了卡面。
+    assert.ok(html.includes(`${copy.run.fail} 2`), `${lng}: FAIL 计数没上卡面`);
+
+    // **没有一处是键名漏到界面上**。缺键时 i18next 会原样吐键，
+    // 那种漏法看起来像正常英文，只有认键的形状才抓得到。
+    assert.equal(
+      /journey\.[a-z]+\./.test(html),
+      false,
+      `${lng}: 有 journey.* 键名直接漏到了 HTML 上`,
+    );
   }
-
-  // 页脚按钮指向这条旅程的工作台页，不是空 href。
-  assert.match(html, /href="\/test-journey\/b-1"/);
-  // 探测项标出来了，且规则行带原文依据。
-  assert.match(html, /探测/);
-  assert.match(html, /仅可见本人订单/);
-  // 结论分布上了卡面。
-  assert.match(html, /没过 2/);
 });
 
 test("真渲染：只有一步走完时只出那一张卡，不出空壳", async () => {
-  const { createElement } = await import("react");
-  const { renderToStaticMarkup } = await import("react-dom/server");
-  const { default: TestJourneyCards } = await import(
-    "../components/test-journey/chat/TestJourneyCards"
-  );
-
   const state = extract([toolResult("clarify", CLARIFY_OK)]);
   assert.ok(state);
-  const html = renderToStaticMarkup(createElement(TestJourneyCards, { state }));
-  assert.match(html, /已澄清的规则/);
+  const { html, copy } = await renderCards(state, "zh");
+  assert.ok(html.includes(copy.rules.title));
   // 断的是**卡标题**，不是随手挑的词：像"覆盖"这种词也出现在规则卡的边界说明
   // （"不覆盖声明"）里，拿它当"覆盖卡没出现"的判据会假红。
   for (const absent of [
-    JOURNEY_CARD_COPY.draft.titleDone,
-    JOURNEY_CARD_COPY.draft.titleLive,
-    JOURNEY_CARD_COPY.run.titleDone,
-    JOURNEY_CARD_COPY.coverage.titleGap,
-    JOURNEY_CARD_COPY.coverage.titleDone,
+    copy.draft.titleDone,
+    copy.draft.titleLive,
+    copy.run.titleDone,
+    copy.coverage.titleGap,
+    copy.coverage.titleDone,
   ]) {
     assert.ok(!html.includes(absent), `不该出现：${absent}`);
   }
 });
 
 test("真渲染：流式卡在工具还在飞时就出来，且采纳按钮点不动", async () => {
-  const { createElement } = await import("react");
-  const { renderToStaticMarkup } = await import("react-dom/server");
-  const { default: TestJourneyCards } = await import(
-    "../components/test-journey/chat/TestJourneyCards"
-  );
-
   const state = extract([toolCall("draft_cases")]);
   assert.ok(state, "工具在飞时就该有卡——这正是流式的价值：别让人盯着空屏等");
-  const html = renderToStaticMarkup(createElement(TestJourneyCards, { state }));
-  assert.match(html, /正在生成用例/);
+  const { html, copy } = await renderCards(state, "zh");
+  assert.ok(html.includes(copy.draft.titleLive));
   // 生成完才能采纳：这时候按钮是死的，不是一个点了没反应的链接。
   assert.ok(!html.includes('href="/test-journey/'), "生成中不该给可点的采纳链接");
-  assert.match(html, /生成完才能点/);
+  assert.ok(
+    html.includes(copy.draft.actionPending),
+    "缺「生成完才能点」的死按钮文案",
+  );
 });
