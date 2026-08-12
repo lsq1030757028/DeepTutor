@@ -301,6 +301,8 @@ def journey_ingest(title: str, base_url: str,
                    tier: str = "", tier_confirmed_via: str = "",
                    requirement_entity: str = "",
                    requirement_entity_confirmed_via: str = "",
+                   prepare_requirement_entity: bool = False,
+                   intake_context: str = "",
                    owner: str = "", caller_surface: str = "unknown",
                    decision_context: str = "",
                    bridge_context: str = "") -> dict[str, Any]:
@@ -318,6 +320,8 @@ def journey_ingest(title: str, base_url: str,
         "tier_confirmed_via": tier_confirmed_via,
         "requirement_entity": requirement_entity,
         "requirement_entity_confirmed_via": requirement_entity_confirmed_via,
+        "prepare_requirement_entity": prepare_requirement_entity,
+        "intake_context": intake_context,
     }
     trusted = _journey_bridge("journey_ingest", bridge_context, effective)
     if isinstance(trusted, dict):
@@ -333,6 +337,8 @@ def journey_ingest(title: str, base_url: str,
                       requirement_entity_confirmed_via=(
                           requirement_entity_confirmed_via
                       ),
+                      prepare_requirement_entity=prepare_requirement_entity,
+                      intake_context=intake_context,
                       decision_context=decision_context,
                       _decision_arguments=effective,
                       _bridge_claims=trusted,

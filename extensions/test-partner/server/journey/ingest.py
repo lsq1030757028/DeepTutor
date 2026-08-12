@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urljoin
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from urllib.error import HTTPError, URLError
@@ -134,6 +134,7 @@ def ingest(title: str, base_url: str, *, source_kind: str, source_ref: str,
            requirement_entity: str = "",
            requirement_entity_confirmed_via: str = "",
            requirement_entity_decision: dict[str, Any] | None = None,
+           before_create: Callable[[], dict[str, Any] | None] | None = None,
            owner: str = "") -> dict[str, Any]:
     """建批次 + 落 intake_profile。tier 未给时只回确认卡数据（不落产物——
     档位是 intake_profile 的必备字段，人闸没走完就没有这个产物）。"""
@@ -177,6 +178,10 @@ def ingest(title: str, base_url: str, *, source_kind: str, source_ref: str,
                     "entropy_hit_count": len(requirement_scan["entropy_hits"]),
                 },
             }
+    if before_create is not None:
+        blocked = before_create()
+        if blocked is not None:
+            return blocked
     batch = artifacts.create_batch(title, owner=owner, base_url=safe_base_url,
                                    environment_ref=environment_ref,
                                    source_ref=source_ref)

@@ -56,6 +56,8 @@ def _ingest_args(title: str) -> dict:
         "tier_confirmed_via": "test",
         "requirement_entity": "",
         "requirement_entity_confirmed_via": "",
+        "prepare_requirement_entity": False,
+        "intake_context": "",
     }
 
 

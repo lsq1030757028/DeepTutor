@@ -109,26 +109,28 @@ def record_resolved_user_decision(
     question = questions[0]
     qid = str(question.get("id") or "") if isinstance(question, Mapping) else ""
     matching = [
-        {"questionId": str(entry.get("questionId") or ""),
-         "text": str(entry.get("text") or "")}
+        {"questionId": str(entry.get("questionId") or ""), "text": str(entry.get("text") or "")}
         for entry in (answers or [])
         if str(entry.get("questionId") or "") == qid
     ]
-    if not any(qid.startswith(prefix) for prefix in _TRUSTED_DECISION_QUESTION_PREFIXES) \
-            or len(matching) != 1:
+    if (
+        not any(qid.startswith(prefix) for prefix in _TRUSTED_DECISION_QUESTION_PREFIXES)
+        or len(matching) != 1
+    ):
         _CURRENT_DECISION.set(None)
         return False
     # JSON round-trip freezes a plain-data snapshot; no later model mutation can
     # alter what the user actually saw.
-    payload = json.loads(json.dumps(
-        dict(ask_user_payload), ensure_ascii=False, allow_nan=False))
-    _CURRENT_DECISION.set(ResolvedUserDecision(
-        ask_user_tool_call_id=str(ask_user_tool_call_id or ""),
-        ask_user_payload=payload,
-        answers=tuple(matching),
-        resolved_at=int(time.time()),
-        jti=secrets.token_urlsafe(16),
-    ))
+    payload = json.loads(json.dumps(dict(ask_user_payload), ensure_ascii=False, allow_nan=False))
+    _CURRENT_DECISION.set(
+        ResolvedUserDecision(
+            ask_user_tool_call_id=str(ask_user_tool_call_id or ""),
+            ask_user_payload=payload,
+            answers=tuple(matching),
+            resolved_at=int(time.time()),
+            jti=secrets.token_urlsafe(16),
+        )
+    )
     return True
 
 
@@ -256,8 +258,9 @@ def sign_user_decision_context(
         "exp": issued + 300,
         "jti": decision.jti,
     }
-    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True,
-                     separators=(",", ":"), allow_nan=False).encode("utf-8")
+    raw = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
     return f"{_b64url(raw)}.{_b64url(hmac.new(_secret(), raw, hashlib.sha256).digest())}"
 
 

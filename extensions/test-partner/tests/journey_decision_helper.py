@@ -52,16 +52,27 @@ def decision_kwargs(batch_id: str, case_ids: list[str], *,
     return {"decision_context": token, "_bridge_claims": claims}
 
 
+def trusted_claims(tool: str, *, owner: str = "unit-test-owner",
+                   session: str = "session-test", turn: str = "turn-test",
+                   now: int | None = None) -> BridgeClaims:
+    issued = int(time.time()) if now is None else int(now)
+    return BridgeClaims(owner=owner, session=session, turn=turn,
+                        capability="test", surface="capability", tool=tool,
+                        jti=f"bridge-{tool}-{secrets.token_urlsafe(6)}",
+                        expires_at=issued + 60)
+
+
 def entity_decision_kwargs(arguments: dict, requirement_entity: str, *,
+                           intake_context: str,
                            owner: str = "unit-test-owner",
                            session: str = "session-test", turn: str = "turn-test",
-                           prompt: str = "需求真正要新增、修改或删除的业务实体是什么？",
+                           question: dict | None = None,
                            now: int | None = None) -> dict:
     issued = int(time.time()) if now is None else int(now)
-    question = {
-        **decision_auth.expected_requirement_entity_question(),
-        "prompt": prompt,
-    }
+    encoded = intake_context.split(".", 1)[0]
+    raw_intake = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+    intake = json.loads(raw_intake.decode("utf-8"))
+    actual_question = question or decision_auth.expected_requirement_entity_question(intake)
     payload = {
         "v": 1, "iss": "deeptutor", "aud": decision_auth.AUDIENCE,
         "owner_id": owner, "session_id": session, "turn_id": turn,
@@ -69,18 +80,16 @@ def entity_decision_kwargs(arguments: dict, requirement_entity: str, *,
         "tool": "journey_ingest",
         "args_sha256": bridge_auth.arguments_sha256(arguments),
         "ask_user_tool_call_id": "ask-entity-test-1",
-        "ask_user": {"intro": None, "questions": [question]},
-        "answers": [{"questionId": question["id"], "text": requirement_entity}],
+        "ask_user": {"intro": None, "questions": [actual_question]},
+        "answers": [{"questionId": actual_question["id"], "text": requirement_entity}],
         "resolved_at": issued, "iat": issued, "exp": issued + 300,
         "jti": secrets.token_urlsafe(16),
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True,
                      separators=(",", ":")).encode("utf-8")
     token = f"{_b64(raw)}.{_b64(hmac.new(SECRET.encode(), raw, hashlib.sha256).digest())}"
-    claims = BridgeClaims(owner=owner, session=session, turn=turn,
-                          capability="test", surface="capability",
-                          tool="journey_ingest", jti="bridge-entity-test",
-                          expires_at=issued + 60)
+    claims = trusted_claims(
+        "journey_ingest", owner=owner, session=session, turn=turn, now=issued)
     return {"decision_context": token, "_bridge_claims": claims}
 
 

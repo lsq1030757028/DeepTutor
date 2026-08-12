@@ -68,14 +68,16 @@ human_gates: |-
   档位决定后面生成多少用例、断言断到多深：清单档（只列要点不执行）/
   标准档（主链路 + 权限反例）/ 深档（加边界与并发）。
   用户定了再接入，把 `tier` 与 `tier_confirmed_via="chat_ask_user"` 一起传给
-  `journey_ingest`。如果需求包含写操作，紧接着再单独调用一次 `ask_user` 让用户明确
-  「需求实际要写入的业务实体」；这张卡必须只有一个问题，`id` 严格为
-  `journey_requirement_entity`，`prompt` 严格为
-  `需求真正要新增、修改或删除的业务实体是什么？`，设 `multi_select=false`、
-  `allow_free_text=true`、`options=[]`。把用户原样答复传为 `requirement_entity`，并传
-  `requirement_entity_confirmed_via="chat_ask_user"`；随后立即调用 `journey_ingest`，
-  中间不得再发起另一张确认卡。只有这次真实回答生成的服务端收据有权落定实体，
-  模型自报确认来源或按接口名猜实体都不算。
+  `journey_ingest`。如果需求包含写操作，先用最终接入参数调用一次
+  `journey_ingest`，但令 `prepare_requirement_entity=true`，且不填
+  `requirement_entity`。工具会返回冻结接入摘要、`intake_context` 和一张 `card`；
+  **把返回的 card 原样传给 `ask_user`，不得自己重写问题、摘要或选项**。把用户原样
+  答复传为 `requirement_entity`，传
+  `requirement_entity_confirmed_via="chat_ask_user"`，并把工具返回的
+  `intake_context` 原样带回，再以 `prepare_requirement_entity=false` 调用
+  `journey_ingest`。准备后不得修改标题、目标、需求正文、来源或档位；任何变化都必须
+  重新准备并重新问用户。只有用户针对这份冻结摘要的真实回答有权落定实体，模型自报
+  确认来源或按接口名猜实体都不算。
   **档位和需求实体在接入时就冻进 intake_profile，事后没有改档的工具**，
   所以不要先接入再问——那张卡的答案会无处可去。
 

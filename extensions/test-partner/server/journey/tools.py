@@ -243,6 +243,8 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
            tier: str = "", tier_confirmed_via: str = "", owner: str = "",
            requirement_entity: str = "",
            requirement_entity_confirmed_via: str = "",
+           prepare_requirement_entity: bool = False,
+           intake_context: str = "",
            decision_context: str = "", _bridge_claims: Any = None,
            _decision_arguments: dict[str, Any] | None = None,
            caller_surface: str = "unknown",
@@ -264,32 +266,9 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
         "tier": tier, "tier_confirmed_via": tier_confirmed_via,
         "requirement_entity": requirement_entity,
         "requirement_entity_confirmed_via": requirement_entity_confirmed_via,
+        "prepare_requirement_entity": prepare_requirement_entity,
+        "intake_context": intake_context,
     }
-    entity_decision: dict[str, Any] = {}
-    if entity:
-        owner_partition = artifacts.current_trusted_owner() or ""
-        if _bridge_claims is None or str(
-                getattr(_bridge_claims, "owner", "") or "") != owner_partition:
-            return _err(
-                "E_USER_DECISION_REQUIRED",
-                "需求实体必须来自同一 Test 会话内真实完成的交互确认卡。",
-            )
-        try:
-            entity_decision = decision_auth.verify_requirement_entity_context(
-                decision_context,
-                bridge=_bridge_claims,
-                requirement_entity=entity,
-                arguments=_decision_arguments or effective_args,
-            )
-        except decision_auth.DecisionAuthError as exc:
-            return _err("E_USER_DECISION_INVALID", str(exc))
-        if not artifacts.consume_owner_decision_receipt(
-                owner=owner_partition, decision_jti=entity_decision["jti"],
-                gate="requirement_entity", root=root):
-            return _err(
-                "E_USER_DECISION_REPLAYED",
-                "这份需求实体决定已经消费过，不能重复创建批次。",
-            )
 
     oracle_source: dict[str, Any] = {}
     text = requirement_text
@@ -307,6 +286,85 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
         return _err("E_ORACLE_NOT_FOUND",
                     "既没给 TAPD 需求号（workspace_id + story_id），也没给本地需求正文。"
                     "oracle 缺失时不建批次——对空气接单是 M1 就定下的红线。")
+
+    owner_partition = artifacts.current_trusted_owner() or ""
+    if _bridge_claims is None or str(
+            getattr(_bridge_claims, "owner", "") or "") != owner_partition:
+        if prepare_requirement_entity or entity:
+            return _err(
+                "E_USER_DECISION_REQUIRED",
+                "需求实体必须来自同一 Test 会话内真实完成的交互确认卡。",
+            )
+
+    signed_args = _decision_arguments or effective_args
+    if prepare_requirement_entity:
+        if entity or entity_via or intake_context or decision_context:
+            return _err(
+                "E_USER_DECISION_INVALID",
+                "冻结需求实体卡时不得提前填写实体或复用旧的上下文。",
+            )
+        validated_target = _ingest.redlines.safe_target_url(base_url)
+        if not validated_target["ok"]:
+            return _err("E_INGEST_REJECTED", validated_target["error"])
+        if tier not in _ingest.TIERS:
+            return _err("E_INGEST_REJECTED", f"tier 必须是 {_ingest.TIERS} 之一")
+        from server.journey.gates import credential_scan
+
+        for label, value in (("title", title), ("requirement", text)):
+            if not credential_scan.scan_text_content(str(value or ""), label=label)["ok"]:
+                return _err(
+                    "E_INGEST_REJECTED",
+                    f"{label} 疑似包含凭据，未生成用户确认卡。",
+                )
+        probe = _ingest.probe_target(validated_target["url"])
+        if not probe.get("reachable"):
+            return _err("E_INGEST_REJECTED", "接入终点不可达，未生成用户确认卡。")
+        try:
+            prepared = decision_auth.issue_intake_context(
+                bridge=_bridge_claims,
+                arguments=signed_args,
+                requirement_text=text,
+            )
+        except decision_auth.DecisionAuthError as exc:
+            return _err("E_USER_DECISION_INVALID", str(exc))
+        return _ok(
+            "NEEDS_GATE", needs_gate="requirement_entity",
+            card=prepared["card"], intake_context=prepared["intake_context"],
+            intake_digest=prepared["intake_digest"],
+            requirement_digest=prepared["requirement_digest"],
+        )
+
+    entity_decision: dict[str, Any] = {}
+    if entity:
+        try:
+            intake = decision_auth.verify_intake_context(
+                intake_context,
+                bridge=_bridge_claims,
+                arguments=signed_args,
+                requirement_text=text,
+            )
+            entity_decision = decision_auth.verify_requirement_entity_context(
+                decision_context,
+                bridge=_bridge_claims,
+                intake=intake,
+                requirement_entity=entity,
+                arguments=signed_args,
+            )
+        except decision_auth.DecisionAuthError as exc:
+            return _err("E_USER_DECISION_INVALID", str(exc))
+
+    def consume_entity_decision() -> dict[str, Any] | None:
+        if not entity_decision:
+            return None
+        if artifacts.consume_owner_decision_receipt(
+                owner=owner_partition, decision_jti=entity_decision["jti"],
+                gate="requirement_entity", root=root):
+            return None
+        return {
+            "ok": False,
+            "code": "E_USER_DECISION_REPLAYED",
+            "error": "这份需求实体决定已经消费过，不能重复创建批次。",
+        }
 
     result = _ingest.ingest(title, base_url, source_kind=source_kind,
                             source_ref=source_ref or (
@@ -327,13 +385,15 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
                                 "ask_user_tool_call_id": entity_decision.get(
                                     "ask_user_tool_call_id", ""),
                             } if entity_decision else {},
+                            before_create=consume_entity_decision,
                             owner=owner)
     if not result.get("ok"):
         if result.get("need") == "tier_confirmation":
             return _ok("NEEDS_GATE", needs_gate="stage_tier", probe=result["probe"],
                        card=result["card"], proposed_tier=result["proposed_tier"],
                        score=result["score"], reasons=result["reasons"])
-        return _err("E_INGEST_REJECTED", str(result.get("error") or "接入被拒"),
+        return _err(str(result.get("code") or "E_INGEST_REJECTED"),
+                    str(result.get("error") or "接入被拒"),
                     detail=result)
 
     bid = result["batch_id"]

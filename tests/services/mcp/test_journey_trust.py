@@ -121,11 +121,17 @@ async def test_write_confirm_requires_and_injects_a_real_resolved_user_decision(
     manager = _Manager()
     adapter = _adapter(manager, "journey_write_confirm")
     trusted = TrustedJourneyContext(
-        owner_id="user-a", session_id="session-a", turn_id="turn-a",
-        capability="test", surface="capability")
+        owner_id="user-a",
+        session_id="session-a",
+        turn_id="turn-a",
+        capability="test",
+        surface="capability",
+    )
     question_id = "journey_write_confirm:b-20260813-abcdef:acs-1"
     question = {
-        "id": question_id, "prompt": "Choose writes", "multi_select": True,
+        "id": question_id,
+        "prompt": "Choose writes",
+        "multi_select": True,
         "allow_free_text": False,
         "options": [{"label": "c/R1-C001", "description": "sha256:x | write"}],
     }
@@ -137,8 +143,7 @@ async def test_write_confirm_requires_and_injects_a_real_resolved_user_decision(
             ask_user_payload={"questions": [question]},
             answers=[{"questionId": question_id, "text": "c/R1-C001"}],
         )
-        allowed = await adapter.execute(
-            batch_id="b-20260813-abcdef", case_ids=["c/R1-C001"])
+        allowed = await adapter.execute(batch_id="b-20260813-abcdef", case_ids=["c/R1-C001"])
     assert allowed.success is True and len(manager.calls) == 1
     sent = manager.calls[0]["arguments"]
     assert sent["decision_context"] and sent["bridge_context"]
@@ -146,8 +151,7 @@ async def test_write_confirm_requires_and_injects_a_real_resolved_user_decision(
     assert decision_payload["answers"][0]["text"] == "c/R1-C001"
     assert decision_payload["owner_id"] == "user-a"
     assert decision_payload["tool"] == "journey_write_confirm"
-    assert decision_payload["args_sha256"] == _payload(
-        sent["bridge_context"])["args_sha256"]
+    assert decision_payload["args_sha256"] == _payload(sent["bridge_context"])["args_sha256"]
 
 
 @pytest.mark.asyncio
@@ -170,8 +174,7 @@ async def test_ingest_entity_requires_and_injects_exact_user_decision(monkeypatc
         },
         tool_timeout=5,
     )
-    trusted = TrustedJourneyContext(
-        "user-a", "session-a", "turn-a", "test", "capability")
+    trusted = TrustedJourneyContext("user-a", "session-a", "turn-a", "test", "capability")
     question = {
         "id": "journey_requirement_entity",
         "prompt": "Which business entity does this requirement actually create, update, or delete?",
@@ -180,19 +183,21 @@ async def test_ingest_entity_requires_and_injects_exact_user_decision(monkeypatc
         "options": [],
     }
     with bind_trusted_journey_context(trusted):
-        denied = await adapter.execute(
-            title="Add character", requirement_entity="custom_character")
+        denied = await adapter.execute(title="Add character", requirement_entity="custom_character")
         assert denied.success is False and manager.calls == []
         assert record_resolved_user_decision(
             ask_user_tool_call_id="ask-entity-1",
             ask_user_payload={"questions": [question]},
-            answers=[{
-                "questionId": "journey_requirement_entity",
-                "text": "custom_character",
-            }],
+            answers=[
+                {
+                    "questionId": "journey_requirement_entity",
+                    "text": "custom_character",
+                }
+            ],
         )
         allowed = await adapter.execute(
-            title="Add character", requirement_entity="custom_character")
+            title="Add character", requirement_entity="custom_character"
+        )
     assert allowed.success is True and len(manager.calls) == 1
     sent = manager.calls[0]["arguments"]
     decision_payload = _payload(sent["decision_context"])

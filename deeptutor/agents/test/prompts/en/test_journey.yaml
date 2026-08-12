@@ -81,16 +81,19 @@ human_gates: |-
   counter-cases) / deep (adds boundaries and concurrency).
   Once the user picks, pass `tier` together with
   `tier_confirmed_via="chat_ask_user"` to `journey_ingest`.
-  If the requirement includes writes, immediately make a separate `ask_user`
-  call for the exact business entity the requirement is meant to mutate. That
-  card must contain exactly one question with `id=journey_requirement_entity`,
-  the exact prompt `Which business entity does this requirement actually create, update, or delete?`,
-  `multi_select=false`, `allow_free_text=true`, and `options=[]`. Pass the user's
-  answer verbatim as `requirement_entity` with
-  `requirement_entity_confirmed_via="chat_ask_user"`, then call `journey_ingest`
-  immediately without another decision card in between. Only the receipt from
-  this real answer can authorize the entity; a model-authored confirmation label
-  or an inference from an API name carries no authority. **The tier and requirement entity are frozen into intake_profile at intake and there is no tool to
+  If the requirement includes writes, first call `journey_ingest` with the final
+  intake arguments but `prepare_requirement_entity=true` and no
+  `requirement_entity`. The tool returns a frozen intake digest,
+  `intake_context`, and a `card`. **Pass that returned card to `ask_user`
+  verbatim; do not rewrite its question, digests, or options.** Pass the user's
+  answer verbatim as `requirement_entity`, set
+  `requirement_entity_confirmed_via="chat_ask_user"`, carry the returned
+  `intake_context` unchanged, and call `journey_ingest` again with
+  `prepare_requirement_entity=false`. Do not change the title, target,
+  requirement text, source, or tier after preparation; any change requires a new
+  preparation and a new user answer. Only a real answer to that frozen snapshot
+  can authorize the entity; a model-authored confirmation label or an inference
+  from an API name carries no authority. **The tier and requirement entity are frozen into intake_profile at intake and there is no tool to
   change it afterwards**, so do not ingest first and ask later — that card's
   answer would have nowhere to go.
 
