@@ -60,18 +60,6 @@
       "notes": "同文件另 2 例（test_cors_allows_remote_http_origins_when_auth_disabled、test_cors_preflight_allows_partner_patch_save）**实测是绿的，不在扣除范围内**。后者专测 partner PATCH 预检，正是我方改动会碰到的路径——v1.0 的文件级扣除把它一起豁免了，是本次收紧的直接动因。"
     },
     {
-      "id": "i18n-tracker-blind-to-copy-ts",
-      "layer": "i18n-tracker",
-      "selector": "web/components/test-journey/chat/copy.ts",
-      "selector_kind": "tracker-blind-spot",
-      "why_red": "这一条不是「有测试红了被扣掉」，而是**跟踪器看不见的一块**，登记在此以免它以「warning 数没涨」的形式伪装成改善。eslint 的 i18n 规则只挂 JSXText 与 JSXAttribute（eslint/i18n-plugin.mjs:32,41），而聊天富卡的中文文案被集中进了 copy.ts 的普通对象字面量——**集中放置的副作用是把自己摘出了跟踪面**。实测：copy.ts 含中文的行 59 行，eslint 对该文件告警 0 条。于是「合 main 阻断项 i18n 硬编码」的计数从此低估，且低估量会随富卡文案增长而增长。",
-      "when_it_should_disappear": "两条路任一达成即删除本条：① i18n 规则扩到对象字面量/常量导出（届时 warning 数会一次性跳增，那是正常的，不是变坏了）；② 文案定稿后一次性抽取成 t() 键，copy.ts 里不再有中文。**在此之前，任何人拿 eslint warning 数论证「i18n 缺口没扩大」都不成立**——那个数根本没在数这里。",
-      "reviewer": "P3 线（test-partner）——与合 main 前的 i18n 抽取一并复核",
-      "verified_at": "2026-08-11",
-      "verified_how": "两条命令对照：python 数 copy.ts 里含中文的行 = 59；npx eslint components/test-journey/chat/copy.ts 输出为空、退出码 0。即 59 行中文对应 0 条告警，跟踪面确实盖不到它。",
-      "notes": "纪律④（建完机制必须单独验作用域）落在**跟踪器**上的同族形态。前几例是闸的作用域太小/太大/方向反了，这一例是**度量口径把自己排除在外**——最难察觉，因为它的症状是「指标很好看」。"
-    },
-    {
       "id": "upstream-node-esm-cjs",
       "layer": "web-node-tests",
       "selector": "appearance-settings-page|code-block-themes|provider-trace-row|rich-code-block",
