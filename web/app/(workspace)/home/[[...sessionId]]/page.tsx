@@ -214,7 +214,15 @@ interface CapabilityDef {
   loopEngine?: boolean;
 }
 
-const CAPABILITIES: CapabilityDef[] = [
+// [fork] `export` 是为了让触点 #9 有机械守：这张表原本写在组件内部、未导出，
+// python 侧与 node 侧都断不到它，漏改的表现是「聊天里选不到测试模式」——
+// 入口直接消失，且没有任何测试会红。判据在 `web/tests/capability-picker.test.ts`：
+// 它 import 这个真数组，喂给真 ChatComposer 渲染 picker，断选项在场。
+// 断源码里出现过 "test" 证明不了 picker 真渲染得出它（BB-508 就是这么漏的）。
+//
+// Next 的 page 类型校验是 `Specific extends AppPageConfig<...>`（结构性、非精确），
+// 多一个具名导出不违反它——`.next/types/validator.ts` 可查。
+export const CAPABILITIES: CapabilityDef[] = [
   {
     value: "",
     label: "Chat",

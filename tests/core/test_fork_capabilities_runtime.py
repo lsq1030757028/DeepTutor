@@ -13,7 +13,7 @@ deeptutor.config.settings` 拉到 `pydantic_settings` —— 宿主 python 没�
 放这儿还有个附带好处：它就躺在 `test_capabilities_runtime.py` 旁边，
 而后者那条全等断言正是本 fork 具名扣除掉的那条 —— 让出去的和补回来的相邻可见。
 
-## 本文件是 fork 断言的**唯一落点**
+## 本文件是 fork 断言的**唯一落点**（python 侧）
 
 上游 `tests/` 根那份 `test_fork_capabilities.py` 已删（它躺在回归闸够不到的
 路径上，当时并没有在保护任何东西——**假保护比没保护更危险，因为它让人以为有**）；
@@ -21,9 +21,20 @@ deeptutor.config.settings` 拉到 `pydantic_settings` —— 宿主 python 没�
 DT 依赖集）。所以五个登记触点（#7 常量表 / #8 MODULES / #9 picker /
 #10 富卡 / #11 i18n）里凡能在 python 侧断的，都在这里断，没有第二处。
 
-#9 picker 与 #10 富卡在前端：#10 的判据是
-`web/tests/test-journey-cards.test.ts`；**#9 目前无机械守**——picker 的
-CAPABILITIES 表写在 page 组件内部、未导出，断不到。这是已知缺口，不粉饰。
+#9 picker 与 #10 富卡在前端，判据也只能在前端——**本层跑在 DT 生产镜像里，
+镜像不带 node**，把前端断言写进这里只会得到一条永远 skip 的测试，
+而那正是本文件开头骂的那种假保护。两条各自的落点（都在回归闸第 3 层
+`npm run test:node` 里真跑）：
+
+- #9 picker：`web/tests/capability-picker.test.ts` —— 2026-08-12 建成，此前为零。
+  它 import `page.tsx` 真导出的 `CAPABILITIES`，喂给真的 `ChatComposer`
+  渲染展开态 picker，断「测试」那一行在一级菜单里（不在 More 二级浮层）。
+  同文件带一条反例：把该项摘掉后判据必须红。
+  **残余缺口（如实记）**：page 自己有没有把这张表传给 composer 不在断言范围内，
+  那要渲染整个 page（依赖 router/context/网络），只能走浏览器级 e2e。
+- #10 富卡：`web/tests/test-journey-cards.test.ts`。
+- #11 的前端一半（薄壳与富卡的 UI 文案是否都走了 `t()`）：
+  `web/tests/test-journey-i18n.test.ts`；后端一半在本文件下面那条。
 """
 
 from __future__ import annotations
@@ -74,6 +85,29 @@ def test_capability_description_is_reachable_in_both_languages() -> None:
     assert entry["en"] != entry["zh"]
     # 取数口给的就是表里那份，不是复制品漂移后的另一份。
     assert entry == dict(_CAPABILITY_DESCRIPTIONS["test"])
+
+
+def test_capability_description_zh_slot_is_actually_written_in_chinese() -> None:
+    """触点 #11 的另一半：**中文槽里装的真是中文**。
+
+    上一条已经守住了「有值 / 没走 fallback / 中英不同」。它漏掉的那种形态是
+    **zh 槽里填的是英文**——两串不相等，非空检查也过，但中文用户在 picker 上
+    读到的是一句英文。这在补文案时很容易发生（先把 en 复制过去打算回头再翻）。
+
+    判据取字符类而不是具体文案：文案怎么改都在，语种真错了才红。
+    en 槽反向也断一次——不然这条只能发现单向的漏法。
+    """
+    from deeptutor.i18n.metadata_i18n import _CAPABILITY_DESCRIPTIONS
+
+    def has_cjk(text: str) -> bool:
+        return any("一" <= ch <= "鿿" for ch in text)
+
+    entry = _CAPABILITY_DESCRIPTIONS["test"]
+    assert has_cjk(entry["zh"]), f"zh 槽里没有中文：{entry['zh']!r}"
+    assert not has_cjk(entry["en"]), f"en 槽里混进了中文：{entry['en']!r}"
+    # 不是把键名或占位串当文案交差。
+    for language, value in entry.items():
+        assert value.strip() not in {"test", "TODO", "-", ""}, language
 
 
 def test_prompt_constants_match_the_on_disk_module_layout() -> None:
