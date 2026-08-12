@@ -329,6 +329,13 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
         "TP_WRITE_AUTHORIZED_IDS": ",".join(sorted(write_ok)),
         "TP_DONE_CASE_IDS": ",".join(done_ids),
     })
+    # L3 只读 DSN：与 TP_VARS_JSON 同纪律——值只经环境变量进子进程内存，
+    # 不写 bundle、不写 run 目录。这里**不塞默认值**：没配就是没有 L3，
+    # 用例里的 db op 会 BLOCKED，而不是悄悄跳过（护栏 3）。
+    # 注意 env 是 os.environ 的副本，宿主若已设该变量本就会传下去；
+    # 这一行的作用是让"它是被有意传下去的"在代码里看得见，且能被测试断言。
+    from server.journey import db_readonly as _dbro
+    l3_dsn_present = _dbro.dsn_present()
     started = artifacts.now_iso()
     t0 = time.time()
     try:
@@ -396,6 +403,12 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
         #   intake_fingerprint = 接入期探到的靶（只作对照）
         # 换环境跑是合法的，所以 drift 不阻断——但结论卡上必须看得见。
         "target_identity": target_identity,
+        # L3 通道在**本次执行**是否可用。与 bundle 里的 capability_l3_granted
+        # 是两回事：那个记的是编译时声明，这个记的是执行时现实。两者不一致
+        # （声明有、执行时没有）时 db op 会 BLOCKED，收据上这两格并列摆着，
+        # 让"为什么这批写用例没有数据层证据"有一处能查。
+        "l3_channel_available": l3_dsn_present,
+        "bundle_l3_granted": bool(manifest.get("capability_l3_granted")),
         "intake_fingerprint": _intake_fingerprint_of(batch_id),
         "target_drift": _drifted(batch_id, target_identity),
         "triggered_by": triggered_by,

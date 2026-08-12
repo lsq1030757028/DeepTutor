@@ -9,3 +9,9 @@ openpyxl==3.1.5
 # 配置页解析 multipart/form-data 请求体（starlette 的 request.form() 硬依赖它）。
 # 页面自己发的是 JSON，这条是给 curl 手工调试的表单分支兜底的，缺了那条路径直接 400。
 python-multipart==0.0.32
+# L3 只读数据层通道（server/journey/db_readonly.py）。
+# 钉 -binary 是因为它自带 libpq，不需要目标机有 pg_config 与编译链——
+# bundle 会被丢进容器里跑，那里没有构建工具。
+# **缺了它不是静默降级**：db op 会判 BLOCKED 并说清是环境缺件（见 db_readonly.connect），
+# 不会退化成跳过或通过。
+psycopg2-binary==2.9.10

@@ -29,13 +29,13 @@ import sys
 from typing import Any
 
 from server.journey import artifacts, digest, schema
-from server.journey.gates import credential_scan, track_purity
+from server.journey.gates import capability_ladder, conservation, credential_scan, track_purity
 from server.journey.pw_harness import case_slug
 
-COMPILER_VERSION = "m1.1"
+COMPILER_VERSION = "m1.2"
 _SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 _EMBED = {"_redlines.py": "redlines.py", "_runtime.py": "pw_runtime.py",
-          "_harness.py": "pw_harness.py"}
+          "_harness.py": "pw_harness.py", "_dbro.py": "db_readonly.py"}
 
 _CONFTEST = '''# 自动生成：AutomationBundle conftest（compiler {version}）。派生物，禁手改。
 import os
@@ -176,6 +176,17 @@ def compile_bundle(batch_id: str) -> dict[str, Any]:
                 "problems": [f"{p['code']} {p['where']}: {p['problem']}"
                              for p in purity["problems"]]}
 
+    # 闸 1c：守恒（E19，设计稿 §6.2）。同样**在建目录之前** —— 与 E22 一个理由。
+    # L3 未授予时本闸不判，但会产出显式 gap 交给 coverage：躲得掉闸，躲不掉账。
+    profile = (artifacts.load_artifact(batch_id, "intake_profile")
+               if artifacts.has_artifact(batch_id, "intake_profile") else {})
+    l3 = capability_ladder.granted(profile, "L3")
+    cons = conservation.check_caseset(caseset, l3_granted=l3)
+    if not cons["ok"]:
+        return {"ok": False, "gate": "compile-gate#1c-conservation",
+                "problems": [f"{p['code']}.{p['sub']} {p['where']}: {p['problem']}"
+                             for p in cons["problems"]]}
+
     bundle_dir = os.path.join(artifacts.batch_dir(batch_id), "bundle")
     if os.path.isdir(bundle_dir):
         shutil.rmtree(bundle_dir)
@@ -204,6 +215,11 @@ def compile_bundle(batch_id: str) -> dict[str, Any]:
             "compiler_version": COMPILER_VERSION,
             "generated_at": artifacts.now_iso(),
             "embedded_sources": embed_hashes,
+            # L3 状态随 bundle 走：执行侧与报告侧都要知道这份产物是在
+            # 「有数据层」还是「没数据层」的前提下编出来的。缺了它，
+            # 一份没有守恒断言的写用例 bundle 无法区分是躲了闸还是没授权。
+            "capability_l3_granted": l3,
+            "conservation_declared_gaps": cons["declared_gaps"],
             "cases": mapping,
         }
         with open(os.path.join(bundle_dir, "bundle.json"), "w",

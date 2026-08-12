@@ -49,6 +49,19 @@ API_OPS: frozenset[str] = frozenset({
     "request", "expect_status", "expect_json_path",
 })
 
+#: 数据层 op（L3）：**轨道中立** —— 既不需要浏览器，也不打被测系统的 HTTP 面，
+#: 走的是另一条只读 DB 连接。UI 轨和 API 轨都可以用，因此它们既不使某条用例
+#: 变成 UI 轨，也不构成混轨。
+#:
+#: 中立集是白名单里最危险的一格：往里塞错一个 op，它就在两条轨上都拿到豁免。
+#: 所以中立性**不靠这份清单自称**，由 `test_l3_data_ops_are_track_neutral`
+#: 行为断言守着——每个中立 op 必须能在 `page=None` 的 runner 上被调用到
+#: （即它不碰 `self.page`）。清单里混进一个 UI op，那条测试会红。
+DATA_OPS: frozenset[str] = frozenset({
+    "db_query", "expect_db_rows", "expect_db_value",
+    "db_snapshot", "expect_db_delta",
+})
+
 #: API 轨不可能产出的证据类别。要求了必然缺证（0025 §3.3）。
 UI_ONLY_EVIDENCE: frozenset[str] = frozenset({"playwright_trace", "screenshot"})
 
@@ -79,16 +92,23 @@ def vocabulary_gaps() -> dict[str, list[str]]:
       通常意味着运行时删过东西而词表没跟，下一次判据会写在幻觉上。
     """
     runtime = runtime_ops()
-    vocab = UI_OPS | API_OPS
+    vocab = UI_OPS | API_OPS | DATA_OPS
     return {"runtime_only": sorted(runtime - vocab),
             "vocab_only": sorted(vocab - runtime)}
 
 
 def track_of_op(op: str) -> str | None:
+    """op 属于哪条轨。返回 `"data"` 表示**轨道中立**，不是第三条轨。
+
+    中立与未知的区别要守住：未知 op 判红（它可能是拼错的，也可能是新增 UI op
+    忘了登记），中立 op 放行。两者都"不属于声明的那条轨"，但只有一个是错的。
+    """
     if op in UI_OPS:
         return "ui"
     if op in API_OPS:
         return "api"
+    if op in DATA_OPS:
+        return "data"
     return None
 
 
@@ -122,6 +142,8 @@ def check_case(case: dict[str, Any], *, label: str = "") -> list[dict[str, Any]]
                 f"要么它是拼错的，要么词表该补（补在 gates/track_purity.py，"
                 f"补完 vocabulary_gaps() 的对拍测试会跟着绿）。"))
             continue
+        if track == "data":
+            continue  # 轨道中立：不进 implied，既不判混轨也不判越轨
         implied.add(track)
 
     if declared in TRACKS:
@@ -131,7 +153,7 @@ def check_case(case: dict[str, Any], *, label: str = "") -> list[dict[str, Any]]
         # 于是那个 click 一声不响地混进 API 轨 bundle 里。
         offenders = sorted({op for op in (
             str((a or {}).get("op") or "") for a in (recipe.get("actions") or []))
-            if track_of_op(op) is not None and track_of_op(op) != declared})
+            if track_of_op(op) not in (None, "data", declared)})
         if offenders:
             other = sorted({track_of_op(op) for op in offenders})
             mixed = len(implied) > 1
@@ -184,6 +206,6 @@ def check_caseset(caseset: dict[str, Any]) -> dict[str, Any]:
     return {"ok": not problems, "problems": problems}
 
 
-__all__ = ["API_OPS", "TRACKS", "UI_ONLY_EVIDENCE", "UI_OPS",
+__all__ = ["API_OPS", "DATA_OPS", "TRACKS", "UI_ONLY_EVIDENCE", "UI_OPS",
            "check_case", "check_caseset", "runtime_ops", "track_of_op",
            "vocabulary_gaps"]

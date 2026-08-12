@@ -24,11 +24,24 @@ import re
 from typing import Any
 
 from server.journey import artifacts, digest, schema
+from server.journey.gates import track_purity as _track_purity
 
-ASSERT_OPS = {"expect_title_contains", "expect_url_contains", "expect_text",
-              "expect_visible", "expect_hidden", "expect_status",
-              "expect_json_path"}
-ACTION_OPS = ASSERT_OPS | {"goto", "fill", "click", "request", "wait_load"}
+#: 合法 op 词表 —— **从 `gates/track_purity` 转出，不再手抄第三份**。
+#:
+#: 这里原本是一份独立维护的字面量集合，于是它成了同一件事的第三个真相
+#: （另两个是 `pw_runtime` 的 `_op_*` 方法与 `track_purity` 的 UI/API 表）。
+#: 三份清单里少了一份同步，症状是**生成侧写得出的 op 编译侧不认**，或者反过来。
+#: L3 数据层 op 落地时就是这么被抓到的：runtime 与 track_purity 都补齐了，
+#: 这里没补，于是一条完全合法的守恒用例在 draft 阶段被判 E18。
+#:
+#: 单一真相在 track_purity，那边与运行时逐个对拍（`vocabulary_gaps()`）。
+_VOCAB = _track_purity.UI_OPS | _track_purity.API_OPS | _track_purity.DATA_OPS
+
+#: 断言 op：产生一条判决的 op。约定是 `expect_` 前缀，由
+#: `test_assert_ops_match_the_runtime` 与运行时 `_record_assert` 的实际调用面对拍——
+#: 光靠前缀约定，一个忘了记断言的 `expect_x` 会让「无断言不算过」形同虚设。
+ASSERT_OPS = frozenset(op for op in _VOCAB if op.startswith("expect_"))
+ACTION_OPS = frozenset(_VOCAB)
 _UNCOVERED_OWNER = re.compile(r"(由|负责|owner|人工|开发|产品|测试|运维|用户|下一轮|后续|提测方|我)", re.I)
 _UNCOVERED_CONSEQ = re.compile(
     r"(不作数|不担保|不保证|封顶|风险|导致|无法|漏|错|查不出|发现不了|留在|逃逸|无人接|才暴露)", re.I)

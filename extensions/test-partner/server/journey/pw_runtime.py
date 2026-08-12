@@ -29,6 +29,11 @@ try:  # 包内形态（开发/测试）
 except ImportError:  # bundle 嵌入形态
     import _redlines as _rl  # type: ignore
 
+try:
+    from server.journey import db_readonly as _dbro
+except ImportError:  # bundle 嵌入形态
+    import _dbro  # type: ignore
+
 
 class CaseSkip(Exception):
     """红线/前置拦截：不执行，理由进账。"""
@@ -77,6 +82,9 @@ class CaseRunner:
         self.observations: list[str] = []
         self.aborted_requests: list[str] = []
         self.http_transcript: list[dict[str, Any]] = []
+        self.db_transcript: list[dict[str, Any]] = []
+        self.db_metrics: dict[str, dict[str, Any]] = {}   # 守恒量基线
+        self._db_conn: Any = None
         self._cookies: dict[str, str] = {}   # per-case cookie jar（一个 case = 一个会话）
         self.status = "executed"  # executed|skipped|blocked
         self.skip_reason = ""
@@ -261,6 +269,107 @@ class CaseRunner:
         self._record_assert("json_path:" + a["path"], a.get("equals"), cur,
                             cur == a.get("equals"))
 
+    # ── 数据层（L3，轨道中立：不碰 self.page，UI/API 两轨都能用）──────────
+    #
+    # 连接**惰性建立**：一条不含 db op 的用例不该因为没配 DSN 而 BLOCKED。
+    # 但一旦用例里有 db op，缺 DSN/缺驱动就是 BLOCKED —— 不降级成跳过，
+    # 更不当通过（那是护栏 3 点名的静默降级：一条从没验过数据的用例显示成绿的）。
+    def _db(self) -> Any:
+        if getattr(self, "_db_conn", None) is None:
+            try:
+                self._db_conn = _dbro.connect()
+            except _dbro.DbChannelError as exc:
+                raise CaseBlocked(f"L3 只读通道不可用：{exc}")
+        return self._db_conn
+
+    def _db_query(self, a: dict[str, Any]) -> dict[str, Any]:
+        sql = self._render(str(a["sql"]))
+        try:
+            return _dbro.query(self._db(), sql)
+        except _dbro.DbStatementRejected as exc:
+            # 白名单拒发是**用例写错了**，不是环境问题 —— 用 CaseSkip 会让它
+            # 悄悄不算数，所以判 BLOCKED 让它必须被看见。
+            raise CaseBlocked(f"SQL 未过只读白名单：{exc}")
+        except Exception as exc:  # noqa: BLE001 - 驱动异常族杂
+            raise CaseBlocked(self._scrub(f"只读查询失败：{type(exc).__name__}"))
+
+    def _op_db_query(self, a: dict[str, Any]) -> None:
+        """跑一条只读查询并留档。本身不产生断言（观测 op）。"""
+        res = self._db_query(a)
+        self.last_db = res
+        self.db_transcript.append({
+            "sql": self._scrub(self._render(str(a["sql"]))),
+            "row_count": res["row_count"],
+            "truncated": res["truncated"],
+        })
+
+    def _op_expect_db_rows(self, a: dict[str, Any]) -> None:
+        """断言**本次查询返回的行数**。
+
+        注意它与 `SELECT count(*)` 不是一回事：本 op 数的是取回来的行，会被
+        `limit` 截断；要断"库里有多少条"请用 `expect_db_value` 配 `count(*)`，
+        让数据库去数。取被截断的结果下计数断言，与本线那条取证纪律
+        （穷尽断言不得建立在截断输出上）是同一个错误换了一层。
+        """
+        res = self._db_query(a)
+        self.last_db = res
+        want = a["rows"]
+        got = res["row_count"]
+        if res["truncated"]:
+            self.observations.append(
+                f"expect_db_rows 的结果被 limit 截断（>={got} 行），该断言不可信")
+        self._record_assert("db_rows", want, got,
+                            got == want and not res["truncated"])
+
+    def _op_expect_db_value(self, a: dict[str, Any]) -> None:
+        """断言标量值。零行 = 断言失败，不是通过（"查不到"不等于"符合预期"）。"""
+        res = self._db_query(a)
+        self.last_db = res
+        got = res["rows"][0][0] if res["rows"] else None
+        want = a["equals"]
+        # 数值口径统一：DB 侧 count(*) 回 int/Decimal，配方里写的是 JSON 数字
+        if isinstance(want, (int, float)) and not isinstance(want, bool) and got is not None:
+            try:
+                got = type(want)(got)
+            except (TypeError, ValueError):
+                pass
+        self._record_assert("db_value:" + str(a.get("label") or "")[:40],
+                            want, got, got == want)
+
+    def _op_db_snapshot(self, a: dict[str, Any]) -> None:
+        """记一个守恒量的**操作前**基线。存查询本身，不只存值。
+
+        存查询是关键：`expect_db_delta` 会**重跑同一条 SQL**。若只存值、由配方
+        再写一遍查询，就可以快照 A 却对 B 求差 —— 守恒闸会全绿而守恒根本没被验。
+        """
+        metric = str(a["metric"])
+        sql = str(a["sql"])
+        value = self._db_query({"sql": sql})
+        got = value["rows"][0][0] if value["rows"] else None
+        if got is None:
+            raise CaseBlocked(f"守恒量 {metric!r} 的基线查询零行——无法建立基线")
+        self.db_metrics[metric] = {"sql": sql, "before": got}
+        self.observations.append(f"db_snapshot {metric}={got}")
+
+    def _op_expect_db_delta(self, a: dict[str, Any]) -> None:
+        """断言守恒量的**变化量**等于期望差。重跑基线那条 SQL，不接受另给一条。"""
+        metric = str(a["metric"])
+        base = self.db_metrics.get(metric)
+        if base is None:
+            raise CaseBlocked(
+                f"守恒量 {metric!r} 没有基线：expect_db_delta 必须配一个先行的 "
+                f"db_snapshot。缺基线时求出来的差是拿 0 当起点算的，会假绿。")
+        after_res = self._db_query({"sql": base["sql"]})
+        after = after_res["rows"][0][0] if after_res["rows"] else None
+        if after is None:
+            raise CaseBlocked(f"守恒量 {metric!r} 的复查零行")
+        try:
+            actual = after - base["before"]
+        except TypeError:
+            raise CaseBlocked(f"守恒量 {metric!r} 不是可相减的类型")
+        want = a["delta"]
+        self._record_assert(f"db_delta:{metric}", want, actual, actual == want)
+
     # ── 收尾 ────────────────────────────────────────────────────────────
     def result(self) -> dict[str, Any]:
         n = len(self.assertions)
@@ -284,6 +393,10 @@ class CaseRunner:
             "assertion_count": n,
             "aborted_third_party_requests": self.aborted_requests,
             "http_transcript": self.http_transcript,
+            "db_transcript": self.db_transcript,
+            "db_metrics": {k: {"sql": v["sql"], "before": v["before"]}
+                           for k, v in self.db_metrics.items()},
+            "observations": self.observations,
             "source_case_digest": self.meta.get("source_case_digest"),
             "oracle_digest": self.meta.get("oracle_digest"),
             "schema_version": self.meta.get("schema_version"),
