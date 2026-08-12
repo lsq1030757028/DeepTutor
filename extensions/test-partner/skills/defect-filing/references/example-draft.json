@@ -1,0 +1,53 @@
+{
+  "_note": [
+    "样例草稿：拿本线一条**真实已分配**的缺陷 BB-501（bug-bank 在册，2026-08-12 复核命中 1 条）",
+    "改写成 TAPD 提单形状，用来跑 dry-run 与回归。不许拿没分配的编号占位。",
+    "跑法：python -X utf8 ../scripts/render_draft.py --draft example-draft.json"
+  ],
+  "project": "uiron-ip-robot",
+  "repro_verified": true,
+  "title": {
+    "module": "测试工程/进程回收",
+    "summary": "测试跑完后 playwright show-trace 的浏览器进程无人回收，逐次累积"
+  },
+  "fields": {
+    "severity": "normal",
+    "priority_label": "medium",
+    "de": "",
+    "te": "李森权"
+  },
+  "custom_fields": {
+    "cus_发现阶段": "测试执行"
+  },
+  "sections": {
+    "环境": [
+      "被测对象：extensions/test-partner 测试套（本机 Windows 11 + pytest）",
+      "版本标识：feat/p3-har-inspect 分支，工作树运行",
+      "触发方式：pytest extensions/test-partner/tests/test_journey_console.py"
+    ],
+    "复现步骤": {
+      "前置": "本机已装 playwright 浏览器（ms-playwright 目录存在）",
+      "steps": [
+        "跑 pytest extensions/test-partner/tests/test_journey_console.py::test_trace_open_returns_downgrade_command",
+        "等用例跑完、pytest 清掉 tmp 目录",
+        "列出本机进程，筛命令行含 ms-playwright 的 chromium 主进程",
+        "重复上面三步若干轮"
+      ]
+    },
+    "期望结果": "用例跑完后不残留 chromium 主进程；即使起过，进程登记表也应把它回收掉。",
+    "实际结果": "每跑一轮残留一个 chromium 主进程，实测遗留 9 个，最早可溯到 08-08。",
+    "日志证据": {
+      "log": "logs/20260812_process_registry_leak.log",
+      "key_findings": {
+        "用例真起了进程": [
+          "journey_console.open_trace -> subprocess.Popen(playwright show-trace …)"
+        ],
+        "回收分支够不到": [
+          "process_registry.reap_stale: requires os.path.isdir(run_dir)",
+          "pytest teardown removed tmp run_dir -> 登记标记随目录一起没了"
+        ]
+      }
+    },
+    "初步判断": "测试视角：起进程这一步正常，回收这一步够不到。根因已看码定位——回收要求登记目录还在（server/journey/process_registry.py:110 的 os.path.isdir(run_dir)），而 pytest 清 tmp 目录时把登记标记一起删了（:112），于是 PID 从此无人回收；测试侧本就不该真起进程（tests/test_journey_console.py:83 直调真实 open_trace）。修复方向两条：测试侧打桩 subprocess.Popen，机制侧补『登记目录消失时按登记 PID 兜底回收』分支，且只杀自己登记的 PID、禁按进程名广杀。"
+  }
+}

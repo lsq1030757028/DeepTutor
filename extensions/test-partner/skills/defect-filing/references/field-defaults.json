@@ -1,0 +1,69 @@
+{
+  "_note": [
+    "项目字段默认值。0027：『模板从小铁资产移植；项目字段默认值放 skill 配置里（泛化时按项目配置）』。",
+    "本文件**不得出现 custom_field_<数字>**——自定义字段一律用 cus_<字段中文名> 别名，",
+    "由 TAPD 后台转义（锚 mcp_server_tapd/server.py:753 建单工具的 docstring）。",
+    "缺陷侧没有查编号的工具：get_entity_custom_fields 的 entity_type 只支持",
+    "stories/tasks/iterations/tcases（锚 server.py:307），不含 bug。"
+  ],
+  "vocabularies": {
+    "severity": ["fatal", "serious", "normal", "prompt", "advice"],
+    "priority_label": ["urgent", "high", "medium", "low", "insignificant"]
+  },
+  "projects": {
+    "uiron-ip-robot": {
+      "workspace_id": "67600006",
+      "title_prefix": "【小铁IP机器人】",
+      "reporter": "李森权",
+      "te": "李森权",
+      "de": "",
+      "log_required": true,
+      "source": "qiqi_AI蓝牙项目/PLAN/tapd/BUG_FORMAT.md §1/§2；reporter/te 取 .agents/skills/tapd/config.yaml my_nick"
+    },
+    "hangzhou-jfb": {
+      "workspace_id": "67600006",
+      "title_prefix": "【杭州JFB】",
+      "reporter": "李森权",
+      "te": "李森权",
+      "de": "",
+      "log_required": true,
+      "source": "BUG_FORMAT.md §1 项目前缀表"
+    },
+    "figure-miniprogram": {
+      "workspace_id": "67600006",
+      "title_prefix": "【AI手办小程序端】",
+      "reporter": "李森权",
+      "te": "李森权",
+      "de": "",
+      "log_required": false,
+      "source": "BUG_FORMAT.md §1 项目前缀表 + §4『强制 log 仅限端侧缺陷』（2026-06-12 约定）"
+    },
+    "admin-console": {
+      "workspace_id": "67600006",
+      "title_prefix": "【管理端】",
+      "reporter": "李森权",
+      "te": "李森权",
+      "de": "",
+      "log_required": false,
+      "source": "BUG_FORMAT.md §1 项目前缀表"
+    },
+    "queenie-app": {
+      "workspace_id": "67600006",
+      "title_prefix": "【App/Queenie】",
+      "reporter": "李森权",
+      "te": "李森权",
+      "de": "",
+      "log_required": false,
+      "source": "BUG_FORMAT.md §7『Queenie App（含 logcat）』；前缀形态照 §1 的『App 端用【App/xxx】』推得，未见成单样例，UAT 时请用户确认"
+    },
+    "__unconfigured__": {
+      "workspace_id": "",
+      "title_prefix": "",
+      "reporter": "",
+      "te": "",
+      "de": "",
+      "log_required": false,
+      "source": "占位项：新项目在这里加一条，不要拿别的项目的前缀凑合。DeepTutor / test-partner 自身还没有拍定的提单项目归属，缺就问用户，不猜。"
+    }
+  }
+}
