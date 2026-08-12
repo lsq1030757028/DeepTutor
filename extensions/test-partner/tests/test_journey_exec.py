@@ -272,6 +272,29 @@ def test_complete_unique_results_with_zero_exit_can_pass():
     assert verdict == "PASS" and integrity["ok"] is True
 
 
+def test_complete_business_failure_with_pytest_exit_one_is_projectable():
+    rows = [
+        {"case_id": "exectest/R1-C001", "outcome": "failed"},
+        {"case_id": "exectest/R1-C002", "outcome": "passed"},
+    ]
+    verdict, integrity = execute_run._execution_verdict(
+        rows, 1, ["exectest/R1-C001", "exectest/R1-C002"])
+    assert verdict == "FAIL"
+    assert integrity["ok"] is True
+
+
+@pytest.mark.parametrize("returncode", [2, 3, 4, 5])
+def test_complete_rows_with_infrastructure_exit_still_block(returncode):
+    rows = [
+        {"case_id": "exectest/R1-C001", "outcome": "failed"},
+        {"case_id": "exectest/R1-C002", "outcome": "passed"},
+    ]
+    verdict, integrity = execute_run._execution_verdict(
+        rows, returncode, ["exectest/R1-C001", "exectest/R1-C002"])
+    assert verdict == "BLOCK"
+    assert integrity["ok"] is False
+
+
 def test_duplicate_or_unknown_result_rows_block_projection():
     rows = [
         {"case_id": "exectest/R1-C001", "outcome": "passed"},
@@ -327,6 +350,10 @@ def test_execute_business_fail_not_fake_green(store, target):
     rec = r["receipt"]
     assert rec["verdict"] == "FAIL"
     assert rec["counts"].get("failed") == 1 and rec["counts"].get("passed") == 1
+    assert rec["result_integrity"]["ok"] is True
+    projected = project_verdicts.project(r["run_id"])
+    assert projected["ok"] is True, projected
+    assert projected["projection"]["distribution"] == {"FAIL": 1, "PASS": 1}
 
 
 def test_execute_redirect_not_followed(store, target):

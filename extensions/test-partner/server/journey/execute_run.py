@@ -70,19 +70,25 @@ def _execution_verdict(rows: list[dict[str, Any]], pytest_rc: int,
     expected = set(expected_case_ids)
     actual = set(actual_ids)
     duplicate_ids = sorted({case_id for case_id in actual if actual_ids.count(case_id) > 1})
+    structure_ok = malformed_rows == 0 and not duplicate_ids and actual == expected
+    # pytest exit 1 is the expected process-level signal for ordinary assertion
+    # failures.  It is trustworthy only when the complete, unique result ledger
+    # independently contains at least one failed case.  Collection errors,
+    # interrupts and internal errors (2..5), or an incomplete rc=1 ledger, stay
+    # fail-closed as infrastructure/result-integrity failures.
+    returncode_ok = pytest_rc == 0 or (pytest_rc == 1 and bool(counts.get("failed")))
     integrity = {
-        "ok": pytest_rc == 0 and malformed_rows == 0 and not duplicate_ids
-        and actual == expected,
+        "ok": structure_ok and returncode_ok,
         "pytest_returncode": pytest_rc,
         "missing_case_ids": sorted(expected - actual),
         "unexpected_case_ids": sorted(actual - expected),
         "duplicate_case_ids": duplicate_ids,
         "malformed_row_count": malformed_rows,
     }
-    if counts.get("failed"):
-        verdict = "FAIL"
-    elif not integrity["ok"]:
+    if not integrity["ok"]:
         verdict = "BLOCK"
+    elif counts.get("failed"):
+        verdict = "FAIL"
     elif counts.get("blocked") or counts.get("no_assertions"):
         verdict = "BLOCK"
     elif counts.get("passed") or counts.get("observed"):
