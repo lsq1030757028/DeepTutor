@@ -9,6 +9,12 @@ description: 把查清的问题整理成 TAPD 缺陷单草稿，经用户逐条�
 
 取材 → 结构化归因 → 预览 → `ask_user` 确认 → 提交。
 
+> **本包要先导入用户 workspace 才会出现在技能清单里**，与 `har-testing` / `req-testing`
+> 同条件——仓里的 `skills/` 不是平台的技能根（`BUILTIN_SKILLS_ROOT` 指向
+> `deeptutor/skills/builtin`）。没导入时模型看不到这一行，也就不会 `read_skill` 它。
+> 是否放进 builtin 根做到免导入，属产品面 + 上游触点议题，M2 收尾时连同其余三份 skill
+> 一起给用户拍，**本轮不自行放**（main 2026-08-12 裁定）。
+
 配套四份文件（用 `read_skill` 按需取）：
 
 | 文件 | 是什么 |
