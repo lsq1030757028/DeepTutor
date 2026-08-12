@@ -143,16 +143,33 @@ def test_ingest_requires_entity_and_human_source_as_a_pair(store, local_target):
     assert store.list_batches() == []
 
 
-def test_ingest_persists_human_confirmed_requirement_entity(store, local_target):
+def test_ingest_rejects_model_self_attested_requirement_entity(store, local_target):
     result = ingest.ingest(
         "t", local_target, source_kind="requirement_doc", source_ref="x",
         requirement_text="新增客户", tier="standard", tier_confirmed_via="user",
         requirement_entity="customer",
         requirement_entity_confirmed_via="chat_ask_user")
+    assert result["ok"] is False
+    assert "服务端验真" in result["error"]
+    assert store.list_batches() == []
+
+
+def test_ingest_persists_only_verified_requirement_entity_provenance(
+        store, local_target):
+    result = ingest.ingest(
+        "t", local_target, source_kind="requirement_doc", source_ref="x",
+        requirement_text="新增客户", tier="standard", tier_confirmed_via="user",
+        requirement_entity="customer",
+        requirement_entity_confirmed_via="chat_ask_user",
+        requirement_entity_decision={
+            "decision_hash": "sha256:test", "decision_session": "s1",
+            "decision_turn": "t1", "ask_user_tool_call_id": "ask-1",
+        })
     assert result["ok"], result
     profile = store.load_artifact(result["batch_id"], "intake_profile")
     assert profile["requirement_entity"] == "customer"
     assert profile["requirement_entity_confirmed_via"] == "chat_ask_user"
+    assert profile["requirement_entity_decision"]["decision_hash"] == "sha256:test"
 
 
 def test_tier_heuristic_splits():

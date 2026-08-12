@@ -40,6 +40,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+import hashlib
 import json
 import os
 import re
@@ -363,6 +364,43 @@ def _file_lock(path: str, *, timeout_s: float = 1200.0) -> Iterator[None]:
                 yield
             finally:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def consume_owner_decision_receipt(*, owner: str, decision_jti: str,
+                                   gate: str, root: str | None = None) -> bool:
+    """Atomically consume one signed user-decision receipt for an owner.
+
+    Intake has no batch yet, so per-batch events cannot prevent the same human
+    answer from creating two batches.  This owner-local ledger closes that
+    pre-batch replay window without storing the signed token or its answer.
+    """
+    partition = _partition(owner)
+    jti = str(decision_jti or "").strip()
+    gate_name = str(gate or "").strip()
+    if not jti or not gate_name:
+        raise ArtifactError("decision receipt identity is incomplete")
+    receipt_sha256 = hashlib.sha256(jti.encode("utf-8")).hexdigest()
+    base = owner_root(partition, root=root)
+    path = os.path.join(base, "decision-receipts.jsonl")
+    with _file_lock(path + ".lock"):
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line and str(
+                            json.loads(line).get("decision_hash") or ""
+                    ) == receipt_sha256:
+                        return False
+        os.makedirs(base, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "decision_hash": receipt_sha256,
+                "gate": gate_name,
+                "at": now_iso(),
+            }, ensure_ascii=False) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+    return True
 
 
 # ── 批次 ────────────────────────────────────────────────────────────────────

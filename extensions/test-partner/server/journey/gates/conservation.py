@@ -73,18 +73,30 @@ def check_case(case: dict[str, Any], *, l3_granted: bool) -> list[dict[str, Any]
     recipe = ((case.get("automation") or {}).get("recipe")) or {}
     actions = list(recipe.get("actions") or [])
     if not se.get("writes"):
+        unprovable_ui_ops = sorted({
+            str(action.get("op") or "")
+            for action in actions
+            if str(action.get("op") or "") in _MUTATING_UI_OPS
+        })
         mutating_methods = sorted({
             str(action.get("method") or "GET").upper()
             for action in actions
             if str(action.get("op") or "") == "request"
             and str(action.get("method") or "GET").upper() not in _SAFE_METHODS
         })
-        if mutating_methods:
+        if mutating_methods or unprovable_ui_ops:
+            facts: list[str] = []
+            if mutating_methods:
+                facts.append(f"HTTP 方法 {mutating_methods}")
+            if unprovable_ui_ops:
+                facts.append(
+                    f"UI 动作 {unprovable_ui_ops}（触发前无法证明只读；纯导航请用 goto）"
+                )
             return [_err(
                 where,
                 "write_declaration_mismatch",
-                "配方包含会改变状态的 HTTP 方法"
-                f" {mutating_methods}，但 side_effects.writes=false。"
+                "配方包含潜在写动作 " + "、".join(facts)
+                + "，但 side_effects.writes=false。"
                 "写风险以真实动作判定，不能靠声明降级；请修正声明后重新确认。",
             )]
         return []

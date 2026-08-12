@@ -302,6 +302,7 @@ def journey_ingest(title: str, base_url: str,
                    requirement_entity: str = "",
                    requirement_entity_confirmed_via: str = "",
                    owner: str = "", caller_surface: str = "unknown",
+                   decision_context: str = "",
                    bridge_context: str = "") -> dict[str, Any]:
     """接入 + 定档：只接受 DeepTutor Test capability 的可信桥接调用。
 
@@ -332,6 +333,9 @@ def journey_ingest(title: str, base_url: str,
                       requirement_entity_confirmed_via=(
                           requirement_entity_confirmed_via
                       ),
+                      decision_context=decision_context,
+                      _decision_arguments=effective,
+                      _bridge_claims=trusted,
                       owner=trusted.owner, caller_surface=trusted.surface)
 
 
@@ -413,6 +417,7 @@ def journey_write_confirm(batch_id: str, case_ids: Any = None,
     return _jt.write_confirm(batch_id=batch_id, case_ids=list(case_ids or []),
                              decided_by=decided_by, confirmed_via=confirmed_via,
                              decision_context=decision_context,
+                             _decision_arguments=effective,
                              _bridge_claims=trusted,
                              owner=trusted.owner, caller_surface=trusted.surface)
 

@@ -243,9 +243,53 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
            tier: str = "", tier_confirmed_via: str = "", owner: str = "",
            requirement_entity: str = "",
            requirement_entity_confirmed_via: str = "",
+           decision_context: str = "", _bridge_claims: Any = None,
+           _decision_arguments: dict[str, Any] | None = None,
            caller_surface: str = "unknown",
            root: str | None = None) -> dict[str, Any]:
     """接入 + 定档。可信 bridge 已在 MCP wrapper 中先于本函数验完。"""
+
+    entity = str(requirement_entity or "").strip()
+    entity_via = str(requirement_entity_confirmed_via or "").strip()
+    if bool(entity) != bool(entity_via):
+        return _err(
+            "E_USER_DECISION_REQUIRED",
+            "需求实体及其确认来源必须成对提供；来源字符串本身不产生授权。",
+        )
+    effective_args = {
+        "title": title, "base_url": base_url,
+        "workspace_id": workspace_id, "story_id": story_id,
+        "requirement_text": requirement_text, "source_kind": source_kind,
+        "source_ref": source_ref, "environment_ref": environment_ref,
+        "tier": tier, "tier_confirmed_via": tier_confirmed_via,
+        "requirement_entity": requirement_entity,
+        "requirement_entity_confirmed_via": requirement_entity_confirmed_via,
+    }
+    entity_decision: dict[str, Any] = {}
+    if entity:
+        owner_partition = artifacts.current_trusted_owner() or ""
+        if _bridge_claims is None or str(
+                getattr(_bridge_claims, "owner", "") or "") != owner_partition:
+            return _err(
+                "E_USER_DECISION_REQUIRED",
+                "需求实体必须来自同一 Test 会话内真实完成的交互确认卡。",
+            )
+        try:
+            entity_decision = decision_auth.verify_requirement_entity_context(
+                decision_context,
+                bridge=_bridge_claims,
+                requirement_entity=entity,
+                arguments=_decision_arguments or effective_args,
+            )
+        except decision_auth.DecisionAuthError as exc:
+            return _err("E_USER_DECISION_INVALID", str(exc))
+        if not artifacts.consume_owner_decision_receipt(
+                owner=owner_partition, decision_jti=entity_decision["jti"],
+                gate="requirement_entity", root=root):
+            return _err(
+                "E_USER_DECISION_REPLAYED",
+                "这份需求实体决定已经消费过，不能重复创建批次。",
+            )
 
     oracle_source: dict[str, Any] = {}
     text = requirement_text
@@ -274,7 +318,16 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
                             requirement_entity=requirement_entity,
                             requirement_entity_confirmed_via=(
                                 requirement_entity_confirmed_via
-                            ), owner=owner)
+                            ),
+                            requirement_entity_decision={
+                                "decision_hash": sha256_digest(
+                                    entity_decision.get("jti", "")),
+                                "decision_session": entity_decision.get("session", ""),
+                                "decision_turn": entity_decision.get("turn", ""),
+                                "ask_user_tool_call_id": entity_decision.get(
+                                    "ask_user_tool_call_id", ""),
+                            } if entity_decision else {},
+                            owner=owner)
     if not result.get("ok"):
         if result.get("need") == "tier_confirmation":
             return _ok("NEEDS_GATE", needs_gate="stage_tier", probe=result["probe"],
@@ -397,6 +450,7 @@ def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "
 def write_confirm(*, batch_id: str, case_ids: list[str] | None = None,
                   decided_by: str = "", confirmed_via: str = "ask_user_card",
                   decision_context: str = "", _bridge_claims: Any = None,
+                  _decision_arguments: dict[str, Any] | None = None,
                   caller_surface: str = "unknown",
                   root: str | None = None) -> dict[str, Any]:
     """写确认落账（人闸卡四的服务端半边，0028）。
@@ -465,6 +519,12 @@ def write_confirm(*, batch_id: str, case_ids: list[str] | None = None,
             batch_id=batch_id,
             caseset=caseset,
             requested_case_ids=requested,
+            arguments=_decision_arguments or {
+                "batch_id": batch_id,
+                "case_ids": list(case_ids or []),
+                "decided_by": decided_by,
+                "confirmed_via": confirmed_via,
+            },
         )
     except decision_auth.DecisionAuthError as exc:
         return _err("E_USER_DECISION_INVALID", str(exc))

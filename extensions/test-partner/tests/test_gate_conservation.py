@@ -69,16 +69,18 @@ def test_read_only_declaration_cannot_hide_mutating_request(method):
     assert "write_declaration_mismatch" in _subs(problems)
 
 
-def test_read_only_ui_click_is_not_automatically_classified_as_a_write():
-    """A click is ambiguous; the reverse gate must not make every click a write."""
-    assert conservation.check_case(
+def test_read_only_declaration_cannot_hide_unprovable_ui_click():
+    """A click can run JavaScript writes, so it needs confirmation unless replaced by goto."""
+    problems = conservation.check_case(
         _case(
             writes=False,
             actions=[{"op": "click", "selector": "#open-details"}],
             layers={"ui": {"assertions": ["a"], "required_evidence": ["trace"]}},
         ),
         l3_granted=True,
-    ) == []
+    )
+    assert "write_declaration_mismatch" in _subs(problems)
+    assert "goto" in problems[0]["problem"]
 
 
 # ── 拦截面 ────────────────────────────────────────────────────────────────

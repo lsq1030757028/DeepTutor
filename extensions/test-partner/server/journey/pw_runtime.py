@@ -10,8 +10,9 @@
 
 写确认：side_effects.writes=true 的 case 必须在 TP_WRITE_AUTHORIZED_IDS 里，
 否则 SKIP_WRITE_UNCONFIRMED（授权收据在批次 events.jsonl，由 execute 工具下发）。
-运行时会再从真实 HTTP 方法独立派生写风险；POST/PUT/PATCH/DELETE 等不能靠错误的
-``writes=false`` 声明绕过确认。UI click 本身有读写两义，不在这里粗暴推断。
+运行时会再从可执行动作独立派生写风险；POST/PUT/PATCH/DELETE 等不能靠错误的
+``writes=false`` 声明绕过确认。浏览器 click 在触发前无法证明只读（链接也可能挂
+JavaScript 写请求），因此一律按潜在写操作处理；纯导航必须使用可机械判定的 ``goto``。
 
 探测性（probing）case：只记录观测，恒不 pass/fail（判决权在产品——探测层语义）。
 
@@ -74,6 +75,7 @@ def load_context() -> dict[str, Any]:
 
 
 _SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_UNPROVABLE_UI_WRITE_OPS = frozenset({"click"})
 
 
 def effective_write_risk(meta: dict[str, Any]) -> bool:
@@ -82,8 +84,11 @@ def effective_write_risk(meta: dict[str, Any]) -> bool:
         return True
     actions = list(meta.get("actions") or [])
     return any(
-        str(action.get("op") or "") == "request"
-        and str(action.get("method") or "GET").upper() not in _SAFE_HTTP_METHODS
+        str(action.get("op") or "") in _UNPROVABLE_UI_WRITE_OPS
+        or (
+            str(action.get("op") or "") == "request"
+            and str(action.get("method") or "GET").upper() not in _SAFE_HTTP_METHODS
+        )
         for action in actions
     )
 

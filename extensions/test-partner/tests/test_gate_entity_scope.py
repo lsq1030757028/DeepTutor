@@ -66,10 +66,10 @@ def test_ui_write_without_explicit_scope_is_unknown_not_match():
     }
     result = es.check_case(case, "custom_character")
     assert result["verdict"] == es.UNKNOWN
-    assert "Y 为空不得默认 MATCH" in result["problem"]
+    assert "不得进入业务 PASS" in result["problem"]
 
 
-def test_ui_write_uses_explicit_scope_and_must_match_requirement_entity():
+def test_ui_write_cannot_self_attest_entity_scope():
     case = {
         "case_id": "q/R5-C001",
         "side_effects": {"writes": True, "write_scope": "custom_character"},
@@ -80,8 +80,11 @@ def test_ui_write_uses_explicit_scope_and_must_match_requirement_entity():
             }
         },
     }
-    assert es.check_case(case, "custom_character")["verdict"] == es.MATCH
-    assert es.check_case(case, "recommended_character")["verdict"] == es.MISMATCH
+    matched_claim = es.check_case(case, "custom_character")
+    mismatched_claim = es.check_case(case, "recommended_character")
+    assert matched_claim["verdict"] == es.UNKNOWN
+    assert mismatched_claim["verdict"] == es.UNKNOWN
+    assert "不能自证" in matched_claim["problem"]
 
 
 def test_banner_states_the_real_path_was_not_reached():

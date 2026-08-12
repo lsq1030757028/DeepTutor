@@ -85,20 +85,16 @@ def check_case(case: dict[str, Any], requirement_entity: str) -> dict[str, Any]:
                            "无从判断本轮写对了没有。**缺省不放行**：这道闸一旦对缺失"
                            "默认过，就等于不存在。"}
     if writes and not actual:
-        declared_scope = str(
-            (case.get("side_effects") or {}).get("write_scope") or ""
-        ).strip()
-        if not declared_scope:
-            return {
-                "case_id": cid,
-                "verdict": UNKNOWN,
-                "writes": True,
-                "requirement_entity": requirement_entity,
-                "actual_entities": [],
-                "problem": "写用例没有可观察的写请求，也没有明确 write_scope；"
-                "UI click 可能读也可能写，Y 为空不得默认 MATCH。",
-            }
-        actual = [declared_scope]
+        return {
+            "case_id": cid,
+            "verdict": UNKNOWN,
+            "writes": True,
+            "requirement_entity": requirement_entity,
+            "actual_entities": [],
+            "problem": "写用例没有可机验的写请求，无法从执行事实反推实际写入实体 Y。"
+            "side_effects.write_scope 只是用例声明，不能自证作用域；UI 写路径在获得"
+            "可信网络写请求或受信映射前不得进入业务 PASS。",
+        }
     if any(e is None for e in actual):
         return {"case_id": cid, "verdict": UNKNOWN, "writes": writes,
                 "requirement_entity": requirement_entity, "actual_entities": actual,

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Verify one-time user decisions for Journey write execution.
+"""Verify one-time user decisions for Journey business gates.
 
 The bridge proves which authenticated Test turn made a tool call.  This module
 separately proves that the same turn really paused on an interactive ``ask_user``
@@ -19,13 +19,18 @@ from typing import Any
 
 from server.journey import pw_runtime
 from server.journey.bridge_auth import (
-    BRIDGE_SECRET_ENV, MIN_SECRET_BYTES, BridgeClaims,
+    BRIDGE_SECRET_ENV, MIN_SECRET_BYTES, BridgeClaims, arguments_sha256,
 )
 
 AUDIENCE = "test-partner-user-decision"
 MAX_TTL_S = 300
 MAX_CLOCK_SKEW_S = 5
 MAX_WRITE_CHOICES = 8
+REQUIREMENT_ENTITY_QUESTION_ID = "journey_requirement_entity"
+REQUIREMENT_ENTITY_PROMPTS = frozenset({
+    "需求真正要新增、修改或删除的业务实体是什么？",
+    "Which business entity does this requirement actually create, update, or delete?",
+})
 
 
 class DecisionAuthError(ValueError):
@@ -81,13 +86,12 @@ def expected_question(batch_id: str, caseset: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def verify_decision_context(
+def _verify_envelope(
     token: Any,
     *,
     bridge: BridgeClaims,
-    batch_id: str,
-    caseset: dict[str, Any],
-    requested_case_ids: list[str],
+    tool: str,
+    arguments: dict[str, Any],
     now: int | None = None,
 ) -> dict[str, Any]:
     if not isinstance(token, str) or not token.strip():
@@ -107,8 +111,10 @@ def verify_decision_context(
         raise DecisionAuthError("unsupported user decision version")
     if payload.get("iss") != "deeptutor" or payload.get("aud") != AUDIENCE:
         raise DecisionAuthError("user decision issuer or audience does not match")
-    if payload.get("tool") != "journey_write_confirm":
+    if payload.get("tool") != tool or bridge.tool != tool:
         raise DecisionAuthError("user decision tool does not match")
+    if payload.get("args_sha256") != arguments_sha256(arguments):
+        raise DecisionAuthError("user decision arguments do not match this tool call")
     identity = (
         str(payload.get("owner_id") or ""),
         str(payload.get("session_id") or ""),
@@ -137,6 +143,24 @@ def verify_decision_context(
         raise DecisionAuthError("user decision resolution time is invalid") from exc
     if resolved_at > issued + MAX_CLOCK_SKEW_S or issued - resolved_at > MAX_TTL_S:
         raise DecisionAuthError("user decision is stale or was signed before it resolved")
+    payload["_verified_jti"] = jti
+    payload["_verified_tool_call_id"] = tool_call_id
+    return payload
+
+
+def verify_decision_context(
+    token: Any,
+    *,
+    bridge: BridgeClaims,
+    batch_id: str,
+    caseset: dict[str, Any],
+    requested_case_ids: list[str],
+    arguments: dict[str, Any],
+    now: int | None = None,
+) -> dict[str, Any]:
+    payload = _verify_envelope(
+        token, bridge=bridge, tool="journey_write_confirm",
+        arguments=arguments, now=now)
 
     ask_user = payload.get("ask_user")
     questions = ask_user.get("questions") if isinstance(ask_user, dict) else None
@@ -160,8 +184,8 @@ def verify_decision_context(
     if set(selected) != set(requested_case_ids):
         raise DecisionAuthError("tool case_ids do not match the user's selected choices")
     return {
-        "jti": jti,
-        "ask_user_tool_call_id": tool_call_id,
+        "jti": payload["_verified_jti"],
+        "ask_user_tool_call_id": payload["_verified_tool_call_id"],
         "selected": selected,
         "question_id": expected["id"],
         "owner": bridge.owner,
@@ -170,4 +194,67 @@ def verify_decision_context(
     }
 
 
-__all__ = ["DecisionAuthError", "expected_question", "verify_decision_context"]
+def expected_requirement_entity_question() -> dict[str, Any]:
+    return {
+        "id": REQUIREMENT_ENTITY_QUESTION_ID,
+        "multi_select": False,
+        "allow_free_text": True,
+        "options": [],
+    }
+
+
+def verify_requirement_entity_context(
+    token: Any,
+    *,
+    bridge: BridgeClaims,
+    requirement_entity: str,
+    arguments: dict[str, Any],
+    now: int | None = None,
+) -> dict[str, Any]:
+    entity = str(requirement_entity or "").strip()
+    if not entity or len(entity) > 120:
+        raise DecisionAuthError("requirement entity is missing or too long")
+    payload = _verify_envelope(
+        token, bridge=bridge, tool="journey_ingest",
+        arguments=arguments, now=now)
+    ask_user = payload.get("ask_user")
+    questions = ask_user.get("questions") if isinstance(ask_user, dict) else None
+    if not isinstance(questions, list) or len(questions) != 1 \
+            or not isinstance(questions[0], dict):
+        raise DecisionAuthError(
+            "requirement entity must come from one structured question")
+    actual = questions[0]
+    expected = expected_requirement_entity_question()
+    for field in ("id", "multi_select", "allow_free_text", "options"):
+        if actual.get(field) != expected[field]:
+            raise DecisionAuthError(
+                f"requirement entity card {field} does not match the trusted contract")
+    if str(actual.get("prompt") or "") not in REQUIREMENT_ENTITY_PROMPTS:
+        raise DecisionAuthError("requirement entity card prompt does not match the trusted contract")
+    answers = payload.get("answers")
+    if not isinstance(answers, list) or len(answers) != 1 \
+            or not isinstance(answers[0], dict):
+        raise DecisionAuthError("requirement entity answer is missing")
+    if str(answers[0].get("questionId") or "") != expected["id"]:
+        raise DecisionAuthError("requirement entity answer belongs to another question")
+    selected = str(answers[0].get("text") or "").strip()
+    if selected != entity:
+        raise DecisionAuthError(
+            "tool requirement_entity does not match the user's exact answer")
+    return {
+        "jti": payload["_verified_jti"],
+        "ask_user_tool_call_id": payload["_verified_tool_call_id"],
+        "selected": selected,
+        "question_id": expected["id"],
+        "owner": bridge.owner,
+        "session": bridge.session,
+        "turn": bridge.turn,
+    }
+
+
+__all__ = [
+    "DecisionAuthError", "REQUIREMENT_ENTITY_PROMPTS",
+    "REQUIREMENT_ENTITY_QUESTION_ID", "expected_question",
+    "expected_requirement_entity_question", "verify_decision_context",
+    "verify_requirement_entity_context",
+]

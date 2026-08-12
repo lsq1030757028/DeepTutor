@@ -35,7 +35,11 @@ def _confirm(**kwargs):
     case_ids = list(kwargs.get("case_ids") or [])
     return tools.write_confirm(
         owner=TRUSTED_OWNER,
-        **decision_kwargs(batch_id, case_ids, owner=TRUSTED_OWNER),
+        **decision_kwargs(
+            batch_id, case_ids, owner=TRUSTED_OWNER,
+            decided_by=str(kwargs.get("decided_by") or ""),
+            confirmed_via=str(kwargs.get("confirmed_via") or "ask_user_card"),
+        ),
         **kwargs,
     )
 

@@ -183,16 +183,24 @@ class MCPToolAdapter(BaseTool):
                 kwargs.pop(reserved, None)
             effective = effective_arguments(kwargs, self._input_schema)
             try:
-                if self._original_name == "journey_write_confirm":
+                needs_user_decision = (
+                    self._original_name == "journey_write_confirm"
+                    or (
+                        self._original_name == "journey_ingest"
+                        and bool(str(effective.get("requirement_entity") or "").strip())
+                    )
+                )
+                if needs_user_decision:
                     decision = current_resolved_user_decision()
                     if decision is None:
                         return ToolResult(
-                            content=("Write confirmation requires a resolved interactive "
+                            content=("This Journey gate requires a resolved interactive "
                                      "user decision from this same Test turn."),
                             success=False,
                         )
                     kwargs["decision_context"] = sign_user_decision_context(
-                        context, decision)
+                        context, decision, tool=self._original_name,
+                        arguments=effective)
                 kwargs["bridge_context"] = sign_bridge_context(
                     context,
                     tool=self._original_name,

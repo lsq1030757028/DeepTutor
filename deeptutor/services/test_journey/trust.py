@@ -67,6 +67,10 @@ _CURRENT_CONTEXT: ContextVar[TrustedJourneyContext | None] = ContextVar(
 _CURRENT_DECISION: ContextVar[ResolvedUserDecision | None] = ContextVar(
     "deeptutor_resolved_user_decision", default=None
 )
+_TRUSTED_DECISION_QUESTION_PREFIXES = (
+    "journey_write_confirm:",
+    "journey_requirement_entity",
+)
 
 
 @contextmanager
@@ -92,10 +96,10 @@ def record_resolved_user_decision(
     ask_user_payload: Mapping[str, Any],
     answers: list[dict[str, str]] | None,
 ) -> bool:
-    """Remember only a structured Journey write decision from a real pause/resume.
+    """Remember only a structured Journey gate decision from a real pause/resume.
 
     Ordinary clarification replies are deliberately discarded: they must never
-    be repackaged as write authority by a later model tool call.
+    be repackaged as write or intake authority by a later model tool call.
     """
     context = current_trusted_journey_context()
     questions = ask_user_payload.get("questions")
@@ -110,7 +114,8 @@ def record_resolved_user_decision(
         for entry in (answers or [])
         if str(entry.get("questionId") or "") == qid
     ]
-    if not qid.startswith("journey_write_confirm:") or len(matching) != 1:
+    if not any(qid.startswith(prefix) for prefix in _TRUSTED_DECISION_QUESTION_PREFIXES) \
+            or len(matching) != 1:
         _CURRENT_DECISION.set(None)
         return False
     # JSON round-trip freezes a plain-data snapshot; no later model mutation can
@@ -225,18 +230,24 @@ def sign_user_decision_context(
     context: TrustedJourneyContext,
     decision: ResolvedUserDecision,
     *,
+    tool: str = "journey_write_confirm",
+    arguments: Mapping[str, Any] | None = None,
     now: int | None = None,
 ) -> str:
     """Sign the exact card and answer produced by a real ``ask_user`` resume."""
     issued = int(time.time()) if now is None else int(now)
     if not decision.ask_user_tool_call_id or not decision.jti:
         raise JourneyTrustError("resolved user decision is incomplete")
+    tool_name = str(tool or "").strip()
+    if tool_name not in {"journey_ingest", "journey_write_confirm"}:
+        raise JourneyTrustError("unsupported Journey user-decision tool")
     payload: dict[str, Any] = {
         "v": 1,
         "iss": "deeptutor",
         "aud": "test-partner-user-decision",
         **asdict(context),
-        "tool": "journey_write_confirm",
+        "tool": tool_name,
+        "args_sha256": arguments_sha256(arguments or {}),
         "ask_user_tool_call_id": decision.ask_user_tool_call_id,
         "ask_user": decision.ask_user_payload,
         "answers": list(decision.answers),

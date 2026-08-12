@@ -145,6 +145,61 @@ async def test_write_confirm_requires_and_injects_a_real_resolved_user_decision(
     decision_payload = _payload(sent["decision_context"])
     assert decision_payload["answers"][0]["text"] == "c/R1-C001"
     assert decision_payload["owner_id"] == "user-a"
+    assert decision_payload["tool"] == "journey_write_confirm"
+    assert decision_payload["args_sha256"] == _payload(
+        sent["bridge_context"])["args_sha256"]
+
+
+@pytest.mark.asyncio
+async def test_ingest_entity_requires_and_injects_exact_user_decision(monkeypatch) -> None:
+    monkeypatch.setenv("TEST_JOURNEY_BRIDGE_SECRET", SECRET)
+    manager = _Manager()
+    adapter = MCPToolAdapter(
+        manager=manager,  # type: ignore[arg-type]
+        server_name="test-partner",
+        original_name="journey_ingest",
+        description="ingest",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "requirement_entity": {"type": "string", "default": ""},
+                "decision_context": {"type": "string", "default": ""},
+                "bridge_context": {"type": "string", "default": ""},
+            },
+        },
+        tool_timeout=5,
+    )
+    trusted = TrustedJourneyContext(
+        "user-a", "session-a", "turn-a", "test", "capability")
+    question = {
+        "id": "journey_requirement_entity",
+        "prompt": "Which business entity does this requirement actually create, update, or delete?",
+        "multi_select": False,
+        "allow_free_text": True,
+        "options": [],
+    }
+    with bind_trusted_journey_context(trusted):
+        denied = await adapter.execute(
+            title="Add character", requirement_entity="custom_character")
+        assert denied.success is False and manager.calls == []
+        assert record_resolved_user_decision(
+            ask_user_tool_call_id="ask-entity-1",
+            ask_user_payload={"questions": [question]},
+            answers=[{
+                "questionId": "journey_requirement_entity",
+                "text": "custom_character",
+            }],
+        )
+        allowed = await adapter.execute(
+            title="Add character", requirement_entity="custom_character")
+    assert allowed.success is True and len(manager.calls) == 1
+    sent = manager.calls[0]["arguments"]
+    decision_payload = _payload(sent["decision_context"])
+    bridge_payload = _payload(sent["bridge_context"])
+    assert decision_payload["tool"] == "journey_ingest"
+    assert decision_payload["answers"][0]["text"] == "custom_character"
+    assert decision_payload["args_sha256"] == bridge_payload["args_sha256"]
 
 
 @pytest.mark.asyncio

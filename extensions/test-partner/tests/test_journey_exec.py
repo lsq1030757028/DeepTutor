@@ -101,14 +101,25 @@ def test_runtime_derives_write_risk_from_mutating_http_method(method):
     assert caught.value.code == "SKIP_WRITE_UNCONFIRMED"
 
 
-def test_runtime_keeps_get_and_ambiguous_click_read_only_when_declared_read_only():
-    for action in (
-        {"op": "request", "method": "GET", "path": "/x"},
-        {"op": "click", "selector": "#open-details"},
-    ):
-        assert pw_runtime.effective_write_risk(
-            {"writes": False, "actions": [action]}
-        ) is False
+def test_runtime_keeps_provable_get_read_only():
+    assert pw_runtime.effective_write_risk({
+        "writes": False,
+        "actions": [{"op": "request", "method": "GET", "path": "/x"}],
+    }) is False
+
+
+def test_runtime_blocks_unconfirmed_click_before_page_interaction():
+    meta = {
+        "case_id": "C-ui-risk",
+        "writes": False,
+        "actions": [{"op": "click", "selector": "#open-details"}],
+    }
+    assert pw_runtime.effective_write_risk(meta) is True
+    with pytest.raises(pw_runtime.CaseSkip) as caught:
+        pw_runtime.CaseRunner(
+            {"done_cases": set(), "write_authorized": set()}, meta, page=object()
+        )
+    assert caught.value.code == "SKIP_WRITE_UNCONFIRMED"
 
 
 def test_ui_visual_capture_is_disabled_even_for_dynamic_target_credentials():
@@ -344,7 +355,8 @@ def test_execute_write_confirmed_runs(store, target, monkeypatch):
                              caller_surface="capability",
                              **decision_kwargs(
                                  bid, ["exectest/R1-C001"],
-                                 owner="unit-test-owner"))["ok"]
+                                 owner="unit-test-owner",
+                                 decided_by="manager(self-derived-pending-audit)"))["ok"]
     r = execute_run.execute(bid)
     assert r["receipt"]["counts"] == {"passed": 1}
 
