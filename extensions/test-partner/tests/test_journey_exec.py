@@ -108,6 +108,16 @@ def test_runtime_keeps_provable_get_read_only():
     }) is False
 
 
+def test_runtime_encodes_non_ascii_request_path_and_query_once():
+    encoded = pw_runtime.ascii_request_url(
+        "http://127.0.0.1/api/中文?language=한국어&ready=%E6%98%AF"
+    )
+    assert encoded == (
+        "http://127.0.0.1/api/%E4%B8%AD%E6%96%87"
+        "?language=%ED%95%9C%EA%B5%AD%EC%96%B4&ready=%E6%98%AF"
+    )
+
+
 def test_runtime_blocks_unconfirmed_click_before_page_interaction():
     meta = {
         "case_id": "C-ui-risk",

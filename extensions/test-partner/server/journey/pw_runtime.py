@@ -24,6 +24,7 @@ import json
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -76,6 +77,28 @@ def load_context() -> dict[str, Any]:
 
 _SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _UNPROVABLE_UI_WRITE_OPS = frozenset({"click"})
+
+
+def ascii_request_url(url: str) -> str:
+    """Encode non-ASCII path/query text without double-encoding `%xx` input.
+
+    ``urllib.request`` eventually hands the request target to ``http.client``,
+    which requires ASCII.  Product requirements and generated recipes routinely
+    contain Chinese/Korean query values, so the bundle runtime owns this final
+    wire-format conversion rather than making every model-produced recipe do it.
+    """
+    parts = urllib.parse.urlsplit(str(url))
+    path = urllib.parse.quote(
+        parts.path,
+        safe="/%:@!$&'()*+,;=-._~",
+    )
+    query = urllib.parse.quote(
+        parts.query,
+        safe="%=&;:+,/?@!$'()*-._~",
+    )
+    return urllib.parse.urlunsplit(
+        (parts.scheme, parts.netloc, path, query, parts.fragment)
+    )
 
 
 def effective_write_risk(meta: dict[str, Any]) -> bool:
@@ -223,7 +246,7 @@ class CaseRunner:
 
     # API 轨（红线 5：零跳转）
     def _op_request(self, a: dict[str, Any]) -> None:
-        url = self._url(a["path"])
+        url = ascii_request_url(self._url(a["path"]))
         method = a.get("method", "GET").upper()
         data = None
         headers = {}
