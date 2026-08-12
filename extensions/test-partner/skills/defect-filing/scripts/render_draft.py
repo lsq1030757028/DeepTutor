@@ -36,7 +36,7 @@ SECTIONS: tuple[str, ...] = (
     "环境", "复现步骤", "期望结果", "实际结果", "日志证据", "初步判断",
 )
 
-#: 字段编号的形状。别名 `cus_<中文名>` 不在此列——那正是我们要的写法。
+#: 字段编号的形状。缺陷侧一律不许出现（见 check_no_field_numbers 的实证）。
 FIELD_NUMBER_RE = re.compile(r"custom_field_\d+")
 
 #: 正文禁止项：优先级归 TAPD 字段、完整日志归附件。
@@ -73,16 +73,35 @@ def _walk_strings(node):
 def check_no_field_numbers(draft: dict) -> None:
     """硬纪律一：字段编号不硬编码。
 
-    缺陷侧连"现场查"的工具都没有（`get_entity_custom_fields` 不支持 bug），
-    所以这里不是"查了没有"而是"一律不许出现"，自定义字段走 `cus_<字段名>` 别名。
+    当版实证（2026-08-12 只读 `tapd_field_config`）：工作区 67600006 的 **bug 实体
+    自定义字段数 = 0**，同工作区 story 实体 = 29（阳性对照，证明 0 不是查询坏了）。
+    所以缺陷草稿里出现任何 `custom_field_<数字>` 都必然是错的——多半是从需求侧抄的
+    （需求侧那些编号是给 story 排的——比如筛「测试人员」用的那一栏，与缺陷无关）。
     """
     hits = sorted({m for s in _walk_strings(draft) for m in FIELD_NUMBER_RE.findall(s)})
     if hits:
         raise GateError(
             "E_FIELD_NUMBER",
             "草稿里出现了写死的字段编号 " + "、".join(hits)
-            + "；自定义字段改用 cus_<字段中文名> 别名，由 TAPD 后台转义。"
-            "缺陷侧没有查编号的工具面，猜出来的编号会静默写错栏。")
+            + "。字段编号按工作项类型各排各的号，需求侧的编号搬到缺陷上必然写错栏；"
+            "本工作区实测缺陷实体的自定义字段数为 0，本来就没有编号可填。")
+
+
+def check_custom_fields_are_verified(draft: dict) -> None:
+    """自定义字段：**没有经实证的写法通道就不许写**（fail-closed）。
+
+    官方建单工具的 docstring 提到 `cus_<别名>` 会被后台转义成 `custom_field_*`，
+    但那是**文档说法，本仓从未实测**；移植来源 `uiron_submit_bug.py` / `bugs/*.json`
+    全量检索也从不设任何自定义字段。把一条更严的纪律建在未证实的机制上，
+    比没有纪律更糟——所以这里不猜写法，直接要求停手问用户。
+    """
+    cf = draft.get("custom_fields") or {}
+    if cf:
+        raise GateError(
+            "E_CUSTOM_FIELD_UNVERIFIED",
+            f"草稿要写自定义字段 {sorted(cf)}，但本仓没有经实证的缺陷自定义字段写法通道。"
+            "先跑 tapd_field_config(workspace_id, entity_type=\"bug\") 现场查："
+            "查出来是空的就别填；非空则停手问用户该怎么写，不要照文档猜。")
 
 
 def check_sections(draft: dict) -> dict:
@@ -148,6 +167,7 @@ def check_body_bans(sections: dict) -> None:
 def validate(draft: dict) -> dict:
     """全部纪律闸。返回校验过的 sections。"""
     check_no_field_numbers(draft)
+    check_custom_fields_are_verified(draft)
     sections = check_sections(draft)
     check_single_log(sections)
     check_repro_verified(draft)

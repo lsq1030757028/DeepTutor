@@ -1,10 +1,11 @@
 {
   "_note": [
     "项目字段默认值。0027：『模板从小铁资产移植；项目字段默认值放 skill 配置里（泛化时按项目配置）』。",
-    "本文件**不得出现 custom_field_<数字>**——自定义字段一律用 cus_<字段中文名> 别名，",
-    "由 TAPD 后台转义（锚 mcp_server_tapd/server.py:753 建单工具的 docstring）。",
-    "缺陷侧没有查编号的工具：get_entity_custom_fields 的 entity_type 只支持",
-    "stories/tasks/iterations/tcases（锚 server.py:307），不含 bug。"
+    "本文件**不得出现 custom_field_<数字>**。当版实证（2026-08-12 只读 tapd_field_config）：",
+    "工作区 67600006 的 bug 实体自定义字段数 = 0，story 实体 = 29（阳性对照）。",
+    "所以缺陷侧本就没有自定义字段可填；草稿里出现编号必然是从需求侧抄来的。",
+    "换项目先现场查 tapd_field_config(entity_type=\"bug\")：非空就停手问用户——",
+    "本仓没有经实证的自定义字段写法通道，不许拿文档说法当机制用。"
   ],
   "vocabularies": {
     "severity": ["fatal", "serious", "normal", "prompt", "advice"],

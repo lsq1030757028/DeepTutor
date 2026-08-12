@@ -105,17 +105,28 @@ TAPD 自定义字段的编号**按工作项类型各排各的号**——同一�
 会静默腐烂的写法（`.agents/skills/tapd/config.yaml` 2026-08-03 全量复核：
 声明的 6 栏里 5 栏是错的）。
 
-**本 skill 的做法（比"现场查"更强的一档）**：自定义字段一律走**别名**
-`cus_<字段中文名>`，由 TAPD 后台自己转义成 `custom_field_*`
-（锚：`mcp_server_tapd/server.py:753` 建单工具的 docstring
-「`cus_{$自定义字段别名}`：参数名会由后台自动转义为 `custom_field_*`」）。
-草稿里出现 `custom_field_数字` 一律判红。
+**当版实证（2026-08-12，只读调用 `tapd_field_config`，带阳性对照）**：
 
-**现场查通道的真实边界（别抄错）**：`get_entity_custom_fields` 的
-`entity_type` 只支持 `stories / tasks / iterations / tcases`
-（锚：`server.py:307` docstring），**不支持 bug**。所以缺陷侧
-「现场查编号」这条路在这个工具面上**根本不存在**，只有别名一条路；
-真需要看编号时，让用户在 TAPD 页面上核对，不要猜、不要从需求侧的编号外推。
+| 工作区 | 实体 | 自定义字段数 |
+|---|---|---|
+| 67600006 | `bug` | **0** |
+| 67600006 | `story` | 29（阳性对照：同一工具同一工作区取得非空，证明 0 不是查询坏了） |
+
+也就是说，**本工作区的缺陷根本没有自定义字段可填**——草稿里出现任何
+`custom_field_<数字>` 都必然是错的（多半是从需求侧抄来的：`.agents/skills/tapd/config.yaml:158`
+用来筛需求的那一栏「测试人员」就是个带编号的 story 字段，**那是需求实体的编号，
+与缺陷无关**）。渲染器对这个形状一律判红。
+
+**换了项目怎么办**：先调 `tapd_field_config(workspace_id, entity_type="bug")`
+现场查。查出来是空的，就什么都不填；**查出来非空，停手问用户**——
+写法没有经实证的通道（官方建单工具的 docstring 提到 `cus_<别名>` 会被后台
+转义，但那是文档说法、本仓没有实测过，不许拿它当机制用；移植来源
+`uiron_submit_bug.py` / `bugs/*.json` 全量检索也**从不设任何自定义字段**）。
+
+顺带记一条工具面边界：官方 `get_entity_custom_fields` 的 `entity_type` 只支持
+`stories / tasks / iterations / tcases`（锚 `mcp_server_tapd/server.py:307`），
+**不含 bug**——缺陷侧的现场查要走 `tapd-capability` 的 `tapd_field_config`，
+那条通道支持 `entity_type="bug"`。
 
 ---
 

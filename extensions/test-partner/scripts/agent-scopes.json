@@ -1,0 +1,25 @@
+{
+  "_note": [
+    "并行施工时各线的独占区声明，由协调方（main）维护，施工线不自己往里加。",
+    "被 scripts/staged_scope_guard.py 读；查不到的 agent 一律 fail closed（退出码 2）。",
+    "前缀是路径前缀匹配，不做 glob：以 / 结尾表示目录，否则表示文件名前缀。",
+    "缘起 BB-518（2026-08-12 同日两起越界：一次全量 add 卷走他人在建文件，一次覆盖他人 SKILL.md）。"
+  ],
+  "agents": {
+    "m2-defect": {
+      "owner": "缺陷出口 skill",
+      "allow": [
+        "extensions/test-partner/skills/defect-filing/",
+        "extensions/test-partner/tests/test_defect_",
+        "extensions/test-partner/scripts/staged_scope_guard.py",
+        "extensions/test-partner/scripts/agent-scopes.json",
+        "extensions/test-partner/tests/test_scope_guard.py"
+      ],
+      "granted_by": "main 2026-08-12 归属裁定"
+    }
+  },
+  "_pending": [
+    "m2-build3 / m2-i18n 两条线的前缀由 main 补：本文件不替别人声明独占区——",
+    "替人声明等于替人担保，声明错了会把真越界放行。"
+  ]
+}

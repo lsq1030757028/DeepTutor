@@ -2,7 +2,9 @@
   "_note": [
     "样例草稿：拿本线一条**真实已分配**的缺陷 BB-501（bug-bank 在册，2026-08-12 复核命中 1 条）",
     "改写成 TAPD 提单形状，用来跑 dry-run 与回归。不许拿没分配的编号占位。",
-    "跑法：python -X utf8 ../scripts/render_draft.py --draft example-draft.json"
+    "跑法：python -X utf8 ../scripts/render_draft.py --draft example-draft.json",
+    "custom_fields 空着是**实测结论不是省事**：工作区 67600006 的 bug 实体自定义字段数 = 0",
+    "（2026-08-12 只读 tapd_field_config，同工作区 story 实体取到 29 条作阳性对照）。"
   ],
   "project": "uiron-ip-robot",
   "repro_verified": true,
@@ -16,9 +18,7 @@
     "de": "",
     "te": "李森权"
   },
-  "custom_fields": {
-    "cus_发现阶段": "测试执行"
-  },
+  "custom_fields": {},
   "sections": {
     "环境": [
       "被测对象：extensions/test-partner 测试套（本机 Windows 11 + pytest）",
