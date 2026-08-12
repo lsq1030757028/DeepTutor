@@ -72,10 +72,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies. Debian slim currently publishes HTTP mirror URLs;
+# promote them to TLS and retry transient mirror/proxy 5xx responses. Without
+# this, one failed archive fetch aborts an otherwise reproducible image build.
 # Note: libgl1 and libglib2.0-0 are required for OpenCV (used by mineru)
 # Rust is required for building tiktoken and other packages without pre-built wheels
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
+        /etc/apt/sources.list.d/debian.sources \
+    && apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
     curl \
     git \
     build-essential \
@@ -132,7 +137,10 @@ WORKDIR /app
 #       installs with `pip install git+…`, which shells out to git. It is needed
 #       in *this* image and not in the runner: installing is a privileged
 #       main-app action, running is the runner's (Dockerfile.runner).
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
+        /etc/apt/sources.list.d/debian.sources \
+    && apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
     curl \
     ca-certificates \
     bash \
@@ -493,7 +501,8 @@ RUN mkdir -p /app/web/.next \
     && chown deeptutor:deeptutor /app/web /app/web/.next
 
 # Install development tools
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
     vim \
     git \
     && rm -rf /var/lib/apt/lists/*
