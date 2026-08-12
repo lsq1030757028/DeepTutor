@@ -108,6 +108,8 @@ def test_dockerfile_uses_tls_and_retries_for_debian_packages() -> None:
     assert "http://deb.debian.org/debian" not in content
     assert content.count("apt-get -o Acquire::Retries=5 update") == 3
     assert content.count("apt-get -o Acquire::Retries=5 install") == 3
+    assert "curl --retry 5 --retry-all-errors --connect-timeout 30" in content
+    assert "RUSTUP_MAX_RETRIES=5 sh -s -- -y --profile=minimal" in content
 
 
 def test_supervisord_runs_as_root_with_unprivileged_children() -> None:

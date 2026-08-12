@@ -92,7 +92,9 @@ RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
     pkg-config \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/* \
-    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    && curl --retry 5 --retry-all-errors --connect-timeout 30 \
+        --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | RUSTUP_MAX_RETRIES=5 sh -s -- -y --profile=minimal
 
 # Add Rust to PATH
 ENV PATH="/root/.cargo/bin:${PATH}"
