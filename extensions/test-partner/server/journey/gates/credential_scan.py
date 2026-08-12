@@ -33,6 +33,17 @@ PLACEHOLDER = re.compile(r"^\{\{[A-Za-z_][A-Za-z0-9_]*\}\}$")
 # acs-/b-/r- + 8 位日期 + 短随机 hex 是设计内可见 id，不构成泄密面。
 ID_FORM = re.compile(
     r"^(?:[a-z_]+=)?(?:acs|b|r)-[0-9]{8}-[0-9a-f]{6,}$")
+#: case_id 也是设计内的公开标识符（`<slug>/R<n>-C<nnn>`，形态由 schema 定义）。
+#:
+#: 为什么要单列：URL 路径那条排除规则要求 `/` 两侧有**纯字母**且 ≥3 长的词段，
+#: 而 slug 一旦带连字符或数字（`queenie-ko-main`）就不满足，于是 `queenie-ko-main/R4-C001`
+#: 被当成高熵凭据，**整个 bundle 拒编译**。实测就是这么撞上的：既有测试用的 slug 是
+#: 纯字母的 `exectest`，所以这个洞一直没露面。
+#:
+#: 一个会对系统自己的标识符报警的凭据扫描，第一次被撞见时人们会去改标识符，
+#: 第二次就会去关掉它——**误报是让闸被关掉的最短路径**，所以按形态豁免，
+#: 而不是让使用者绕着走。known-secret 仍然全量精确匹配、不受任何豁免影响。
+CASE_ID_FORM = re.compile(r"^[a-z0-9-]+/R[0-9]+-C[0-9]{3}$")
 ENTROPY_THRESHOLD = 3.8   # bits/char；base64 随机串 ~6，英文单词 ~2-3
 MIN_SECRET_LEN = 4
 
@@ -49,7 +60,8 @@ def shannon_entropy(s: str) -> float:
 
 def _is_allowlisted(token: str) -> bool:
     return bool(SHA_PREFIXED.match(token) or HEX_RE.match(token)
-                or PLACEHOLDER.match(token) or ID_FORM.match(token))
+                or PLACEHOLDER.match(token) or ID_FORM.match(token)
+                or CASE_ID_FORM.match(token))
 
 
 def _iter_files(root: str):

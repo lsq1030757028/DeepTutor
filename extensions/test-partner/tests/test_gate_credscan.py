@@ -61,3 +61,42 @@ def test_plain_prose_not_flagged(tmp_path):
         "playwright_trace screenshot http_transcript", encoding="utf-8")
     r = cs.scan_tree(str(tmp_path))
     assert r["ok"], r["entropy_hits"]
+
+
+# ── case_id 误报（L3 主证据实测撞上）─────────────────────────────────────────
+
+
+def test_case_id_with_hyphenated_slug_is_not_flagged():
+    """`<带连字符的 slug>/R4-C001` 不许被当成高熵凭据。
+
+    实测撞法：既有测试用的 slug 是纯字母 `exectest`，而真实批次用了
+    `queenie-ko-main`——URL 路径排除规则要求 `/` 两侧有纯字母词段，
+    带连字符的 slug 不满足，于是整个 bundle 因"凭据扫描命中"被拒编译。
+    """
+    from server.journey.gates import credential_scan as cs
+    for cid in ("queenie-ko-main/R4-C001", "queenie-ko-control/R7-C099",
+                "a1-b2-c3/R10-C123", "exectest/R1-C001"):
+        assert cs._is_allowlisted(cid), cid
+
+
+def test_case_id_form_matches_the_schema_definition():
+    """豁免形态与 schema 的 CASE_ID_RE 同源，不是另抄一份。"""
+    from server.journey import schema
+    from server.journey.gates import credential_scan as cs
+    for cid in ("queenie-ko-main/R4-C001", "x/R1-C001"):
+        assert bool(schema.CASE_ID_RE.match(cid)) == bool(cs.CASE_ID_FORM.match(cid))
+
+
+def test_allowlist_does_not_shield_a_known_secret_shaped_like_a_case_id(tmp_path):
+    """豁免只对启发式生效：**known-secret 全量精确匹配不受任何豁免影响**。
+
+    这条单列，因为"加了豁免"最怕的后果不是漏一个高熵串，
+    是把一条真凭据顺带放行——那会让扫描从防线变成背书。
+    """
+    from server.journey.gates import credential_scan as cs
+    secret = "queenie-ko-main/R4-C001"
+    (tmp_path / "leak.json").write_text(
+        '{"note": "%s"}' % secret, encoding="utf-8")
+    res = cs.scan_tree(str(tmp_path), known_secrets=[secret])
+    assert not res["ok"]
+    assert res["known_hits"], "已知凭据即使形似 case_id 也必须被抓到"

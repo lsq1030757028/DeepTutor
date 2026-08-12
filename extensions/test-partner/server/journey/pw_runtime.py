@@ -212,6 +212,12 @@ class CaseRunner:
         elif a.get("body_json") is not None:
             data = self._render(json.dumps(a["body_json"], ensure_ascii=False)).encode()
             headers["Content-Type"] = "application/json"
+        # 自定义请求头（鉴权用）。值走 _render，所以写的是 {{adminToken}} 这种变量引用，
+        # **不是字面量** —— 凭据只经执行期 TP_VARS_JSON 进内存，bundle 里存的始终是变量名。
+        # 头的值不进 http_transcript（那里只记 method/url/status/body_head），
+        # 且变量值已在 scrub_map 里，万一从别的口子漏出来也会被遮盖。
+        for hk, hv in (a.get("headers") or {}).items():
+            headers[str(hk)] = self._render(str(hv))
         if self._cookies:
             headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in self._cookies.items())
 
