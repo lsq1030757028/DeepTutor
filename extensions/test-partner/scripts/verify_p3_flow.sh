@@ -9,6 +9,15 @@
 # 那**不是失败**——它正是我们要验的空态之一（后端把它翻成 409 而不是把 401 甩出来）。
 # 配了 key 的环境里再跑一次本脚本，第 7-9 步会走通真实生成。
 
+flow_exit_code() {
+  [ "${1:-1}" -eq 0 ]
+}
+
+# 允许单元测试只加载纯 verdict 函数，绝不触发容器、网络或文件副作用。
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0
+fi
+
 set -uo pipefail
 IMAGE="${1:-deeptutor:p3-full}"
 NAME="deeptutor-p3flow"
@@ -181,4 +190,5 @@ printf '  PASS=%d  FAIL=%d\n' "$PASS" "$FAIL"
 printf '  验证实例保留为 %s（端口 %s），复核后 docker rm -f %s\n' "$NAME" "$PORT" "$NAME"
 [ "$FAIL" -eq 0 ] && printf '  判定：P3 全链路在自建镜像里可用\n' \
                   || printf '  判定：有未通过项，见上\n'
-exit 0
+flow_exit_code "$FAIL"
+exit $?

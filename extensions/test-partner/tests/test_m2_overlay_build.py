@@ -24,6 +24,10 @@ def test_overlay_copies_the_live_next_standalone_root() -> None:
 
     assert "web/.next/standalone/DeepTutor/web/ ./web/" in recipe
     assert "web/.next/standalone/ ./web/" not in recipe
+    reset_at = recipe.index("RUN rm -rf /app/web")
+    copy_at = recipe.index("COPY --chown=deeptutor:deeptutor web/.next/standalone")
+    assert reset_at < copy_at
+    assert "mkdir -p /app/web" in recipe
     assert 'test -f /app/web/server.js' in recipe
     assert 'test -d "/app/web/.next/server/app/(workspace)/test-journey"' in recipe
     assert "test ! -d /app/web/DeepTutor/web" in recipe
@@ -83,9 +87,7 @@ def test_temporary_context_guard_rejects_broad_or_lookalike_paths() -> None:
 def test_build_script_rebuilds_web_before_staging_by_default() -> None:
     script = BUILD_SCRIPT.read_text(encoding="utf-8")
     build_at = script.index("& npm.cmd run build")
-    stage_at = script.index(
-        'Copy-Item -LiteralPath (Join-Path $repoRoot "web\\.next\\standalone")'
-    )
+    stage_at = script.index("Copy-DirectoryTree -Source $standaloneRoot")
 
     assert build_at < stage_at
     assert "[switch]$SkipWebBuild" in script
@@ -94,3 +96,20 @@ def test_build_script_rebuilds_web_before_staging_by_default() -> None:
     assert "$npmExitCode = $LASTEXITCODE" in script
     assert "& docker.exe build" in script
     assert "$dockerExitCode = $LASTEXITCODE" in script
+
+
+def test_build_script_discovers_and_normalizes_the_clean_worktree_standalone_root() -> None:
+    script = BUILD_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'web\\.next\\required-server-files.json' in script
+    assert "$requiredServerFiles.appDir" in script
+    assert "manifest does not belong to this web root" in script
+    assert "$requiredServerFiles.relativeAppDir" in script
+    assert "Next 16.3 emits the app directly at standalone/" in script
+    assert "$standaloneRoot = $standaloneBase" in script
+    assert "[IO.Path]::IsPathRooted($relativeAppDir)" in script
+    assert "$standaloneRoot.StartsWith" in script
+    assert 'web\\.next\\standalone\\DeepTutor' in script
+    assert 'Join-Path $normalizedStandaloneParent "web"' in script
+    assert "Get-Command robocopy.exe" in script
+    assert "$copyExitCode -gt 7" in script

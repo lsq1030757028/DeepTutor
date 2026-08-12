@@ -20,11 +20,28 @@
 # 真红混进来谁也认不出）。看到条数变多就要问为什么。
 # 扣已知、其余任何红都算真红。
 
+filter_unexpected_node_failures() {
+  local output="$1"
+  local known_pattern="$2"
+  if [ -n "$known_pattern" ]; then
+    printf '%s\n' "$output" | grep "^not ok" | grep -vE "$known_pattern" || true
+  else
+    printf '%s\n' "$output" | grep "^not ok" || true
+  fi
+}
+
+# 单元测试只加载筛选函数，不运行四层回归闸。
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0
+fi
+
 set -uo pipefail
 IMAGE="${1:-deeptutor:p3-full}"
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 FAIL=0
 DEDUCT="$ROOT/extensions/test-partner/scripts/deductions.py"
+NODE_BIN="${NODE_BIN:-node}"
+NPM_BIN="${NPM_BIN:-npm}"
 say(){ printf '\n=== %s ===\n' "$1"; }
 verdict(){ if [ "$1" -eq 0 ]; then printf '  [PASS] %s\n' "$2"; else printf '  [FAIL] %s\n' "$2"; FAIL=1; fi }
 
@@ -59,7 +76,7 @@ verdict "${PIPESTATUS[0]}" "extensions/test-partner pytest（venv 解释器）"
 
 say "2/4 i18n 硬闸"
 # 脚本真身在 web/scripts/ 下，不在仓库根（在根目录跑会 MODULE_NOT_FOUND）
-( cd "$ROOT/web" && node scripts/i18n_parity.mjs )
+( cd "$ROOT/web" && "$NODE_BIN" scripts/i18n_parity.mjs )
 verdict $? "i18n parity"
 
 say "3/4 前端 node 测试 + eslint"
@@ -68,27 +85,38 @@ if [ ! -d "$ROOT/web/node_modules" ]; then
   printf '  [FAIL] web/node_modules 未安装。先跑：cd web && npm ci\n'
   FAIL=1
 else
-  node_out=$(cd "$ROOT/web" && npm run --silent test:node 2>&1)
+  node_out=$(cd "$ROOT/web" && "$NODE_BIN" scripts/run-node-tests.mjs 2>&1)
   printf '%s\n' "$node_out" | grep -E "^# (pass|fail) " | sed 's/^/  /'
-  unexpected=$(printf '%s\n' "$node_out" | grep "^not ok" \
-    | grep -vE "$KNOWN_BROKEN_NODE_TESTS" || true)
+  unexpected=$(filter_unexpected_node_failures "$node_out" "$KNOWN_BROKEN_NODE_TESTS")
   if [ -z "$unexpected" ]; then
-    verdict 0 "web test:node（已知 4 个上游坏件之外零失败）"
+    verdict 0 "web test:node（具名扣除清单之外零失败）"
   else
     printf '%s\n' "$unexpected" | head -5
     verdict 1 "web test:node 出现基线外失败"
   fi
-  ( cd "$ROOT/web" && npx --no-install eslint . >/dev/null 2>&1 )
+  ( cd "$ROOT/web" && "$NODE_BIN" node_modules/eslint/bin/eslint.js . >/dev/null 2>&1 )
   verdict $? "eslint（0 error 即过，warning 不拦）"
+  audit_out=$(cd "$ROOT/web" && "$NPM_BIN" audit --audit-level=high --no-fund 2>&1)
+  audit_code=$?
+  if [ "$audit_code" -ne 0 ]; then
+    printf '%s\n' "$audit_out" | tail -12
+  fi
+  verdict "$audit_code" "npm audit（high/critical 必须为 0；中低风险显式留给审查）"
 fi
 
-say "4/4 上游 tests/api（镜像内挂仓跑；镜像不带 pytest，先装）"
-# Git Bash 下 /d/... 形式的挂载路径会被改写，用 Windows 形式（pwd -W）；
+say "4/4 上游 tests/api（只读源码 + 临时数据卷；镜像不带 pytest，先装）"
+# Git Bash 下 /d/... 形式的挂载路径会被改写，用 Windows 形式（pwd -W）。
+# 源码只读，/repo/data 用随容器销毁的匿名卷；先从只读种子复制配置和夹具，
+# 避免回归测试改到用户数据。生产镜像默认忽略进程覆盖，这里显式关闭，
+# 让 monkeypatch 环境变量的配置契约按 CI 测试形态生效。
 # 容器内不接 tail——管道会把 pytest 的退出码换成 tail 的 0。
 WIN_ROOT="$(cd "$ROOT" && pwd -W 2>/dev/null || pwd)"
 UPSTREAM_DESELECT=$("$PY" "$DEDUCT" --layer upstream-tests --format pytest-deselect)
-docker run --rm -v "$WIN_ROOT:/repo" --entrypoint sh "$IMAGE" -c \
-  "pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple pytest pytest-asyncio >/dev/null 2>&1; \
+MSYS_NO_PATHCONV=1 docker run --rm -e DEEPTUTOR_IGNORE_PROCESS_ENV_OVERRIDES=0 \
+  -v "$WIN_ROOT:/repo:ro" -v "$WIN_ROOT/data:/seed-data:ro" -v /repo/data \
+  --entrypoint sh "$IMAGE" -c \
+  "cp -a /seed-data/. /repo/data/; \
+   pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple pytest pytest-asyncio >/dev/null 2>&1; \
    cd /repo && python -m pytest tests/api tests/core -q --no-header --tb=no \
      $UPSTREAM_DESELECT" 2>&1 | tail -3
 verdict "${PIPESTATUS[0]}" "upstream tests/api+core（按具名清单扣除）"

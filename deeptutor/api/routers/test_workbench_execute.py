@@ -52,7 +52,11 @@ from pydantic import BaseModel, Field
 
 from deeptutor.api.routers.test_workbench_paths import (
     deliveries_root as _deliveries_root,
+)
+from deeptutor.api.routers.test_workbench_paths import (
     owner_id as _owner,
+)
+from deeptutor.api.routers.test_workbench_paths import (
     require_extension as _require_extension,
 )
 from deeptutor.multi_user.paths import owner_secrets_dir
@@ -77,8 +81,7 @@ def _env_store() -> Any:
     with _LOCK:
         store = _STORES.get(owner)
         if store is None:
-            store = GatewayConfig(
-                config_dir=str(owner_secrets_dir(owner) / "test-workbench"))
+            store = GatewayConfig(config_dir=str(owner_secrets_dir(owner) / "test-workbench"))
             _STORES[owner] = store
         return store
 
@@ -95,19 +98,22 @@ def _registry() -> Any:
         registry = _REGISTRIES.get(owner)
         if registry is None:
             registry = wb.RunRegistry(
-                executor=partial(execute.execute_cases, env_store=store),
-                deliveries_root_dir=root)
+                executor=partial(execute.execute_cases, env_store=store), deliveries_root_dir=root
+            )
             _REGISTRIES[owner] = registry
         return registry
 
 
 def _wb_error(exc: Any) -> HTTPException:
     """WorkbenchError → HTTP。code 一并带出去，页面按它分支。"""
-    return HTTPException(status_code=400, detail={
-        "code": getattr(exc, "code", "WORKBENCH_ERROR"), "message": str(exc)})
+    return HTTPException(
+        status_code=400,
+        detail={"code": getattr(exc, "code", "WORKBENCH_ERROR"), "message": str(exc)},
+    )
 
 
 # ── 测试环境与变量（设计稿第 9 屏） ──────────────────────────────────────────
+
 
 class EnvironmentBody(BaseModel):
     name: str = Field(..., min_length=1)
@@ -144,21 +150,27 @@ def save_environment(body: EnvironmentBody) -> dict[str, Any]:
                 if not value and key in previous["variables"]:
                     variables[key] = previous["variables"][key]
         saved = store.upsert_environment(
-            {"name": body.name, "base_url": body.base_url,
-             "note": body.note, "variables": variables},
-            original_name=body.original_name)
+            {
+                "name": body.name,
+                "base_url": body.base_url,
+                "note": body.note,
+                "variables": variables,
+            },
+            original_name=body.original_name,
+        )
     except EnvironmentConfigError as exc:
-        raise HTTPException(status_code=400, detail={
-            "code": exc.code, "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=400, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
     except OSError as exc:
-        raise HTTPException(status_code=500, detail={
-            "code": "SAVE_FAILED",
-            "message": f"写环境配置失败：{exc}"}) from exc
+        raise HTTPException(
+            status_code=500, detail={"code": "SAVE_FAILED", "message": f"写环境配置失败：{exc}"}
+        ) from exc
 
-    logger.info("workbench: 环境「%s」已保存（%d 个变量，值不记录）",
-                saved["name"], len(saved["variables"]))
-    return {"ok": True, "saved": saved["name"],
-            "environments": store.environments_public()}
+    logger.info(
+        "workbench: 环境「%s」已保存（%d 个变量，值不记录）", saved["name"], len(saved["variables"])
+    )
+    return {"ok": True, "saved": saved["name"], "environments": store.environments_public()}
 
 
 class EnvironmentDeleteBody(BaseModel):
@@ -182,12 +194,15 @@ def delete_environment(body: EnvironmentDeleteBody) -> dict[str, Any]:
     """删一个环境（名字走请求体，不走 URL——中文环境名进路径是自找编码问题）。"""
     store = _env_store()
     if not store.delete_environment(body.name):
-        raise HTTPException(status_code=404, detail={
-            "code": "ENV_NOT_FOUND", "message": f"没有名为「{body.name}」的环境。"})
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "ENV_NOT_FOUND", "message": f"没有名为「{body.name}」的环境。"},
+        )
     return {"ok": True, "environments": store.environments_public()}
 
 
 # ── 执行（设计稿第 8 屏） ───────────────────────────────────────────────────
+
 
 class RunBody(BaseModel):
     env: str = Field(..., min_length=1)
@@ -203,8 +218,12 @@ def start_run(delivery_id: str, body: RunBody) -> dict[str, Any]:
     wb = _require_extension()
     try:
         return _registry().start(
-            delivery_id=delivery_id, env=body.env, case_ids=body.case_ids,
-            timeout_s=body.timeout_s, auth=body.auth)
+            delivery_id=delivery_id,
+            env=body.env,
+            case_ids=body.case_ids,
+            timeout_s=body.timeout_s,
+            auth=body.auth,
+        )
     except wb.WorkbenchError as exc:
         raise _wb_error(exc) from exc
 
@@ -231,6 +250,7 @@ def active_run(delivery_id: str) -> dict[str, Any]:
 
 # ── 导出与下载（设计稿第 7 屏） ─────────────────────────────────────────────
 
+
 class ExportBody(BaseModel):
     #: 页面四张卡的多选结果，如 ["xlsx", "postman"]。
     formats: list[str] = Field(..., min_length=1)
@@ -244,8 +264,9 @@ def export_delivery(delivery_id: str, body: ExportBody) -> dict[str, Any]:
     """把批次（重新）写成所选格式，产物落在批次目录内，返回文件清单。"""
     wb = _require_extension()
     try:
-        return wb.export_delivery(delivery_id, body.formats, _deliveries_root(),
-                                  redact_pii=body.redact_pii)
+        return wb.export_delivery(
+            delivery_id, body.formats, _deliveries_root(), redact_pii=body.redact_pii
+        )
     except wb.WorkbenchError as exc:
         raise _wb_error(exc) from exc
 
@@ -258,8 +279,7 @@ def download_file(delivery_id: str, filename: str) -> Response:
         path = wb.delivery_file_path(delivery_id, filename, _deliveries_root())
     except wb.WorkbenchError as exc:
         raise _wb_error(exc) from exc
-    return FileResponse(path, filename=filename,
-                        media_type="application/octet-stream")
+    return FileResponse(path, filename=filename, media_type="application/octet-stream")
 
 
 @router.get("/deliveries/{delivery_id}/archive")
@@ -278,13 +298,12 @@ def download_archive(delivery_id: str, files: str = "") -> Response:
     try:
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
             for name in names:
-                archive.write(wb.delivery_file_path(delivery_id, name, root),
-                              arcname=name)
+                archive.write(wb.delivery_file_path(delivery_id, name, root), arcname=name)
     except wb.WorkbenchError as exc:
         raise _wb_error(exc) from exc
     safe_id = wb.safe_delivery_id(delivery_id)
     return Response(
         content=buffer.getvalue(),
         media_type="application/zip",
-        headers={"Content-Disposition":
-                 f'attachment; filename="{safe_id}.zip"'})
+        headers={"Content-Disposition": f'attachment; filename="{safe_id}.zip"'},
+    )

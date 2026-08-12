@@ -115,24 +115,26 @@ def api_case(draft_id, path="/api/ping", expect_status=200, json_path=None,
     }
 
 
-def build_batch(store, target, cases):
-    r = ingest.ingest("执行侧自测", target, source_kind="requirement_doc",
-                      source_ref="local", requirement_text="接口需求正文",
-                      tier="standard", tier_confirmed_via="test")
-    assert r["ok"], r
-    bid = r["batch_id"]
-    assert clarify.clarify(bid, rules=[{"rule_id": "R1", "statement": "接口规则",
-                                        "source_quote": "q"}],
-                           confirmed_facts_md=GOOD_FACTS)["ok"]
-    assert analyze.analyze(bid, example_map=[
-        {"rule_id": "R1", "charter": "接口", "examples": [{"id": "e1"}]}],
-        analysis_md=GOOD_ANALYSIS)["ok"]
-    dr = draft_cases.draft(bid, cases=cases)
-    assert dr["ok"], dr["errors"]
-    ad = adopt.adopt(bid, selected_draft_ids=[c["draft_id"] for c in cases],
-                     caseset_slug="exectest")
-    assert ad["ok"], ad
-    return bid
+def build_batch(store, target, cases, *, owner="unit-test-owner"):
+    partition = owner
+    with artifacts.trusted_owner(partition):
+        r = ingest.ingest("执行侧自测", target, source_kind="requirement_doc",
+                          source_ref="local", requirement_text="接口需求正文",
+                          tier="standard", tier_confirmed_via="test", owner=owner)
+        assert r["ok"], r
+        bid = r["batch_id"]
+        assert clarify.clarify(bid, rules=[{"rule_id": "R1", "statement": "接口规则",
+                                            "source_quote": "q"}],
+                               confirmed_facts_md=GOOD_FACTS)["ok"]
+        assert analyze.analyze(bid, example_map=[
+            {"rule_id": "R1", "charter": "接口", "examples": [{"id": "e1"}]}],
+            analysis_md=GOOD_ANALYSIS)["ok"]
+        dr = draft_cases.draft(bid, cases=cases)
+        assert dr["ok"], dr["errors"]
+        ad = adopt.adopt(bid, selected_draft_ids=[c["draft_id"] for c in cases],
+                         caseset_slug="exectest")
+        assert ad["ok"], ad
+        return bid
 
 
 # ── compile-gate ───────────────────────────────────────────────────────────
@@ -243,6 +245,7 @@ def test_execute_write_confirmed_runs(store, target):
     # 它绿着，而真实链路上写确认压根没有写入口，卡答完照样被拦。
     from server.journey import tools as _jt
     assert _jt.write_confirm(batch_id=bid, case_ids=["exectest/R1-C001"],
+                             owner="unit-test-owner",
                              decided_by="manager(self-derived-pending-audit)",
                              caller_surface="capability")["ok"]
     r = execute_run.execute(bid)
@@ -290,6 +293,40 @@ def test_execute_credscan_catches_echoed_secret(store, target):
     assert scan["known_hits"] == []
 
 
+def test_execute_omits_pytest_secret_and_final_scan_covers_receipt(
+        store, target, monkeypatch):
+    bid = build_batch(store, target, [api_case("d1"), api_case("d2")])
+    assert compile_bundle.compile_bundle(bid)["ok"]
+    secret = "tail-secret-" + "7Qx9" + "Lm2P"
+    real_run = execute_run.subprocess.run
+    real_scan = execute_run.credential_scan.scan_tree
+    receipt_seen = []
+
+    def stdout_with_secret(*args, **kwargs):
+        proc = real_run(*args, **kwargs)
+        proc.stdout = (proc.stdout or "") + "\n" + secret
+        return proc
+
+    def scan_after_receipt(root, **kwargs):
+        receipt_seen.append(os.path.isfile(os.path.join(root, "receipt.json")))
+        return real_scan(root, **kwargs)
+
+    monkeypatch.setattr(execute_run.subprocess, "run", stdout_with_secret)
+    monkeypatch.setattr(execute_run.credential_scan, "scan_tree", scan_after_receipt)
+    r = execute_run.execute(bid, variables={"runtime_password": secret})
+    assert r["ok"], r
+    assert r["receipt"]["credential_scan_ok"] is True
+    assert r["receipt"]["credential_scan_passes"] == 2
+    assert r["receipt"]["pytest_tail_omitted"] is True
+    assert secret not in r["receipt"]["pytest_tail"]
+    assert receipt_seen == [True, True]
+    needle = secret.encode("utf-8")
+    for dirpath, _dirs, files in os.walk(r["run_dir"]):
+        for name in files:
+            with open(os.path.join(dirpath, name), "rb") as fh:
+                assert needle not in fh.read(), name
+
+
 def test_execute_security_scan_failure_blocks_receipt_and_projection(
         store, target, monkeypatch):
     bid = build_batch(store, target, [api_case("d1"), api_case("d2")])
@@ -318,6 +355,55 @@ def test_execute_resume_skips_done(store, target):
     rows = execute_run._read_results(r2["run_dir"])
     assert len([x for x in rows if x["case_id"] == "exectest/R1-C001"]) == 1
     assert {x["case_id"] for x in rows} == {"exectest/R1-C001", "exectest/R1-C002"}
+
+
+def test_execute_resume_unknown_run_fails_without_creating_directory(store, target):
+    bid = build_batch(store, target, [api_case("d1"), api_case("d2")])
+    assert compile_bundle.compile_bundle(bid)["ok"]
+    unknown = "r-20260812-abcdef"
+    owner = store.load_batch(bid)["partition"]
+    expected = store.run_dir(unknown, owner=owner)
+    assert not os.path.exists(expected)
+    r = execute_run.execute(bid, resume_run_id=unknown)
+    assert not r["ok"] and r["error"] == "RESUME_RUN_MISMATCH"
+    assert not os.path.exists(expected)
+
+
+def test_execute_resume_cross_batch_fails_without_touching_old_run(store, target):
+    cases = [api_case("d1"), api_case("d2")]
+    first = build_batch(store, target, cases)
+    second = build_batch(store, target, cases)
+    assert compile_bundle.compile_bundle(first)["ok"]
+    assert compile_bundle.compile_bundle(second)["ok"]
+    old = execute_run.execute(first)
+    assert old["ok"]
+
+    def snapshot(path):
+        return {os.path.relpath(os.path.join(d, f), path):
+                open(os.path.join(d, f), "rb").read()
+                for d, _dirs, files in os.walk(path) for f in files}
+
+    before = snapshot(old["run_dir"])
+    r = execute_run.execute(second, resume_run_id=old["run_id"])
+    assert not r["ok"] and r["error"] == "RESUME_RUN_MISMATCH"
+    assert snapshot(old["run_dir"]) == before
+    assert store.load_batch(second)["run_ids"] == []
+
+
+def test_execute_resume_cross_owner_fails_closed(store, target):
+    cases = [api_case("d1"), api_case("d2")]
+    first = build_batch(store, target, cases, owner="owner-a")
+    second = build_batch(store, target, cases, owner="owner-b")
+    assert compile_bundle.compile_bundle(first)["ok"]
+    assert compile_bundle.compile_bundle(second)["ok"]
+    old = execute_run.execute(first)
+    assert old["ok"]
+    owner_b_target = store.run_dir(old["run_id"], owner="owner-b")
+    assert not os.path.exists(owner_b_target)
+    r = execute_run.execute(second, resume_run_id=old["run_id"])
+    assert not r["ok"] and r["error"] == "RESUME_RUN_MISMATCH"
+    assert not os.path.exists(owner_b_target)
+    assert store.load_batch(second, owner="owner-b")["run_ids"] == []
 
 
 def test_concurrency_slot_limit(store, target, monkeypatch):

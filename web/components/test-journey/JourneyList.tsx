@@ -9,12 +9,12 @@
 // 摊在列表卡上只会让人在十几张卡上数格子——那正是上一版被判不通过的病因。
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import ErrorState from "@/components/test-journey/ErrorState";
-import { callJourney } from "@/components/test-journey/client";
+import { listJourneyBatches } from "@/components/test-journey/client";
 import type { BatchSummary } from "@/components/test-journey/types";
 import { projectSegments } from "@/components/test-journey/types";
 
@@ -51,12 +51,15 @@ export default function JourneyList() {
   const [batches, setBatches] = useState<BatchSummary[]>([]);
   const [error, setError] = useState<{ code: string; message?: string } | null>(null);
   const [loading, setLoading] = useState(true);
+  const requestIdRef = useRef(0);
 
   // 注意：`load` 里**第一个 await 之前不许 setState**。首次加载是从 effect 里调的，
   // 在 effect 内同步 setState 会触发级联渲染（eslint 该规则在本仓是 error 级）。
   // 所以 loading 的初值就是 true，转菊花由按钮那条路自己置。
   const load = useCallback(async () => {
-    const result = await callJourney("list_batches");
+    const requestId = ++requestIdRef.current;
+    const result = await listJourneyBatches();
+    if (requestId !== requestIdRef.current) return;
     if (!result.ok) {
       setError({ code: result.code, message: result.message });
       setBatches([]);
@@ -78,11 +81,12 @@ export default function JourneyList() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      if (cancelled) return;
-      await load();
+      await Promise.resolve();
+      if (!cancelled) await load();
     })();
     return () => {
       cancelled = true;
+      requestIdRef.current += 1;
     };
   }, [load]);
 

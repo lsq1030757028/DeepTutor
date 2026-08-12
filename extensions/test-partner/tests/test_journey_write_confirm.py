@@ -21,6 +21,12 @@ from server.journey import compile_bundle
 from tests.test_journey_exec import (  # noqa: F401 - fixtures 经 import 生效
     api_case, build_batch, store, target)
 
+TRUSTED_OWNER = "unit-test-owner"
+
+
+def _confirm(**kwargs):
+    return tools.write_confirm(owner=TRUSTED_OWNER, **kwargs)
+
 
 def _batch_with_one_write_case(store, target):
     return build_batch(store, target, [api_case("dw", writes=True),
@@ -32,7 +38,7 @@ def _batch_with_one_write_case(store, target):
 
 def test_confirm_writes_a_real_event_the_runtime_can_find(store, target):
     bid = _batch_with_one_write_case(store, target)
-    out = tools.write_confirm(batch_id=bid, case_ids=["exectest/R1-C001"],
+    out = _confirm(batch_id=bid, case_ids=["exectest/R1-C001"],
                               decided_by="manager", caller_surface="capability")
     assert out["ok"], out
     types = [e["type"] for e in artifacts.read_events(bid)]
@@ -47,7 +53,7 @@ def test_empty_selection_is_a_legal_answer_not_an_error(store, target):
     前者是用户看过并拒绝了，后者是这道闸还没走。
     """
     bid = _batch_with_one_write_case(store, target)
-    out = tools.write_confirm(batch_id=bid, case_ids=[], caller_surface="capability")
+    out = _confirm(batch_id=bid, case_ids=[], caller_surface="capability")
     assert out["ok"]
     event = next(e for e in artifacts.read_events(bid) if e["type"] == "write_confirm")
     assert event["decision"] == "authorized_none"
@@ -59,7 +65,7 @@ def test_never_confirmed_and_explicitly_declined_are_distinguishable(store, targ
     """没走过闸 vs 走过并拒绝——两种状态在账本上长得不一样。"""
     bid = _batch_with_one_write_case(store, target)
     assert not [e for e in artifacts.read_events(bid) if e["type"] == "write_confirm"]
-    tools.write_confirm(batch_id=bid, case_ids=[], caller_surface="capability")
+    _confirm(batch_id=bid, case_ids=[], caller_surface="capability")
     assert [e for e in artifacts.read_events(bid) if e["type"] == "write_confirm"]
 
 
@@ -69,7 +75,7 @@ def test_never_confirmed_and_explicitly_declined_are_distinguishable(store, targ
 def test_unknown_case_id_is_red(store, target):
     """静默忽略的症状是「我明明点了允许，它还是跳过」——最难查的那一类。"""
     bid = _batch_with_one_write_case(store, target)
-    out = tools.write_confirm(batch_id=bid, case_ids=["exectest/R1-C999"],
+    out = _confirm(batch_id=bid, case_ids=["exectest/R1-C999"],
                               caller_surface="capability")
     assert not out["ok"] and out["code"] == "E_UNKNOWN_CASE"
 
@@ -79,7 +85,7 @@ def test_authorizing_a_read_only_case_is_red(store, target):
     read_only = [c["case_id"] for c in
                  artifacts.load_artifact(bid, "approved_caseset")["cases"]
                  if not (c.get("side_effects") or {}).get("writes")]
-    out = tools.write_confirm(batch_id=bid, case_ids=read_only[:1],
+    out = _confirm(batch_id=bid, case_ids=read_only[:1],
                               caller_surface="capability")
     assert not out["ok"] and out["code"] == "E_NOT_A_WRITE_CASE"
 
@@ -89,14 +95,15 @@ def test_confirm_before_adoption_is_red(store, target):
     from server.journey import ingest
     r = ingest.ingest("未采纳", target, source_kind="requirement_doc",
                       source_ref="local", requirement_text="正文",
-                      tier="standard", tier_confirmed_via="test")
-    out = tools.write_confirm(batch_id=r["batch_id"], case_ids=[],
+                      tier="standard", tier_confirmed_via="test",
+                      owner=TRUSTED_OWNER)
+    out = _confirm(batch_id=r["batch_id"], case_ids=[],
                               caller_surface="capability")
     assert not out["ok"] and out["code"] == "E_NO_CASESET"
 
 
 def test_confirm_requires_an_existing_batch(store):
-    out = tools.write_confirm(batch_id="b-does-not-exist", case_ids=[],
+    out = _confirm(batch_id="b-does-not-exist", case_ids=[],
                               caller_surface="capability")
     assert not out["ok"] and out["code"] == "E_NO_BATCH"
 
@@ -111,7 +118,7 @@ def test_authorization_dies_when_the_case_content_changes(store, target):
     但同意的东西已经不是同一个了——旧确认必须失效。
     """
     bid = _batch_with_one_write_case(store, target)
-    assert tools.write_confirm(batch_id=bid, case_ids=["exectest/R1-C001"],
+    assert _confirm(batch_id=bid, case_ids=["exectest/R1-C001"],
                                caller_surface="capability")["ok"]
     assert execute_run.write_authorization(bid)["authorized"]
 
@@ -157,7 +164,7 @@ def test_confirmed_write_case_actually_executes(store, target):
     """这是本文件的存在理由：**从生产入口确认，写用例真的执行**。"""
     bid = _batch_with_one_write_case(store, target)
     assert compile_bundle.compile_bundle(bid)["ok"]
-    assert tools.write_confirm(batch_id=bid, case_ids=["exectest/R1-C001"],
+    assert _confirm(batch_id=bid, case_ids=["exectest/R1-C001"],
                                decided_by="manager",
                                caller_surface="capability")["ok"]
     r = execute_run.execute(bid, case_ids=["exectest/R1-C001"])

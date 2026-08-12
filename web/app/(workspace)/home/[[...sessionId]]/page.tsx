@@ -1165,15 +1165,22 @@ export default function ChatPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const p = new URLSearchParams(window.location.search);
+    const testBatch = p.get("test_batch")?.trim() ?? "";
     const qc = p.get("capability");
     const qt = p.getAll("tool");
-    if (qc !== null) handleSelectCapability(qc || "");
+    if (/^[A-Za-z0-9._-]{1,128}$/.test(testBatch)) {
+      handleSelectCapability("test");
+      handlePrefillComposer(
+        t("Continue test journey {{batchId}}", { batchId: testBatch }),
+      );
+    } else if (qc !== null) handleSelectCapability(qc || "");
     else if (qt.length) {
       const valid = qt.filter((t): t is ToolName =>
         ALL_TOOLS.some((d) => d.name === t),
       );
       if (valid.length) setTools(Array.from(new Set(valid)));
     }
+    // URL intent is consumed exactly once before the session URL replaces the query.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

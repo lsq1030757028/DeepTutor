@@ -44,7 +44,8 @@ except ImportError as exc:  # pragma: no cover - 只在扩展没打进镜像时�
     logger.warning(
         "测试工作台扩展未加载：%s（找过 %s）。"
         "镜像里没有 extensions/ 时会走到这里——Dockerfile 的 COPY 漏了。",
-        exc, EXT_ROOT,
+        exc,
+        EXT_ROOT,
     )
 else:
     IMPORT_ERROR = None
@@ -52,8 +53,7 @@ else:
 
 def require_extension() -> Any:
     if _wb is None:
-        raise HTTPException(status_code=503,
-                            detail=f"测试工作台扩展未加载：{IMPORT_ERROR}")
+        raise HTTPException(status_code=503, detail=f"测试工作台扩展未加载：{IMPORT_ERROR}")
     return _wb
 
 

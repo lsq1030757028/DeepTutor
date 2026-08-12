@@ -99,6 +99,8 @@ export interface VerdictRow {
   /** 探测性用例：**单独一栏，绝不混进通过率的分母**（交互稿 s4）。 */
   probing?: boolean;
   layer?: string;
+  /** Owner-bound opaque trace handle returned by the dedicated Journey API. */
+  trace_rel?: string | null;
 }
 
 export interface RunRow {

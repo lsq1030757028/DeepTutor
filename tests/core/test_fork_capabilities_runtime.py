@@ -50,10 +50,7 @@ def test_capability_manifest_name_matches_registry_key() -> None:
     from deeptutor.agents.test.capability import TestCapability
 
     assert TestCapability.manifest.name == "test"
-    assert (
-        BUILTIN_CAPABILITY_CLASSES["test"]
-        == "deeptutor.agents.test.capability:TestCapability"
-    )
+    assert BUILTIN_CAPABILITY_CLASSES["test"] == "deeptutor.agents.test.capability:TestCapability"
 
 
 def test_capability_description_is_reachable_in_both_languages() -> None:
@@ -162,12 +159,12 @@ def test_all_four_human_gates_are_prompted(language: str) -> None:
     prompts = PromptManager().load_prompts(PROMPT_MODULE, PROMPT_AGENT, language=language)
     gates = str(prompts.get("human_gates") or "")
     for anchor in (
-        "ask_user",              # 四道闸统一的提问机制
-        "tier_confirmed_via",    # 闸 1 定档：ingest 的记录参数
-        "journey_ingest",        # 闸 1 的时序：定档必须在接入之前
-        "clarifications",        # 闸 2 澄清：clarify 的记录参数
-        "confirmed_by",          # 闸 3 采纳：adopt 的记录参数
-        "write_confirm",         # 闸 4 写确认：events.jsonl 里的事件类型
+        "ask_user",  # 四道闸统一的提问机制
+        "tier_confirmed_via",  # 闸 1 定档：ingest 的记录参数
+        "journey_ingest",  # 闸 1 的时序：定档必须在接入之前
+        "clarifications",  # 闸 2 澄清：clarify 的记录参数
+        "confirmed_by",  # 闸 3 采纳：adopt 的记录参数
+        "write_confirm",  # 闸 4 写确认：events.jsonl 里的事件类型
     ):
         assert anchor in gates, f"{language} 人闸段缺锚 {anchor}"
 
@@ -181,16 +178,14 @@ def test_journey_prompt_loads_in_both_languages() -> None:
     from deeptutor.agents.test.capability import PROMPT_AGENT, PROMPT_MODULE
 
     for language in ("zh", "en"):
-        prompts = PromptManager().load_prompts(
-            PROMPT_MODULE, PROMPT_AGENT, language=language)
+        prompts = PromptManager().load_prompts(PROMPT_MODULE, PROMPT_AGENT, language=language)
         assert str(prompts.get("journey_discipline") or "").strip(), language
 
 
-#: 纪律段的锚串。选它不是随手挑的：`journey_issue_gate_token` 是**门票工具的
-#: API 身份**，不是一句可以润色的话——文案怎么改它都在，真消失了就说明门票语义
-#: 变了，那时候这条测试**就该红**。反过来也不选整段全等：那会让每次改提示词都红，
-#: 红着红着没人看。中英两版都含这个串（`prompts/{zh,en}/test_journey.yaml`）。
-JOURNEY_PROMPT_ANCHOR = "journey_issue_gate_token"
+#: 纪律段的锚串。可信身份由服务端注入，模型既不能领取门票，也不能自己声明 owner。
+#: 这里锚定新的安全语义；如果它从 Test prompt 消失，普通模型参数就可能再次被当成
+#: 权限依据。中英两版都保留同一个协议名，文案仍可独立润色。
+JOURNEY_PROMPT_ANCHOR = "E_TRUST_CONTEXT_REQUIRED"
 
 
 def _rendered_system_prompt(pipeline_cls, language: str) -> str:
@@ -278,7 +273,8 @@ def test_capability_run_uses_the_journey_pipeline() -> None:
     try:
         asyncio.run(
             TestCapability().run(
-                UnifiedContext(session_id="s1", user_message="hi"), None  # type: ignore[arg-type]
+                UnifiedContext(session_id="s1", user_message="hi"),
+                None,  # type: ignore[arg-type]
             )
         )
     finally:

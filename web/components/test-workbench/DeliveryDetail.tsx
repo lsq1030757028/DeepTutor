@@ -269,7 +269,7 @@ export default function DeliveryDetail({ deliveryId, onBack, onOpenEnvironments 
     }
     // runnableSelected 依赖 cases 与 environments：环境列表比这个回调晚到时，
     // 漏掉它会让执行送出一份按空环境算出来的过期清单（该跑的被判成缺变量）。
-  }, [deliveryId, env, selected, auth, pollRun, runnableSelected]);
+  }, [deliveryId, env, auth, pollRun, runnableSelected]);
 
   const doExport = useCallback(async () => {
     setExporting(true);

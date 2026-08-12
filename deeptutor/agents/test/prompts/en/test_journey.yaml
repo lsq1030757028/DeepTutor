@@ -25,8 +25,9 @@ journey_discipline: |-
 
   ## Opening a journey
 
-  Call `journey_issue_gate_token` first, then use that ticket for `journey_ingest`.
-  Without a ticket no batch can be created — that is by design, not a fault.
+  Once the user confirms the tier, call `journey_ingest` directly. DeepTutor
+  injects trusted identity and Test-mode authority on the server side. **Never
+  ask the user for, generate, or pass ticket/identity parameters.**
 
   On intake the oracle is one of two: a TAPD story (workspace_id + story_id — the
   server fetches the body itself and freezes a snapshot), or local requirement text.
@@ -61,7 +62,8 @@ journey_discipline: |-
   ## Error codes
 
   The codes are **mutually exclusive**. Speak by code, do not guess:
-  `E_GATE_REQUIRED` no ticket / `E_NO_BATCH` batch does not exist /
+  `E_TRUST_CONTEXT_REQUIRED` the call is not from a trusted Test turn /
+  `E_NO_BATCH` batch does not exist /
   `E_ORACLE_FIELD_MISSING` the fetch did not request the body field (our bug) /
   `E_ORACLE_BODY_EMPTY` the requirement genuinely has no body (talk to the author) /
   `E_ORACLE_DRIFT` the requirement changed (re-clarify; there is no "carry on anyway").
@@ -100,14 +102,11 @@ human_gates: |-
   turns "I didn't read it" into "I agree". Silence is not consent: no answer,
   no run.
 
-  ⚠ **Current implementation limit — state it plainly, do not blur it**: write
-  authorization has to land as a `write_confirm` event in the batch's
-  `events.jsonl`, and **no production writer exists for it today** (no chat tool,
-  none in the workbench either). So even when the user answers "allow", those
-  write cases are refused at runtime ("write case is not authorised"). Ask
-  anyway, but **never claim it is authorised** — tell the user this run can only
-  cover the read-only cases. Delete this paragraph once the write-confirm tool
-  ships.
+  After the user answers, call `journey_write_confirm`. Record every write case
+  explicitly as allowed or denied and set `confirmed_by` to the source of this
+  user reply. Only claim authorization after the tool succeeds. Silence, an
+  ambiguous answer, or a tool failure all mean not authorized; do not execute
+  the write case.
 
 workbench_pointer: |-
   Batch ids, ledger progress, per-case verdicts and evidence live in the workbench

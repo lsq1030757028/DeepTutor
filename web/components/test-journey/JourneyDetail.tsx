@@ -9,7 +9,7 @@
 // M1 时这条只是文字承诺（`rg` 过 test-workbench 全是注释与 i18n，零 router.push），
 // M2 把它建起来：跳 /home 并把批次号带在 query 上。
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, MessageSquare, RefreshCw } from "lucide-react";
@@ -20,7 +20,7 @@ import ErrorState from "@/components/test-journey/ErrorState";
 import IntakePanel from "@/components/test-journey/IntakePanel";
 import ResultTable from "@/components/test-journey/ResultTable";
 import RuleTable from "@/components/test-journey/RuleTable";
-import { callJourney } from "@/components/test-journey/client";
+import { getJourneyBatch } from "@/components/test-journey/client";
 import type { RunRow, StepCell } from "@/components/test-journey/types";
 
 type Tab = "ledger" | "rules" | "results";
@@ -47,11 +47,14 @@ export default function JourneyDetail({ batchId }: { batchId: string }) {
   const [payload, setPayload] = useState<BatchPayload | null>(null);
   const [error, setError] = useState<{ code: string; message?: string } | null>(null);
   const [loading, setLoading] = useState(true);
+  const requestIdRef = useRef(0);
 
   // 同 JourneyList：`load` 在第一个 await 之前不许 setState（首次由 effect 调用，
   // 在 effect 内同步 setState 会触发级联渲染，本仓该 eslint 规则是 error 级）。
   const load = useCallback(async () => {
-    const result = await callJourney("get_batch", { batch_id: batchId });
+    const requestId = ++requestIdRef.current;
+    const result = await getJourneyBatch(batchId);
+    if (requestId !== requestIdRef.current) return;
     if (!result.ok) {
       setError({ code: result.code, message: result.message });
       setPayload(null);
@@ -73,18 +76,21 @@ export default function JourneyDetail({ batchId }: { batchId: string }) {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      if (cancelled) return;
-      await load();
+      await Promise.resolve();
+      if (!cancelled) await load();
     })();
     return () => {
       cancelled = true;
+      requestIdRef.current += 1;
     };
   }, [load]);
 
   const continueInChat = useCallback(() => {
     // 双向锚的一半：带批次上下文回聊天。挂载位选 (workspace) 的原始理由就是
     // 这一层原生带 UnifiedChatProvider（0015）。
-    router.push(`/home?test_batch=${encodeURIComponent(batchId)}`);
+    router.push(
+      `/home?capability=test&test_batch=${encodeURIComponent(batchId)}`,
+    );
   }, [batchId, router]);
 
   const artifacts = payload?.artifacts ?? {};
@@ -225,7 +231,9 @@ export default function JourneyDetail({ batchId }: { batchId: string }) {
             <RuleTable rules={rules} exampleCounts={exampleCounts} coverage={coverageRows} />
           ) : null}
 
-          {tab === "results" ? <ResultTable runs={payload.runs ?? []} /> : null}
+          {tab === "results" ? (
+            <ResultTable batchId={batchId} runs={payload.runs ?? []} />
+          ) : null}
         </>
       ) : null}
     </div>

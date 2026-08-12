@@ -32,9 +32,53 @@ EVIDENCE_FILES = {
     "console_log": "console.log",
     "db_snapshot": "db_snapshot.json",
 }
+RUN_META_NAME = "run-meta.json"
 
 
-def write_authorization(batch_id: str, root: str | None = None) -> dict[str, Any]:
+def _write_json_atomic(path: str, payload: dict[str, Any]) -> None:
+    """同目录原子发布 JSON，避免 resume 读到半截契约。"""
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=1)
+    os.replace(tmp, path)
+
+
+def _read_json_object(path: str) -> dict[str, Any]:
+    with open(path, encoding="utf-8") as fh:
+        body = json.load(fh)
+    if not isinstance(body, dict):
+        raise ValueError(f"{os.path.basename(path)} 不是 JSON 对象")
+    return body
+
+
+def _resume_contract_problem(run_dir: str, expected: dict[str, str]) -> str:
+    """只读核验 resume 契约；空串表示可以继续。"""
+    if not os.path.isdir(run_dir):
+        return "resume_run_id 在当前 owner 分区不存在"
+    docs: list[tuple[str, dict[str, Any]]] = []
+    for name in (RUN_META_NAME, "receipt.json"):
+        path = os.path.join(run_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            docs.append((name, _read_json_object(path)))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return f"{name} 无法作为可信 resume 契约读取：{exc}"
+    if not docs:
+        return "run 缺少 run-meta.json/receipt.json，归属与执行身份不可验证"
+    for name, doc in docs:
+        for field, wanted in expected.items():
+            # 旧 receipt 没有 owner_partition；其 owner 已由精确分区路径证明。
+            if field == "owner_partition" and name == "receipt.json" and field not in doc:
+                continue
+            if str(doc.get(field, "")) != str(wanted):
+                return (f"{name} 的 {field} 与当前执行不匹配："
+                        f"expected={wanted!r}, actual={doc.get(field)!r}")
+    return ""
+
+
+def write_authorization(batch_id: str, root: str | None = None, *,
+                        owner: str | None = None) -> dict[str, Any]:
     """本批次当前**有效**的写确认。返回 {authorized, dropped}。
 
     ## 为什么一条确认会「失效」
@@ -59,14 +103,15 @@ def write_authorization(batch_id: str, root: str | None = None) -> dict[str, Any
     就不能拿它当同意。这个方向是刻意的——失败方向是少给。
     """
     caseset: dict[str, Any] = {}
-    if artifacts.has_artifact(batch_id, "approved_caseset", root=root):
-        caseset = artifacts.load_artifact(batch_id, "approved_caseset", root=root)
+    if artifacts.has_artifact(batch_id, "approved_caseset", owner=owner, root=root):
+        caseset = artifacts.load_artifact(batch_id, "approved_caseset",
+                                          owner=owner, root=root)
     current = {c.get("case_id"): c.get("source_case_digest")
                for c in caseset.get("cases") or []}
 
     authorized: set[str] = set()
     dropped: list[dict[str, str]] = []
-    for e in artifacts.read_events(batch_id, root=root):
+    for e in artifacts.read_events(batch_id, owner=owner, root=root):
         if e.get("type") != "write_confirm":
             continue
         digests = e.get("digests") or {}
@@ -90,8 +135,9 @@ def write_authorization(batch_id: str, root: str | None = None) -> dict[str, Any
     return {"authorized": authorized, "dropped": dropped}
 
 
-def _write_authorized_ids(batch_id: str) -> set[str]:
-    return write_authorization(batch_id)["authorized"]
+def _write_authorized_ids(batch_id: str, *, owner: str | None = None,
+                          root: str | None = None) -> set[str]:
+    return write_authorization(batch_id, root, owner=owner)["authorized"]
 
 
 def _read_results(run_dir: str) -> list[dict[str, Any]]:
@@ -178,10 +224,12 @@ def build_target_identity(base_url: str, probe: dict[str, Any], track: str) -> d
     return identity
 
 
-def _intake_fingerprint_of(batch_id: str) -> dict[str, Any]:
+def _intake_fingerprint_of(batch_id: str, *, owner: str | None = None,
+                           root: str | None = None) -> dict[str, Any]:
     """接入期探到的靶。**只作对照，不作判据**——判据用 target_identity。"""
     try:
-        intake = artifacts.load_artifact(batch_id, "intake_profile")
+        intake = artifacts.load_artifact(batch_id, "intake_profile",
+                                         owner=owner, root=root)
     except artifacts.ArtifactError:
         return {}
     from server.journey import redlines
@@ -190,13 +238,14 @@ def _intake_fingerprint_of(batch_id: str) -> dict[str, Any]:
             "status": probe.get("status"), "source": "intake-probe"}
 
 
-def _drifted(batch_id: str, identity: dict[str, Any]) -> bool:
+def _drifted(batch_id: str, identity: dict[str, Any], *,
+             owner: str | None = None, root: str | None = None) -> bool:
     """接入期与执行期的靶 host 不一致 = 换环境跑了。
 
     **不阻断**（换环境跑是合法的），但结论卡上必须可见——
     否则"这批结论是在哪个环境上得到的"就只能靠猜。
     """
-    intake = _intake_fingerprint_of(batch_id)
+    intake = _intake_fingerprint_of(batch_id, owner=owner, root=root)
     if not intake.get("base_url_host"):
         return False
     return intake["base_url_host"] != identity.get("base_url_host")
@@ -217,8 +266,11 @@ def _required_evidence_ok(case: dict[str, Any], run_dir: str, slug: str) -> list
 
 
 def _build_evidence_bundle(batch_id: str, run_dir: str, fingerprint: str,
-                           rows: list[dict[str, Any]]) -> dict[str, Any]:
-    caseset = artifacts.load_artifact(batch_id, "approved_caseset")
+                           rows: list[dict[str, Any]], *,
+                           owner: str | None = None,
+                           root: str | None = None) -> dict[str, Any]:
+    caseset = artifacts.load_artifact(batch_id, "approved_caseset",
+                                      owner=owner, root=root)
     by_id = {c["case_id"]: c for c in caseset["cases"]}
     conclusions = []
     for r in rows:
@@ -286,7 +338,7 @@ def _build_evidence_bundle(batch_id: str, run_dir: str, fingerprint: str,
 def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
             case_ids: list[str] | None = None, resume_run_id: str = "",
             base_url_override: str = "", timeout_s: int = 900,
-            triggered_by: str = "fresh") -> dict[str, Any]:
+            triggered_by: str = "fresh", root: str | None = None) -> dict[str, Any]:
     """跑一趟。
 
     `triggered_by`（`fresh` / `regenerate-replay`）落进 run_receipt——
@@ -294,8 +346,12 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
     （设计稿 §5.2 第三层）。它**不参与幂等 key**：幂等看的是输入，
     不是谁按的按钮。
     """
-    batch = artifacts.load_batch(batch_id)
-    bundle_dir = os.path.join(artifacts.batch_dir(batch_id), "bundle")
+    batch = artifacts.load_batch(batch_id, root=root)
+    owner = artifacts.safe_owner(batch.get("partition") or batch.get("owner"))
+    # 解析到 batch 后立刻钉死 owner；后续不再走“跨 owner 扫描”兼容路径。
+    batch = artifacts.load_batch(batch_id, owner=owner, root=root)
+    bundle_dir = os.path.join(
+        artifacts.batch_dir(batch_id, owner=owner, root=root), "bundle")
     manifest_path = os.path.join(bundle_dir, "bundle.json")
     if not os.path.isfile(manifest_path):
         return {"ok": False, "error": "NO_BUNDLE",
@@ -306,22 +362,46 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
     if not base_url:
         return {"ok": False, "error": "NO_BASE_URL"}
 
+    from server.journey import redlines
+    contract = {
+        "batch_id": batch_id,
+        "owner_partition": owner,
+        "caseset_id": str(manifest["caseset_id"]),
+        "compiler_version": str(manifest["compiler_version"]),
+        "base_url_host": redlines.host_key(base_url),
+    }
     run_id = resume_run_id or artifacts.new_run_id()
-    run_dir = artifacts.run_dir(run_id, create=True)
+    contract["run_id"] = run_id
+    try:
+        run_dir = artifacts.run_dir(
+            run_id, create=not bool(resume_run_id), owner=owner, root=root)
+    except artifacts.ArtifactError as exc:
+        return {"ok": False, "error": "RESUME_RUN_INVALID", "detail": str(exc)}
+    if resume_run_id:
+        problem = _resume_contract_problem(run_dir, contract)
+        if problem:
+            return {"ok": False, "error": "RESUME_RUN_MISMATCH", "detail": problem}
+    else:
+        _write_json_atomic(os.path.join(run_dir, RUN_META_NAME), {
+            "artifact": "run_meta",
+            "schema_version": "1.0",
+            **contract,
+            "created_at": artifacts.now_iso(),
+        })
     done_ids = [r["case_id"] for r in _read_results(run_dir)] if resume_run_id else []
 
-    slot = preg.acquire_slot(run_id, run_dir)
+    slot = preg.acquire_slot(run_id, run_dir, root=root)
     if not slot["ok"]:
         return slot
 
     variables = dict(variables or {})
-    write_auth = write_authorization(batch_id)
+    write_auth = write_authorization(batch_id, root, owner=owner)
     write_ok = write_auth["authorized"]
     selected = case_ids or [m["case_id"] for m in manifest["cases"]]
     test_names = [m["test_name"] for m in manifest["cases"]
                   if m["case_id"] in selected]
     if not test_names:
-        preg.release_slot(run_id)
+        preg.release_slot(run_id, root=root)
         return {"ok": False, "error": "NO_CASES_SELECTED"}
 
     env = dict(os.environ)
@@ -347,14 +427,19 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
              "--tb=line", "-k", " or ".join(test_names), "."],
             cwd=bundle_dir, env=env, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout_s)
-        pytest_tail = (proc.stdout or "")[-2000:]
+        # stdout/stderr 是不受信输入，可能回显本轮变量。业务证据已经在
+        # results.jsonl 与 per-case 目录；receipt 只记“已省略”，不持久化 raw tail。
+        pytest_tail_omitted = bool(proc.stdout or proc.stderr)
+        pytest_tail = "(pytest output omitted by credential policy)" \
+            if pytest_tail_omitted else ""
         pytest_rc = proc.returncode
     except subprocess.TimeoutExpired:
-        pytest_tail = f"(超时 {timeout_s}s 被杀)"
+        pytest_tail = f"(超时 {timeout_s}s 被杀；pytest output omitted)"
+        pytest_tail_omitted = True
         pytest_rc = -1
     finally:
         reap = preg.reap_run(run_dir)
-        preg.release_slot(run_id)
+        preg.release_slot(run_id, root=root)
 
     rows = _read_results(run_dir)
     counts: dict[str, int] = {}
@@ -376,26 +461,9 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
     track = detect_track(manifest)
     target_identity = build_target_identity(base_url, exec_probe, track)
     fingerprint = _instance_fingerprint(base_url, exec_probe)
-    evidence_bundle = _build_evidence_bundle(batch_id, run_dir, fingerprint, rows)
-
-    # 红线 3 收尾自证：凭据零落盘机械扫描（已知值 = 本轮全部变量值）
-    scan = credential_scan.scan_tree(
-        run_dir, known_secrets=[str(v) for v in variables.values()])
-    scan_report = {"ok": scan["ok"], "known_hits": scan["known_hits"],
-                   "entropy_hits": [
-                       {k: h[k] for k in ("file", "token_preview", "length", "entropy")}
-                       for h in scan["entropy_hits"]],
-                   "allowlisted_hits": scan.get("allowlisted_hits", []),
-                   "scanned_files": scan["scanned_files"], "note": scan["note"]}
-    with open(os.path.join(run_dir, "credscan.json"), "w", encoding="utf-8") as fh:
-        json.dump(scan_report, fh, ensure_ascii=False, indent=1)
-
-    # 凭据扫描是执行红线，不是装饰性附注。此前扫描失败时收据仍写 PASS，
-    # 上层极易把“pytest 跑完”误报成“结果可交付”。
-    if not scan["ok"]:
-        verdict = "BLOCK"
-
-    from server.journey import redlines
+    evidence_bundle = _build_evidence_bundle(
+        batch_id, run_dir, fingerprint, rows, owner=owner, root=root)
+    pre_scan_verdict = verdict
     receipt = {
         "artifact": "run_receipt",
         # 1 → 1.1：新增 target_identity / target_drift / triggered_by，
@@ -404,6 +472,7 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
         "schema_version": "1.1",
         "run_id": run_id,
         "batch_id": batch_id,
+        "owner_partition": owner,
         "caseset_id": manifest["caseset_id"],
         "compiler_version": manifest["compiler_version"],
         "base_url_host": redlines.host_key(base_url),   # 收据只记 host，不记完整 URL
@@ -418,8 +487,10 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
         # 让"为什么这批写用例没有数据层证据"有一处能查。
         "l3_channel_available": l3_dsn_present,
         "bundle_l3_granted": bool(manifest.get("capability_l3_granted")),
-        "intake_fingerprint": _intake_fingerprint_of(batch_id),
-        "target_drift": _drifted(batch_id, target_identity),
+        "intake_fingerprint": _intake_fingerprint_of(
+            batch_id, owner=owner, root=root),
+        "target_drift": _drifted(batch_id, target_identity,
+                                  owner=owner, root=root),
         "triggered_by": triggered_by,
         "started_at": started,
         "finished_at": artifacts.now_iso(),
@@ -430,16 +501,55 @@ def execute(batch_id: str, *, variables: dict[str, Any] | None = None,
         "verdict": verdict,
         "pytest_returncode": pytest_rc,
         "pytest_tail": pytest_tail,
-        "credential_scan_ok": scan["ok"],
+        "pytest_tail_omitted": pytest_tail_omitted,
+        # 先落 provisional=false；最终值只由覆盖 receipt 的二次扫描决定。
+        "credential_scan_ok": False,
+        "credential_scan_passes": 0,
         # 被作废的写确认要落账：作废后的症状是 SKIP_WRITE_UNCONFIRMED，
         # 与「用户压根没确认」长得一模一样，不写出来就无从区分（0021 红线六）。
         "write_confirm_dropped": write_auth["dropped"],
         "reap": reap,
         "conclusion_count": len(evidence_bundle["conclusions"]),
     }
-    with open(os.path.join(run_dir, "receipt.json"), "w", encoding="utf-8") as fh:
-        json.dump(receipt, fh, ensure_ascii=False, indent=1)
+    receipt_path = os.path.join(run_dir, "receipt.json")
+    _write_json_atomic(receipt_path, receipt)
+
+    known_secrets = [str(v) for v in variables.values()]
+
+    def _public_scan_report(scan: dict[str, Any], *, passes: int) -> dict[str, Any]:
+        return {
+            "ok": bool(scan["ok"]),
+            "known_hits": scan["known_hits"],
+            # raw entropy token 不落报告，只留定位信息与短 preview。
+            "entropy_hits": [
+                {k: h[k] for k in ("file", "token_preview", "length", "entropy")}
+                for h in scan["entropy_hits"]
+            ],
+            "allowlisted_hits": scan.get("allowlisted_hits", []),
+            "scanned_files": scan["scanned_files"],
+            "passes": passes,
+            "note": scan["note"],
+        }
+
+    # pass 1 覆盖 provisional receipt；写受控报告与初步结果后，pass 2 再覆盖
+    # receipt/credscan，堵住“扫描绿后又把 stdout 秘密写进去”的时序洞。
+    scan1 = credential_scan.scan_tree(run_dir, known_secrets=known_secrets)
+    receipt["credential_scan_ok"] = bool(scan1["ok"])
+    receipt["credential_scan_passes"] = 1
+    receipt["verdict"] = pre_scan_verdict if scan1["ok"] else "BLOCK"
+    _write_json_atomic(os.path.join(run_dir, "credscan.json"),
+                       _public_scan_report(scan1, passes=1))
+    _write_json_atomic(receipt_path, receipt)
+
+    scan2 = credential_scan.scan_tree(run_dir, known_secrets=known_secrets)
+    final_scan_ok = bool(scan1["ok"] and scan2["ok"])
+    receipt["credential_scan_ok"] = final_scan_ok
+    receipt["credential_scan_passes"] = 2
+    receipt["verdict"] = pre_scan_verdict if final_scan_ok else "BLOCK"
+    _write_json_atomic(os.path.join(run_dir, "credscan.json"),
+                       _public_scan_report(scan2, passes=2))
+    _write_json_atomic(receipt_path, receipt)
     if run_id not in batch.get("run_ids", []):
         batch.setdefault("run_ids", []).append(run_id)
-        artifacts.save_batch(batch)
+        artifacts.save_batch(batch, root=root)
     return {"ok": True, "run_id": run_id, "run_dir": run_dir, "receipt": receipt}

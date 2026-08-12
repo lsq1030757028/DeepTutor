@@ -10,12 +10,27 @@
 3. `open_trace` 在测试里**不得真起进程**。
 """
 import json
+import multiprocessing
 import os
+import threading
 
 import pytest
 
 from server.journey import artifacts
 from server.journey import process_registry as preg
+
+
+def _acquire_slot_in_child(root, run_id, start_event, release_event, results):
+    """spawn 子进程入口必须是模块级函数，Windows 才能 pickle。"""
+    if not start_event.wait(10):
+        results.put((run_id, {"ok": False, "error": "START_TIMEOUT"}))
+        return
+    outcome = preg.acquire_slot(run_id, os.path.join(root, "runs", run_id),
+                                root=root)
+    results.put((run_id, outcome))
+    if outcome["ok"]:
+        release_event.wait(20)
+        preg.release_slot(run_id, root=root)
 
 
 def test_pid_alive_probe_is_non_destructive_for_current_process():
@@ -163,6 +178,138 @@ def test_mirror_file_is_not_counted_as_an_active_slot(root, tmp_path):
     a = preg.acquire_slot("r-20260811-aaaaaa", str(tmp_path / "runs" / "r-a"))
     b = preg.acquire_slot("r-20260811-bbbbbb", str(tmp_path / "runs" / "r-b"))
     assert a["ok"] and b["ok"]
+
+
+def test_thread_race_admits_at_most_two_and_rejected_runs_leave_no_marker(
+        root, tmp_path):
+    """I-01：N 路同刻争抢时，成功数严格不超过 2，失败 run 不污染标记。"""
+    contender_count = 12
+    barrier = threading.Barrier(contender_count)
+    outcomes = {}
+    outcomes_lock = threading.Lock()
+
+    def contend(index):
+        run_id = f"r-20260812-thread-{index:02d}"
+        barrier.wait()
+        outcome = preg.acquire_slot(
+            run_id, str(tmp_path / "runs" / run_id), root=root)
+        with outcomes_lock:
+            outcomes[run_id] = outcome
+
+    threads = [threading.Thread(target=contend, args=(i,))
+               for i in range(contender_count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert all(not thread.is_alive() for thread in threads)
+    admitted = {run_id for run_id, out in outcomes.items() if out["ok"]}
+    rejected = set(outcomes) - admitted
+    assert len(outcomes) == contender_count
+    assert len(admitted) == 2
+    assert all(outcomes[run_id]["error"] == "BUSY_MAX_CONCURRENT_RUNS"
+               for run_id in rejected)
+
+    active_dir = os.path.join(root, preg.ACTIVE_DIR_NAME)
+    markers = {name.removesuffix(".json") for name in os.listdir(active_dir)
+               if name.endswith(".json")}
+    assert markers == admitted
+    assert not markers.intersection(rejected)
+
+    for run_id in admitted:
+        preg.release_slot(run_id, root=root)
+
+
+def test_process_race_admits_at_most_two_across_spawned_workers(root):
+    """同一工作台根被多个服务进程共享时，文件锁仍保证全局上限。"""
+    ctx = multiprocessing.get_context("spawn")
+    start_event = ctx.Event()
+    release_event = ctx.Event()
+    results = ctx.Queue()
+    run_ids = [f"r-20260812-process-{index:02d}" for index in range(6)]
+    workers = [
+        ctx.Process(target=_acquire_slot_in_child,
+                    args=(root, run_id, start_event, release_event, results))
+        for run_id in run_ids
+    ]
+    for worker in workers:
+        worker.start()
+    start_event.set()
+
+    stuck_workers = []
+    try:
+        outcomes = dict(results.get(timeout=30) for _ in workers)
+        admitted = {run_id for run_id, out in outcomes.items() if out["ok"]}
+        rejected = set(outcomes) - admitted
+        assert len(admitted) == 2
+        assert all(outcomes[run_id]["error"] == "BUSY_MAX_CONCURRENT_RUNS"
+                   for run_id in rejected)
+        active_dir = os.path.join(root, preg.ACTIVE_DIR_NAME)
+        markers = {name.removesuffix(".json") for name in os.listdir(active_dir)
+                   if name.endswith(".json")}
+        assert markers == admitted
+        assert not markers.intersection(rejected)
+    finally:
+        release_event.set()
+        for worker in workers:
+            worker.join(timeout=20)
+            if worker.is_alive():
+                stuck_workers.append(worker.pid)
+                worker.terminate()
+                worker.join(timeout=5)
+
+    assert stuck_workers == []
+
+
+def test_rejected_execute_never_starts_pytest_or_leaves_its_slot_marker(
+        root, tmp_path, monkeypatch):
+    """闸满时 execute 必须在 subprocess 前返回，失败 run 不得留下 slot 标记。"""
+    from server.journey import execute_run
+
+    bundle_dir = tmp_path / "batch" / "bundle"
+    bundle_dir.mkdir(parents=True)
+    with open(bundle_dir / "bundle.json", "w", encoding="utf-8") as fh:
+        json.dump({"caseset_id": "cs-test", "compiler_version": "test",
+                   "cases": [{"case_id": "case-1", "test_name": "test_one"}]}, fh)
+    rejected_run_id = "r-20260812-rejected"
+    rejected_run_dir = tmp_path / "runs" / rejected_run_id
+
+    monkeypatch.setattr(execute_run.artifacts, "load_batch", lambda *a, **kw: {
+        "partition": "_local", "owner": "_local",
+        "base_url": "http://127.0.0.1:1",
+    })
+    monkeypatch.setattr(execute_run.artifacts, "batch_dir",
+                        lambda *a, **kw: str(bundle_dir.parent))
+
+    def fake_run_dir(*args, create=False, **kwargs):
+        if create:
+            rejected_run_dir.mkdir(parents=True, exist_ok=True)
+        return str(rejected_run_dir)
+
+    monkeypatch.setattr(execute_run.artifacts, "run_dir", fake_run_dir)
+    monkeypatch.setattr(execute_run.artifacts, "new_run_id",
+                        lambda: rejected_run_id)
+    spawned = []
+    monkeypatch.setattr(execute_run.subprocess, "run",
+                        lambda *a, **kw: spawned.append((a, kw)))
+
+    assert preg.acquire_slot("r-20260812-busy-a", str(tmp_path / "runs" / "a"),
+                             root=root)["ok"]
+    assert preg.acquire_slot("r-20260812-busy-b", str(tmp_path / "runs" / "b"),
+                             root=root)["ok"]
+    try:
+        outcome = execute_run.execute("b-test", root=root)
+        assert not outcome["ok"]
+        assert outcome["error"] == "BUSY_MAX_CONCURRENT_RUNS"
+        assert spawned == []
+        markers = {name for name in os.listdir(os.path.join(root, preg.ACTIVE_DIR_NAME))
+                   if name.endswith(".json")}
+        assert rejected_run_id + ".json" not in markers
+        assert markers == {"r-20260812-busy-a.json", "r-20260812-busy-b.json"}
+    finally:
+        preg.release_slot("r-20260812-busy-a", root=root)
+        preg.release_slot("r-20260812-busy-b", root=root)
 
 
 def test_no_kill_by_process_name_anywhere():

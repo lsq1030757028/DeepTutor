@@ -513,6 +513,7 @@ class AgenticChatPipeline:
             owner_id=self._current_owner_id(),
             is_partner=self._is_partner_turn(context),
             session_id=context.session_id,
+            active_capability=context.active_capability or "chat",
             caller_whitelist=(
                 frozenset(str(name) for name in raw_filter)
                 if isinstance(raw_filter, list)

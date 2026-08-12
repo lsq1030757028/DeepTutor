@@ -700,13 +700,18 @@ class RunRegistry:
                 "一并存进批次），或者改选「跟随环境」并在环境里配好 token 变量。",
                 code="NO_LOGIN_REQUEST")
 
-        busy = self.active_run_for(safe_id)
-        if busy:
-            raise WorkbenchError(
-                f"这个批次上还有一轮执行没跑完（{busy['done']}/{busy['total']}）。"
-                "等它结束再点。", code="RUN_IN_PROGRESS")
-
         with self._lock:
+            # Check and register under the same lock.  The former
+            # active_run_for() -> start() sequence left a TOCTOU window where
+            # two concurrent POSTs could both pass the check, fire duplicate
+            # requests, and overwrite the same execution_report files.
+            busy = next((self._runs[run_id] for run_id in reversed(self._order)
+                         if self._runs[run_id]["delivery_id"] == safe_id
+                         and self._runs[run_id]["state"] == "running"), None)
+            if busy:
+                raise WorkbenchError(
+                    f"这个批次上还有一轮执行没跑完（{busy['done']}/{busy['total']}）。"
+                    "等它结束再点。", code="RUN_IN_PROGRESS")
             self._seq += 1
             run_id = f"run-{int(time.time())}-{self._seq}"
             run: dict[str, Any] = {

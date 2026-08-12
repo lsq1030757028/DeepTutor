@@ -8,13 +8,35 @@
 - ADR-M2-03 G5（幂等，两条重放路径各一条）→ DoD#8f
 """
 import json
+import multiprocessing
 import os
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from server.journey import artifacts, gate, idempotency, tools
+
+TRUSTED_OWNER = "unit-test-owner"
 from server.journey.mcp_payload import (
     E_MCP_UNAVAILABLE, McpPayloadError, parse_mcp_payload, try_parse_mcp_payload)
+
+
+def _reservation_process(root, batch_id, marker_path, start_event, result_queue):
+    """spawn 子进程入口：验证 OS 锁，不依赖 pytest monkeypatch。"""
+    start_event.wait(10)
+    with idempotency.reservation(
+            batch_id, "execute", {"scope": "all"}, "shared-key",
+            root=root) as (key, replay):
+        if replay is not None:
+            result_queue.put("replay")
+            return
+        with open(marker_path, "a", encoding="utf-8") as fh:
+            fh.write("side-effect\n")
+        time.sleep(0.1)
+        idempotency.record(batch_id, key, "execute", {"ok": True}, root=root)
+        result_queue.put("first")
 
 
 @pytest.fixture()
@@ -87,26 +109,14 @@ def _count_persisted(root: str) -> int:
     return total
 
 
-@pytest.mark.parametrize("token", ["", "   ", "not-a-real-token", "x" * 32])
-def test_ingest_without_valid_ticket_persists_nothing(store, tmp_path, token):
-    """无票 / 错票：判 E_GATE_REQUIRED 且**批次目录与产物落盘数 == 0**。
-
-    这条断言的重点在"零落盘"——只断返回码不够，先 mkdir 再校验一样能返回错误码，
-    但目录已经建出来了。
-    """
+def test_ingest_without_trusted_owner_persists_nothing(store, tmp_path):
+    """生产 facade 之外无可信 owner：拒绝且零落盘。"""
     before = _count_persisted(str(tmp_path))
     r = tools.ingest(title="t", base_url="http://127.0.0.1:9",
-                     gate_token=token, requirement_text="随便写点")
-    assert r["ok"] is False and r["code"] == gate.E_GATE_REQUIRED
+                     requirement_text="随便写点")
+    assert r["ok"] is False and r["code"] == "E_OWNER_REQUIRED"
     assert _count_persisted(str(tmp_path)) == before
     assert not os.path.isdir(os.path.join(str(tmp_path), "_local", "batches"))
-
-
-def test_expired_ticket_rejected(store, monkeypatch):
-    issued = gate.issue(ttl_s=-1)
-    r = gate.verify(issued["token"])
-    assert r["ok"] is False and r["code"] == gate.E_GATE_REQUIRED
-    assert "过期" in r["message"]
 
 
 @pytest.mark.parametrize("fn,kwargs", [
@@ -120,25 +130,54 @@ def test_expired_ticket_rejected(store, monkeypatch):
 ])
 def test_other_tools_reject_fabricated_batch_id(store, fn, kwargs):
     """编造一个 batch_id → E_NO_BATCH，而不是被当成新批次悄悄建出来。"""
-    r = fn(batch_id="b-20260811-deadbe", **kwargs)
+    r = fn(batch_id="b-20260811-deadbe", owner=TRUSTED_OWNER, **kwargs)
     assert r["ok"] is False and r["code"] == gate.E_NO_BATCH
 
 
-def test_valid_ticket_lets_ingest_through(store, monkeypatch):
+def test_trusted_owner_lets_ingest_through(store, monkeypatch):
     from server.journey import ingest as ingest_mod
     monkeypatch.setattr(ingest_mod, "probe_target", lambda url, timeout_s=10: {
         "reachable": True, "status": 200, "page_title": "", "body_head_sha256": "a" * 64})
-    issued = gate.issue()
     r = tools.ingest(title="韩语角色", base_url="http://127.0.0.1:8047",
-                     gate_token=issued["token"], source_kind="doc",
+                     owner=TRUSTED_OWNER, source_kind="doc",
                      source_ref="local", requirement_text="新增韩语语音角色，支持男女音色",
                      tier="standard", tier_confirmed_via="test")
     assert r["ok"] is True, r
     assert r["batch_id"].startswith("b-")
     events = artifacts.read_events(r["batch_id"])
-    assert any(e["type"] == "gate_token_used" for e in events)
     # DoD#8e-3：调用面落进事件流（信号，不当闸）
     assert any(e.get("caller_surface") for e in events if e["type"] == "tool_call")
+
+
+def test_injected_root_reaches_legacy_downstream_modules(tmp_path, monkeypatch):
+    """Facade 的 root 要贯穿到仍使用 artifacts 默认参数的旧九原子实现。"""
+    default_root = tmp_path / "default"
+    injected_root = tmp_path / "injected"
+    monkeypatch.setattr(artifacts, "WORKBENCH_ROOT", str(default_root))
+
+    with artifacts.trusted_owner(TRUSTED_OWNER, root=str(injected_root)):
+        batch = artifacts.create_batch("root contract", owner=TRUSTED_OWNER)
+
+    from server.journey import clarify as clarify_mod
+
+    def fake_clarify(*_args, **_kwargs):
+        return {
+            "ok": True,
+            "business_frame": {"resolved_root": artifacts.workbench_root()},
+        }
+
+    monkeypatch.setattr(clarify_mod, "clarify", fake_clarify)
+    result = tools.clarify(
+        batch_id=batch["batch_id"],
+        rules=[],
+        confirmed_facts_md="test",
+        owner=TRUSTED_OWNER,
+        root=str(injected_root),
+    )
+
+    assert result["ok"] is True
+    assert result["business_frame"]["resolved_root"] == os.path.abspath(injected_root)
+    assert not default_root.exists()
 
 
 # ── ADR-M2-03 G5 / DoD#8f：幂等（两条重放路径各一条）────────────────────────
@@ -202,3 +241,111 @@ def test_ledger_is_append_only_and_last_write_wins(store):
         rows = [json.loads(x) for x in fh if x.strip()]
     assert len(rows) == 2                       # 追加，不覆写
     assert idempotency.lookup(bid, "k")["result"]["n"] == 2
+
+
+def test_atomic_reservation_allows_one_thread_side_effect(store):
+    bid = artifacts.create_batch("thread-race")["batch_id"]
+    barrier = threading.Barrier(8)
+    side_effects = []
+
+    # Windows cannot flush a byte that another thread already locked.  Seed the
+    # lock file before releasing the barrier so this test exercises reservation,
+    # not concurrent first-time lock-file initialization.
+    lock_path = idempotency._reservation_path(  # noqa: SLF001 - regression fixture
+        bid, "execute", "thread-key")
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    with open(lock_path, "wb") as fh:
+        fh.write(b"\0")
+
+    def invoke():
+        barrier.wait()
+        with idempotency.reservation(
+                bid, "execute", {"scope": "all"}, "thread-key") as (key, replay):
+            if replay is not None:
+                return "replay"
+            side_effects.append("ran")
+            time.sleep(0.05)
+            idempotency.record(bid, key, "execute", {"ok": True, "run_id": "r-1"})
+            return "first"
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _i: invoke(), range(8)))
+    assert results.count("first") == 1
+    assert results.count("replay") == 7
+    assert side_effects == ["ran"]
+
+
+def test_execute_tool_holds_reservation_across_real_side_effect_boundary(
+        store, monkeypatch):
+    bid = artifacts.create_batch("tool-thread-race", owner=TRUSTED_OWNER)["batch_id"]
+    barrier = threading.Barrier(8)
+    calls = []
+
+    def fake_execute(*_args, **_kwargs):
+        calls.append("ran")
+        time.sleep(0.05)
+        return {"ok": True, "run_id": "r-1", "receipt": {"verdict": "PASS"}}
+
+    monkeypatch.setattr(tools._execute, "execute", fake_execute)
+
+    def invoke():
+        barrier.wait()
+        return tools.execute(batch_id=bid, idempotency_key="tool-thread-key",
+                             owner=TRUSTED_OWNER)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _i: invoke(), range(8)))
+    assert calls == ["ran"]
+    assert sum(result.get("replayed") is True for result in results) == 7
+    assert all(result["ok"] for result in results)
+
+
+def test_atomic_reservation_allows_one_process_side_effect(tmp_path):
+    root = str(tmp_path / "process-root")
+    bid = artifacts.create_batch("process-race", root=root)["batch_id"]
+    marker = str(tmp_path / "side-effects.txt")
+    ctx = multiprocessing.get_context("spawn")
+    start = ctx.Event()
+    results = ctx.Queue()
+    workers = [ctx.Process(target=_reservation_process,
+                           args=(root, bid, marker, start, results))
+               for _ in range(4)]
+    for worker in workers:
+        worker.start()
+    start.set()
+    for worker in workers:
+        worker.join(15)
+        assert worker.exitcode == 0
+    outcomes = [results.get(timeout=2) for _ in workers]
+    assert outcomes.count("first") == 1
+    assert outcomes.count("replay") == 3
+    with open(marker, encoding="utf-8") as fh:
+        assert fh.read().splitlines() == ["side-effect"]
+
+
+def test_same_explicit_key_is_scoped_by_tool(store):
+    bid = artifacts.create_batch("tool-scope")["batch_id"]
+    with idempotency.reservation(
+            bid, "adopt", {}, "same-key") as (key, replay):
+        assert replay is None
+        idempotency.record(bid, key, "adopt", {"ok": True, "from": "adopt"})
+    with idempotency.reservation(
+            bid, "execute", {}, "same-key") as (key, replay):
+        assert replay is None
+        idempotency.record(bid, key, "execute", {"ok": True, "from": "execute"})
+    assert idempotency.lookup(
+        bid, "same-key", tool="adopt")["result"]["from"] == "adopt"
+    assert idempotency.lookup(
+        bid, "same-key", tool="execute")["result"]["from"] == "execute"
+
+
+def test_failed_reservation_without_record_is_released_for_retry(store):
+    bid = artifacts.create_batch("retry-after-failure")["batch_id"]
+    with idempotency.reservation(
+            bid, "execute", {}, "retry-key") as (_key, replay):
+        assert replay is None
+        # 模拟副作用入口返回失败：不 record，离开 context 即释放 reservation。
+    with idempotency.reservation(
+            bid, "execute", {}, "retry-key") as (key, replay):
+        assert replay is None
+        idempotency.record(bid, key, "execute", {"ok": True})

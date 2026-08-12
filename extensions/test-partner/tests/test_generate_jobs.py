@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import threading
+
 from server.generate.jobs import (
     CANCELLED,
     DONE,
@@ -145,6 +148,53 @@ def test_eviction_is_per_owner():
 
 
 # ── 并发计数：给"一次只让跑一个"这类闸用 ─────────────────────────────────
+
+def test_create_if_idle_is_atomic_under_a_same_owner_thread_race(monkeypatch):
+    """同一用户同时点很多次，也只能有一个请求拿到花钱任务。"""
+    store = JobStore()
+    workers = 16
+    barrier = threading.Barrier(workers)
+    count_barrier = threading.Barrier(workers)
+
+    # 若实现退回旧的 running_count→create，两段之间的窗口会被这里稳定放大：
+    # 所有线程先各自读到 0，再一起继续。原子实现根本不会调用这个替身。
+    original_running_count = store.running_count
+
+    def racing_count(owner):
+        value = original_running_count(owner)
+        count_barrier.wait()
+        return value
+
+    monkeypatch.setattr(store, "running_count", racing_count)
+
+    def create():
+        barrier.wait()
+        return store.create_if_idle("alice")
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        jobs = list(pool.map(lambda _: create(), range(workers)))
+
+    assert sum(job is not None for job in jobs) == 1
+    assert len(store.list_for("alice")) == 1
+
+
+def test_create_if_idle_race_is_scoped_per_owner():
+    """Alice 的原子闸不能把 Bob 也挡住；每个 owner 各有一个赢家。"""
+    store = JobStore()
+    owners = ["alice"] * 8 + ["bob"] * 8
+    barrier = threading.Barrier(len(owners))
+
+    def create(owner):
+        barrier.wait()
+        return owner, store.create_if_idle(owner)
+
+    with ThreadPoolExecutor(max_workers=len(owners)) as pool:
+        results = list(pool.map(create, owners))
+
+    for owner in {"alice", "bob"}:
+        assert sum(job is not None for got, job in results if got == owner) == 1
+        assert store.running_count(owner) == 1
+
 
 def test_running_count_only_counts_unfinished():
     store = JobStore()

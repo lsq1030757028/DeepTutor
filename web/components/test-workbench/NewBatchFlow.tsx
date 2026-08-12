@@ -117,7 +117,7 @@ export default function NewBatchFlow({ onDone, onCancel, resumeJobId = null }: {
   useEffect(() => stopPolling, [stopPolling]);
 
   // ── 第 1 步：上传 + 本地体检（不调模型，免费且立即出结果） ──────────────
-  const upload = useCallback(async (file: File) => {
+  const upload = async (file: File) => {
     setBusy(true);
     setError(null);
     try {
@@ -138,7 +138,7 @@ export default function NewBatchFlow({ onDone, onCancel, resumeJobId = null }: {
     } finally {
       setBusy(false);
     }
-  }, []);
+  };
 
   // ── 第 2 步：AI 起草场景（用户可改；改过的优先） ────────────────────────
   const [drafted, setDrafted] = useState(false);

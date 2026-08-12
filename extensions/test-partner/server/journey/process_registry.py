@@ -26,9 +26,11 @@ pytest 用完删掉 tmp 目录后，`pids.json` 随目录消失 ⇒ **登记过�
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import os
 import signal
+import threading
 import time
 from typing import Any
 
@@ -39,6 +41,11 @@ STALE_TTL_S = 30 * 60
 
 #: 根级镜像台账文件名。**它是「run 目录被删」之后唯一还认得那些 PID 的东西。**
 MIRROR_FILE = "registered-pids.jsonl"
+
+# `fcntl`/`msvcrt` 文件锁负责同一工作台根下的跨进程互斥；同一 Python
+# 进程里的线程还要再过这一层，因为 POSIX 文件锁按进程而不是按线程归属。
+_PROCESS_SLOT_LOCK = threading.Lock()
+_SLOT_LOCK_FILE = ".journey-process-slots.lock"
 
 
 def _read_ledger(run_dir: str) -> list[dict[str, Any]]:
@@ -332,6 +339,42 @@ def _active_dir(root: str | None = None) -> str:
     return d
 
 
+def _slot_lock_path(root: str | None = None) -> str:
+    """跨进程 slot 锁文件；不放 `_active/`，避免被当成活跃 run 标记。"""
+    workbench = artifacts.workbench_root(root)
+    os.makedirs(workbench, exist_ok=True)
+    return os.path.join(workbench, _SLOT_LOCK_FILE)
+
+
+@contextmanager
+def _slot_registry_lock(root: str | None = None):
+    """串行化 stale cleanup、slot 计数、占位与释放（线程 + 跨进程）。"""
+    with _PROCESS_SLOT_LOCK:
+        with open(_slot_lock_path(root), "a+b") as lock_file:
+            lock_file.seek(0, os.SEEK_END)
+            if lock_file.tell() == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 def _pid_alive(pid: int) -> bool:
     if os.name == "nt":
         # Windows 的 os.kill(pid, 0) 不是 POSIX 的无副作用存活探针：0 会被当成
@@ -373,7 +416,7 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-def reap_stale(root: str | None = None) -> list[str]:
+def _reap_stale_unlocked(root: str | None = None) -> list[str]:
     """清理宿主进程已死或超 TTL 的活跃标记，并回收其 run 的登记 PID。
 
     **BB-501 修复点**：run 目录还在 → 照旧读 `pids.json`；run 目录已被删 →
@@ -407,24 +450,36 @@ def reap_stale(root: str | None = None) -> list[str]:
     return cleaned
 
 
+def reap_stale(root: str | None = None) -> list[str]:
+    """在与 slot 占位相同的原子区内清理过期标记。"""
+    with _slot_registry_lock(root):
+        return _reap_stale_unlocked(root)
+
+
 def acquire_slot(run_id: str, run_dir: str, max_concurrent: int = 2,
                  root: str | None = None) -> dict[str, Any]:
-    reap_stale(root)
-    d = _active_dir(root)
-    active = os.listdir(d)
-    active = [a for a in active if a != MIRROR_FILE]
-    if len(active) >= max_concurrent:
-        return {"ok": False, "error": "BUSY_MAX_CONCURRENT_RUNS",
-                "active": active,
-                "hint": f"同时运行 run ≤ {max_concurrent}（ADR-M1-02），请等其完成后重试"}
-    with open(os.path.join(d, run_id + ".json"), "w", encoding="utf-8") as fh:
-        pid = os.getpid()
-        json.dump({"pid": pid, "instance_id": _process_instance_id(pid),
-                   "run_dir": run_dir, "at": time.time()}, fh)
-    return {"ok": True}
+    with _slot_registry_lock(root):
+        _reap_stale_unlocked(root)
+        d = _active_dir(root)
+        active = sorted(a for a in os.listdir(d) if a != MIRROR_FILE)
+        marker = run_id + ".json"
+        if marker in active:
+            return {"ok": False, "error": "BUSY_RUN_ALREADY_ACTIVE",
+                    "active": active, "hint": "该 run 已在执行，请勿重复启动"}
+        if len(active) >= max_concurrent:
+            return {"ok": False, "error": "BUSY_MAX_CONCURRENT_RUNS",
+                    "active": active,
+                    "hint": f"同时运行 run ≤ {max_concurrent}（ADR-M1-02），请等其完成后重试"}
+        # `x` 是最后一道防线：即使未来出现未走本锁的调用，也不能覆盖同 run 标记。
+        with open(os.path.join(d, marker), "x", encoding="utf-8") as fh:
+            pid = os.getpid()
+            json.dump({"pid": pid, "instance_id": _process_instance_id(pid),
+                       "run_dir": run_dir, "at": time.time()}, fh)
+        return {"ok": True}
 
 
 def release_slot(run_id: str, root: str | None = None) -> None:
-    path = os.path.join(_active_dir(root), run_id + ".json")
-    if os.path.isfile(path):
-        os.remove(path)
+    with _slot_registry_lock(root):
+        path = os.path.join(_active_dir(root), run_id + ".json")
+        if os.path.isfile(path):
+            os.remove(path)

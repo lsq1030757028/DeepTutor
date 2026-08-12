@@ -29,12 +29,13 @@ export const TEST_CAPABILITY = "test";
 
 const JOURNEY_PREFIX = "journey_";
 
-/** 九原子 + 门票 + 两个读接口。名字与 `server/journey/tools.py` 的 MCP 面一致。 */
+/** 九原子 + 写确认 + 两个读接口。名字与后端 MCP 面一致。 */
 export const JOURNEY_TOOLS = [
   "ingest",
   "clarify",
   "analyze",
   "draft_cases",
+  "write_confirm",
   "adopt",
   "compile",
   "execute",
@@ -42,7 +43,6 @@ export const JOURNEY_TOOLS = [
   "coverage",
   "list_batches",
   "get_batch",
-  "issue_gate_token",
 ] as const;
 
 export type JourneyTool = (typeof JOURNEY_TOOLS)[number];
@@ -413,7 +413,9 @@ function applyResult(m: Mutable, tool: JourneyTool, content: unknown): boolean {
     changed = true;
   }
   const code = str(payload.code);
-  if (payload.ok === false || (code && code !== "OK")) {
+  // `NEEDS_GATE` 这类 ok=true 的 code 是业务状态，不是失败。错误边界由
+  // `ok=false` 唯一决定，避免把「轮到用户定档」渲染成红色故障。
+  if (payload.ok === false) {
     m.errors = [
       ...m.errors,
       { tool, code: code || "E_UNKNOWN", message: str(payload.message) },

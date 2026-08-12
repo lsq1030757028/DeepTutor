@@ -28,15 +28,56 @@ key 由「batch_id + 输入 digest」派生，调用方不给也能自动算—�
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import os
 import time
-from typing import Any
+from typing import Any, Iterator
 
 from server.journey import artifacts
 from server.journey.digest import sha256_digest
 
 LEDGER_NAME = "idempotency.jsonl"
+LOCK_DIR = ".idempotency-locks"
+
+
+@contextmanager
+def _file_lock(path: str, *, timeout_s: float = 1200.0) -> Iterator[None]:
+    """跨线程/跨进程独占一个字节锁，进程退出时由 OS 自动释放。
+
+    锁文件本身可以长期保留；它不承载状态。真正的完成状态仍只认 append-only
+    ledger，因此崩溃在副作用完成前会释放 reservation，允许调用方重试。
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a+b") as fh:
+        fh.seek(0, os.SEEK_END)
+        if fh.tell() == 0:
+            fh.write(b"\0")
+            fh.flush()
+        fh.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            deadline = time.monotonic() + timeout_s
+            while True:
+                try:
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"等待幂等锁超时：{os.path.basename(path)}")
+                    time.sleep(0.05)
+            try:
+                yield
+            finally:
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
 def derive_key(batch_id: str, tool: str, params: dict[str, Any]) -> str:
@@ -54,24 +95,26 @@ def _ledger_path(batch_id: str, *, owner: str | None = None,
                         LEDGER_NAME)
 
 
-def lookup(batch_id: str, key: str, *, owner: str | None = None,
+def lookup(batch_id: str, key: str, *, tool: str | None = None,
+           owner: str | None = None,
            root: str | None = None) -> dict[str, Any] | None:
-    """查这个 key 有没有跑过。返回上次的结果体，没有则 None。"""
+    """查这个 ``(tool, key)`` 有没有跑过。tool 为空只为兼容台账诊断。"""
     path = _ledger_path(batch_id, owner=owner, root=root)
     if not os.path.isfile(path):
         return None
     hit = None
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            if row.get("key") == key:
-                hit = row          # 后写的覆盖先写的（append-only 台账的正常读法）
+    with _file_lock(path + ".lock"):
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if row.get("key") == key and (tool is None or row.get("tool") == tool):
+                    hit = row      # 后写的覆盖先写的（append-only 台账的正常读法）
     return hit
 
 
@@ -80,24 +123,15 @@ def record(batch_id: str, key: str, tool: str, result: dict[str, Any], *,
     """把一次成功的副作用调用记进台账。**只记成功**——失败的调用重试是合理的。"""
     path = _ledger_path(batch_id, owner=owner, root=root)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"key": key, "tool": tool, "at": time.time(),
-                             "result": result}, ensure_ascii=False) + "\n")
+    with _file_lock(path + ".lock"):
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"key": key, "tool": tool, "at": time.time(),
+                                 "result": result}, ensure_ascii=False) + "\n")
 
 
-def guard(batch_id: str, tool: str, params: dict[str, Any],
-          idempotency_key: str = "", *, owner: str | None = None,
-          root: str | None = None) -> tuple[str, dict[str, Any] | None]:
-    """副作用工具的统一入口守卫。
-
-    返回 `(key, replay_result_or_None)`：
-    - `replay_result` 非 None → 直接把它带 `replayed=True` 回给调用方，**别再执行**；
-    - 为 None → 正常执行，执行成功后调 `record(batch_id, key, ...)`。
-    """
-    key = (idempotency_key or "").strip() or derive_key(batch_id, tool, params)
-    hit = lookup(batch_id, key, owner=owner, root=root)
+def _replay_payload(hit: dict[str, Any] | None, key: str) -> dict[str, Any] | None:
     if hit is None:
-        return key, None
+        return None
     payload = dict(hit.get("result") or {})
     payload["replayed"] = True
     payload["idempotency_key"] = key
@@ -106,4 +140,43 @@ def guard(batch_id: str, tool: str, params: dict[str, Any],
     payload["message"] = (
         "这次调用与之前某次的输入完全相同，直接返回上次的结果，**没有产生新的执行**。"
         "如果你确实想重跑，改一处输入或显式换一个 idempotency_key。")
-    return key, payload
+    return payload
+
+
+def _reservation_path(batch_id: str, tool: str, key: str, *,
+                      owner: str | None = None, root: str | None = None) -> str:
+    lock_id = sha256_digest({"tool": tool, "key": key})[:40]
+    return os.path.join(artifacts.batch_dir(batch_id, owner=owner, root=root),
+                        LOCK_DIR, lock_id + ".lock")
+
+
+@contextmanager
+def reservation(batch_id: str, tool: str, params: dict[str, Any],
+                idempotency_key: str = "", *, owner: str | None = None,
+                root: str | None = None) -> Iterator[tuple[str, dict[str, Any] | None]]:
+    """原子 reservation：锁覆盖 ``lookup → 副作用 → record`` 整段。
+
+    唯一域是批次真实 owner 目录下的 ``(tool, key)``。调用失败时调用方不记 ledger，
+    离开 context 后锁自然释放；下一次可以重试。调用成功必须在 context 内 ``record``。
+    """
+    key = (idempotency_key or "").strip() or derive_key(batch_id, tool, params)
+    path = _reservation_path(batch_id, tool, key, owner=owner, root=root)
+    with _file_lock(path):
+        hit = lookup(batch_id, key, tool=tool, owner=owner, root=root)
+        yield key, _replay_payload(hit, key)
+
+
+def guard(batch_id: str, tool: str, params: dict[str, Any],
+          idempotency_key: str = "", *, owner: str | None = None,
+          root: str | None = None) -> tuple[str, dict[str, Any] | None]:
+    """兼容旧测试/诊断的单次查询；生产副作用必须用 :func:`reservation`。
+
+    返回 `(key, replay_result_or_None)`：
+    - `replay_result` 非 None → 直接把它带 `replayed=True` 回给调用方，**别再执行**；
+    - 为 None → 只表示查询当刻未命中；本函数不持锁，不能包围真实副作用。
+    """
+    key = (idempotency_key or "").strip() or derive_key(batch_id, tool, params)
+    hit = lookup(batch_id, key, tool=tool, owner=owner, root=root)
+    if hit is None:
+        return key, None
+    return key, _replay_payload(hit, key)

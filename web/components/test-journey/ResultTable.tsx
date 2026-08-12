@@ -13,6 +13,10 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import TraceLauncher from "@/components/test-journey/TraceLauncher";
+import {
+  JourneyErrorCode,
+  openJourneyTrace,
+} from "@/components/test-journey/client";
 import type { RunRow, VerdictRow } from "@/components/test-journey/types";
 import { runTrack, summarizeRun } from "@/components/test-journey/types";
 
@@ -61,9 +65,21 @@ function EvidenceCell({ row }: { row: VerdictRow }) {
   );
 }
 
-export default function ResultTable({ runs }: { runs: RunRow[] }) {
+interface TraceState {
+  errorCode?: string;
+  command?: string;
+}
+
+export default function ResultTable({
+  batchId,
+  runs,
+}: {
+  batchId: string;
+  runs: RunRow[];
+}) {
   const { t } = useTranslation();
   const [index, setIndex] = useState(runs.length - 1);
+  const [traceStates, setTraceStates] = useState<Record<string, TraceState>>({});
   if (runs.length === 0) {
     return (
       <p className="rounded-xl border border-[var(--border)] px-4 py-6 text-center text-sm text-[var(--muted-foreground)]">
@@ -78,6 +94,30 @@ export default function ResultTable({ runs }: { runs: RunRow[] }) {
   const track = runTrack(run.receipt, run.verdicts);
   const probingRows = run.verdicts.filter((r) => r.probing);
   const scoredRows = run.verdicts.filter((r) => !r.probing);
+
+  const openTrace = async (row: VerdictRow) => {
+    if (!row.trace_rel) return;
+    const key = `${run.run_id}:${row.id}`;
+    const result = await openJourneyTrace(batchId, run.run_id, row.trace_rel);
+    const body = (result.data ?? {}) as Record<string, unknown>;
+    let errorCode: string | undefined;
+    if (!result.ok) {
+      errorCode = result.code === "E_NO_TRACE"
+        ? JourneyErrorCode.TRACE_MISSING
+        : result.code === JourneyErrorCode.TRACE_VIEWER_MISSING
+          ? JourneyErrorCode.TRACE_VIEWER_MISSING
+          : JourneyErrorCode.TRACE_SPAWN_FAILED;
+    } else if (body.spawn_error) {
+      errorCode = JourneyErrorCode.TRACE_SPAWN_FAILED;
+    }
+    setTraceStates((previous) => ({
+      ...previous,
+      [key]: {
+        errorCode,
+        command: typeof body.command === "string" ? body.command : undefined,
+      },
+    }));
+  };
 
   return (
     <div className="space-y-3">
@@ -152,7 +192,9 @@ export default function ResultTable({ runs }: { runs: RunRow[] }) {
             </tr>
           </thead>
           <tbody>
-            {scoredRows.map((row) => (
+            {scoredRows.map((row) => {
+              const traceState = traceStates[`${run.run_id}:${row.id}`] ?? {};
+              return (
               <tr key={row.id} className="border-b border-[var(--border)] last:border-0 align-top">
                 <td className="px-3 py-2.5 font-mono text-xs text-[var(--foreground)]">{row.id}</td>
                 <td className="px-3 py-2.5">
@@ -173,10 +215,18 @@ export default function ResultTable({ runs }: { runs: RunRow[] }) {
                 <td className="px-3 py-2.5">
                   {/* 表格里用紧凑形态：一行说清即可。完整的「是什么坏了 + 还能走哪条路」
                       留给独立呈现的场合——把整块异常卡塞进每一行会把表读死。 */}
-                  <TraceLauncher track={track} traceRel={null} compact />
+                  <TraceLauncher
+                    track={track}
+                    traceRel={row.trace_rel}
+                    command={traceState.command}
+                    errorCode={traceState.errorCode}
+                    onOpen={() => void openTrace(row)}
+                    compact
+                  />
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>

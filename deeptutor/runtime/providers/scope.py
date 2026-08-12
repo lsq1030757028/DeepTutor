@@ -29,6 +29,9 @@ class ToolScope:
     #: not the (absent) per-user grant.
     is_partner: bool = False
     session_id: str = ""
+    #: The server-routed capability name for this turn. Provider policy must
+    #: never infer this from model arguments.
+    active_capability: str = "chat"
     #: The caller's own configured whitelist (a partner's ``mcp_tools``).
     #: ``None`` = the caller imposes no restriction.
     caller_whitelist: frozenset[str] | None = None

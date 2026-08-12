@@ -123,6 +123,11 @@ class MCPToolAdapter(BaseTool):
         return self._server_name
 
     @property
+    def original_name(self) -> str:
+        """Unwrapped server-side name, used for provider-specific policy."""
+        return self._original_name
+
+    @property
     def server_name(self) -> str:
         """Deprecated alias for :attr:`provider_id`; kept for API compatibility."""
         return self._server_name
@@ -140,6 +145,39 @@ class MCPToolAdapter(BaseTool):
         # notifications during a long call, and that is the only thing a reader
         # has to look at while a five-minute render or crawl is running.
         event_sink = kwargs.pop("event_sink", None)
+        if self._server_name == "test-partner" and self._original_name.startswith("journey_"):
+            from deeptutor.services.test_journey.trust import (
+                RESERVED_ARGUMENTS,
+                JourneyTrustError,
+                current_trusted_journey_context,
+                effective_arguments,
+                sign_bridge_context,
+            )
+
+            context = current_trusted_journey_context()
+            if context is None or context.capability != "test":
+                return ToolResult(
+                    content=(
+                        "This Journey tool is only available inside an "
+                        "authenticated Test capability turn."
+                    ),
+                    success=False,
+                )
+            for reserved in RESERVED_ARGUMENTS:
+                kwargs.pop(reserved, None)
+            effective = effective_arguments(kwargs, self._input_schema)
+            try:
+                kwargs["bridge_context"] = sign_bridge_context(
+                    context,
+                    tool=self._original_name,
+                    arguments=effective,
+                )
+            except JourneyTrustError as exc:
+                logger.error("Journey trust bridge is not configured: %s", exc)
+                return ToolResult(
+                    content="The Journey trust bridge is not configured.",
+                    success=False,
+                )
         text = await self._manager.call_tool(
             self._owner,
             self._server_name,

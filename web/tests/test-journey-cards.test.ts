@@ -56,10 +56,10 @@ function filler(i: number): AnyEvent {
   };
 }
 
- 
+
 const push = (acc: ReturnType<typeof createJourneyAccumulator>, events: AnyEvent[]) =>
   acc.push(TEST_CAPABILITY, events as any);
- 
+
 const extract = (events: AnyEvent[], capability = TEST_CAPABILITY) =>
   extractJourneyState(events as any, capability);
 
@@ -140,6 +140,7 @@ test("工具名认的是 journey_ 之后那截，不认死服务器前缀", () =
   // 服务器名是用户可配的，换个名字照样认得出。
   assert.equal(journeyToolOf("mcp_whatever_journey_coverage"), "coverage");
   assert.equal(journeyToolOf("journey_execute"), "execute");
+  assert.equal(journeyToolOf("journey_write_confirm"), "write_confirm");
   // 不是旅程工具的一律不认，别把别的工具结果当旅程产物解析。
   assert.equal(journeyToolOf("mcp_tapd_get_stories"), null);
   assert.equal(journeyToolOf("journey_not_a_tool"), null);
@@ -256,6 +257,19 @@ test("错误当数据：工具失败与非业务载荷都如实记，不猜不�
   }
 });
 
+test("NEEDS_GATE 是待用户定档，不是红色错误", () => {
+  const state = extract([
+    toolResult("clarify", CLARIFY_OK),
+    toolResult("ingest", {
+      ok: true,
+      code: "NEEDS_GATE",
+      message: "请选择测试档位",
+    }),
+  ]);
+  assert.ok(state);
+  assert.deepEqual(state.errors, []);
+});
+
 test("工作台产物不进聊天卡：ingest/analyze/adopt/compile 一张卡都不喂", () => {
   const state = extract([
     toolResult("ingest", { ok: true, code: "OK", batch_id: "b-1" }),
@@ -280,7 +294,7 @@ test("作用域：非「测试」模式一律返回 null，事件里有旅程产
   ];
   for (const capability of ["", "chat", "deep_research", "deep_question", "visualize", undefined]) {
     const acc = createJourneyAccumulator();
-     
+
     assert.equal(acc.push(capability, journeyEvents as any), null, String(capability));
   }
   // 同一批事件在「测试」模式下**是**出得来的——否则上面那圈 null 可能只是
@@ -292,9 +306,9 @@ test("作用域：模式切走后状态清干净，切回来不接上一条流",
   const acc = createJourneyAccumulator();
   const events = [toolResult("clarify", CLARIFY_OK)];
   assert.equal(push(acc, events)?.rules.length, 2);
-   
+
   assert.equal(acc.push("chat", events as any), null);
-   
+
   assert.equal(acc.push(TEST_CAPABILITY, [] as any), null);
 });
 
@@ -382,7 +396,7 @@ test("性能回归：不慢于 quiz 那条既有流式路径的 2 倍", () => {
 
   // 预热：两边都跑一遍，免得 JIT 冷启动落在谁头上。
   for (let i = 1; i <= TICKS; i += 1) {
-     
+
     extractStreamingQuizQuestions(quizEvents.slice(0, i) as any);
   }
   const warm = createJourneyAccumulator();
@@ -390,7 +404,7 @@ test("性能回归：不慢于 quiz 那条既有流式路径的 2 倍", () => {
 
   const baselineMs = timeIt(() => {
     for (let i = 1; i <= TICKS; i += 1) {
-       
+
       extractStreamingQuizQuestions(quizEvents.slice(0, i) as any);
     }
   });
@@ -551,4 +565,77 @@ test("真渲染：流式卡在工具还在飞时就出来，且采纳按钮点�
     html.includes(copy.draft.actionPending),
     "缺「生成完才能点」的死按钮文案",
   );
+});
+
+test("工作台继续对话会切到测试模式并把批次上下文放进输入框", () => {
+  const detail = readFileSync(
+    path.resolve(process.cwd(), "components/test-journey/JourneyDetail.tsx"),
+    "utf8",
+  );
+  const home = readFileSync(
+    path.resolve(process.cwd(), "app/(workspace)/home/[[...sessionId]]/page.tsx"),
+    "utf8",
+  );
+  assert.match(detail, /capability=test&test_batch=/);
+  assert.match(home, /p\.get\("test_batch"\)/);
+  assert.match(home, /handleSelectCapability\("test"\)/);
+  assert.match(home, /handlePrefillComposer/);
+});
+
+test("旅程页面只走专用鉴权路由，不持有任意 MCP 执行原语", () => {
+  const client = readFileSync(
+    path.resolve(process.cwd(), "components/test-journey/client.ts"),
+    "utf8",
+  );
+  assert.match(client, /\/api\/v1\/test-journey\/batches/);
+  assert.doesNotMatch(client, /\/plugins\/tools\//);
+  assert.doesNotMatch(client, /callJourney\(\s*tool/);
+  assert.match(client, /\/runs\/.*\/trace/);
+});
+
+test("结果页把服务端 trace handle 接到专用打开接口，不再永久传 null", () => {
+  const table = readFileSync(
+    path.resolve(process.cwd(), "components/test-journey/ResultTable.tsx"),
+    "utf8",
+  );
+  assert.match(table, /traceRel=\{row\.trace_rel\}/);
+  assert.match(table, /openJourneyTrace\(batchId, run\.run_id, row\.trace_rel\)/);
+  assert.doesNotMatch(table, /traceRel=\{null\}/);
+});
+
+test("旅程列表与详情用请求代次挡住旧响应覆盖新页面", () => {
+  for (const file of ["JourneyList.tsx", "JourneyDetail.tsx"]) {
+    const source = readFileSync(
+      path.resolve(process.cwd(), `components/test-journey/${file}`),
+      "utf8",
+    );
+    assert.match(source, /requestIdRef/);
+    assert.match(source, /requestId !== requestIdRef\.current/);
+  }
+});
+
+test("错误说明只引用 JourneyErrorCode 权威枚举里的现役错误码", () => {
+  const client = readFileSync(
+    path.resolve(process.cwd(), "components/test-journey/client.ts"),
+    "utf8",
+  );
+  const errorState = readFileSync(
+    path.resolve(process.cwd(), "components/test-journey/ErrorState.tsx"),
+    "utf8",
+  );
+  const objectBody = client.match(/export const JourneyErrorCode = \{([\s\S]*?)\}\s+as const/)?.[1];
+  assert.ok(objectBody, "找不到 JourneyErrorCode 权威枚举");
+  const defined = new Set(
+    [...objectBody.matchAll(/^\s*([A-Z][A-Z0-9_]+):/gm)].map((match) => match[1]),
+  );
+  const used = [
+    ...errorState.matchAll(/JourneyErrorCode\.([A-Z][A-Z0-9_]+)/g),
+  ].map((match) => match[1]);
+
+  assert.deepEqual(
+    [...new Set(used.filter((name) => !defined.has(name)))],
+    [],
+    "ErrorState 引用了已删除或拼错的错误码",
+  );
+  assert.doesNotMatch(errorState, /GATE_REQUIRED|journey ticket/);
 });

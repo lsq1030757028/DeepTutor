@@ -35,6 +35,13 @@ class _McpTool(BaseTool):
         return ToolResult(content="ok")
 
 
+class _JourneyMcpTool(_McpTool):
+    original_name = "journey_get_batch"
+
+    def __init__(self) -> None:
+        super().__init__("mcp_test_partner_journey_get_batch", "test-partner")
+
+
 class _FakeManager:
     def __init__(self) -> None:
         self.started = 0
@@ -88,6 +95,28 @@ async def test_admin_sees_every_provider_tool(registry, monkeypatch) -> None:
     assert {t.name for t in view.pool} == {"mcp_gh_search", "mcp_pageindex_search"}
     assert view.loader is not None
     assert "MCP server: gh" in view.manifest
+
+
+@pytest.mark.asyncio
+async def test_journey_tools_are_hidden_and_refused_outside_test_capability(
+    registry, monkeypatch
+) -> None:
+    journey = _JourneyMcpTool()
+    registry.register(journey)
+    _grant(monkeypatch, None)
+    plain = await build_tool_view(
+        base_registry=registry,
+        scope=ToolScope(session_id="s", active_capability="chat"),
+    )
+    assert journey not in plain.pool
+    assert plain.registry.get(journey.name) is journey
+    assert not (await plain.registry.execute(journey.name)).success
+
+    test_mode = await build_tool_view(
+        base_registry=registry,
+        scope=ToolScope(session_id="s", active_capability="test"),
+    )
+    assert journey in test_mode.pool
 
 
 @pytest.mark.asyncio

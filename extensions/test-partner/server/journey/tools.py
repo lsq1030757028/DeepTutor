@@ -9,7 +9,7 @@ M1 把九原子工具做完了，但**没有任何对外调用面**：`@mcp.tool
 聊天人闸——全部压在这条缺失的面上。
 
 本模块是那条面的**服务端半边**：把 `server/journey/*` 的纯函数包成
-「统一信封 + 门票闸 + 幂等闸 + 错误码」的形态，再由 `server/main.py` 挂成 MCP 工具。
+「统一信封 + 可信 owner + 幂等闸 + 错误码」的形态，再由 `server/main.py` 挂成 MCP 工具。
 
 ## 三条形态约束
 
@@ -22,42 +22,62 @@ M1 把九原子工具做完了，但**没有任何对外调用面**：`@mcp.tool
 """
 from __future__ import annotations
 
+from functools import wraps
 import os
 from typing import Any
 
 from server.journey import (
     adopt as _adopt,
+)
+from server.journey import (
     analyze as _analyze,
+)
+from server.journey import (
     artifacts,
-    clarify as _clarify,
-    compile_bundle as _compile,
-    coverage as _coverage,
-    draft_cases as _draft,
-    execute_run as _execute,
     gate,
     idempotency,
-    ingest as _ingest,
     oracle,
+)
+from server.journey import (
+    clarify as _clarify,
+)
+from server.journey import (
+    compile_bundle as _compile,
+)
+from server.journey import (
+    coverage as _coverage,
+)
+from server.journey import (
+    draft_cases as _draft,
+)
+from server.journey import (
+    execute_run as _execute,
+)
+from server.journey import (
+    ingest as _ingest,
+)
+from server.journey import (
     project_verdicts as _project,
 )
+from server.journey.digest import sha256_digest
 
 #: 判断类工具（聊天 agent 驱动）与机械类工具（薄壳 / 链式调用）的分工，
 #: 与 SSOT「动作分流」一致：判断类从聊天发起，机械类在工作台。
 JUDGEMENT_TOOLS = ("ingest", "clarify", "analyze", "draft_cases", "adopt")
 MECHANICAL_TOOLS = ("compile", "execute", "project", "coverage")
-READ_TOOLS = ("list_batches", "get_batch")
+READ_TOOLS = ("list_batches", "get_batch", "open_trace")
 
 #: 九原子 + 两个读接口。`main.py` 的挂载数与本元组对拍（ADR-M2-01 G2），
 #: 防「加了工具忘了挂 MCP 面」与「挂了未声明的工具」两向漂移。
 TOOL_NAMES: tuple[str, ...] = JUDGEMENT_TOOLS + MECHANICAL_TOOLS + READ_TOOLS
 
-#: 人闸类：门票下发与写确认落账。**不算九原子之一**——九原子是旅程的业务工序，
-#: 这两个是人闸的服务端半边（一个发票、一个记答案）。混进 JUDGEMENT_TOOLS 会让
+#: 人闸类：写确认落账。**不算九原子之一**——九原子是旅程的业务工序，
+#: 它是人闸的服务端半边（记录用户答案）。混进 JUDGEMENT_TOOLS 会让
 #: 「九原子一个都不能少」那条断言从"业务工序齐不齐"变成"工具总数对不对"，
 #: 而后者随便加个工具就会红，红几次就没人看了。
 #: 但它们确实挂在 MCP 面上，所以要在对拍集合里明说——否则 G2 的断言会因为
 #: "多出一个没声明的工具"而红，或者被人顺手放宽成 `>=`。
-GATE_TOOLS: tuple[str, ...] = ("issue_gate_token", "write_confirm")
+GATE_TOOLS: tuple[str, ...] = ("write_confirm",)
 
 #: MCP 面上 `journey_*` 的**完整**集合。G2 断言的对象就是它。
 MCP_TOOL_NAMES: tuple[str, ...] = TOOL_NAMES + GATE_TOOLS
@@ -72,6 +92,26 @@ def _ok(code: str = "OK", **rest: Any) -> dict[str, Any]:
 
 def _err(code: str, message: str, **rest: Any) -> dict[str, Any]:
     return {"ok": False, "code": code, "message": message, **rest}
+
+
+def _requires_trusted_owner(fn):
+    """Make every production tool call run in one server-trusted partition.
+
+    ``owner`` is accepted only as a server-side keyword from ``main.py``.  The
+    MCP wrapper overwrites model/browser identity fields after bridge
+    verification; direct unit tests must pass an explicit owner as well.
+    """
+    @wraps(fn)
+    def wrapped(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raw_owner = str(kwargs.pop("owner", "") or "").strip()
+        if not raw_owner or raw_owner == artifacts.DEFAULT_OWNER:
+            return _err("E_OWNER_REQUIRED", "可信 owner 缺失，拒绝访问旅程产物。")
+        try:
+            with artifacts.trusted_owner(raw_owner, root=kwargs.get("root")):
+                return fn(*args, **kwargs)
+        except artifacts.ArtifactError as exc:
+            return _err("E_OWNER_REQUIRED", str(exc))
+    return wrapped
 
 
 def _log_call(batch_id: str, tool: str, caller_surface: str,
@@ -99,24 +139,24 @@ def _guarded(batch_id: str, tool: str, caller_surface: str,
     return None
 
 
-# ── 1. ingest（唯一能创建批次的工具，fail-closed 于门票）────────────────────
+def _batch_partition(batch_id: str, root: str | None) -> str:
+    """从已落盘批次取幂等/执行分区，不信任调用方自报 owner。"""
+    batch = artifacts.load_batch(batch_id, root=root)
+    return artifacts.safe_owner(batch.get("partition") or batch.get("owner"))
 
 
+# ── 1. ingest（唯一能创建批次；fail-closed 于可信 bridge）───────────────────
+
+
+@_requires_trusted_owner
 def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
-           source_ref: str = "", gate_token: str = "",
+           source_ref: str = "",
            workspace_id: str = "", story_id: str = "",
            requirement_text: str = "", environment_ref: str = "",
            tier: str = "", tier_confirmed_via: str = "", owner: str = "",
            caller_surface: str = "unknown",
            root: str | None = None) -> dict[str, Any]:
-    """接入 + 定档。oracle 来源二选一：TAPD（workspace_id + story_id）或本地正文。
-
-    **门票在最前面判**：无票不建目录、不落产物（ADR-M2-01 G5 的机械判据就是
-    「批次目录与产物落盘数 == 0」，所以这里绝不能先 mkdir 再校验）。
-    """
-    ticket = gate.verify(gate_token, root=root)
-    if not ticket["ok"]:
-        return _err(ticket["code"], ticket["message"])
+    """接入 + 定档。可信 bridge 已在 MCP wrapper 中先于本函数验完。"""
 
     oracle_source: dict[str, Any] = {}
     text = requirement_text
@@ -151,10 +191,7 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
                     detail=result)
 
     bid = result["batch_id"]
-    gate.bind_batch(gate_token, bid, root=root)
     _log_call(bid, "ingest", caller_surface, root)
-    artifacts.append_event(bid, {"type": "gate_token_used",
-                                 "token_id": ticket.get("token_id", "")}, root=root)
 
     if oracle_source:
         src = oracle.snapshot(bid, oracle_source["_story"],
@@ -169,17 +206,10 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
     return _ok(batch_id=bid, intake_profile=result["intake_profile"])
 
 
-def issue_gate_token(*, session_ref: str = "",
-                     caller_surface: str = "capability",
-                     root: str | None = None) -> dict[str, Any]:
-    """下发门票。由「测试」capability 的服务端在开旅程时调。"""
-    return _ok(**gate.issue(session_ref=session_ref,
-                            caller_surface=caller_surface, root=root))
-
-
 # ── 2–5. 判断类 ─────────────────────────────────────────────────────────────
 
 
+@_requires_trusted_owner
 def clarify(*, batch_id: str, rules: list[dict[str, Any]],
             confirmed_facts_md: str, clarifications: list[dict[str, Any]] | None = None,
             caller_surface: str = "unknown",
@@ -193,6 +223,7 @@ def clarify(*, batch_id: str, rules: list[dict[str, Any]],
         _err("E_CLARIFY_REJECTED", "澄清产物没过牙", detail=r)
 
 
+@_requires_trusted_owner
 def analyze(*, batch_id: str, example_map: list[dict[str, Any]],
             analysis_md: str, caller_surface: str = "unknown",
             root: str | None = None) -> dict[str, Any]:
@@ -204,6 +235,7 @@ def analyze(*, batch_id: str, example_map: list[dict[str, Any]],
         _err("E_ANALYZE_REJECTED", "分析产物没过牙", detail=r)
 
 
+@_requires_trusted_owner
 def draft_cases(*, batch_id: str, cases: list[dict[str, Any]],
                 uncovered_rules: list[dict[str, Any]] | None = None,
                 caller_surface: str = "unknown",
@@ -218,6 +250,7 @@ def draft_cases(*, batch_id: str, cases: list[dict[str, Any]],
                warnings=r.get("warnings"))
 
 
+@_requires_trusted_owner
 def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "",
           adopted_via: str = "workbench_selection", confirmed_by: str = "",
           idempotency_key: str = "", skip_drift_check: bool = False,
@@ -237,21 +270,23 @@ def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "
 
     params = {"selected_draft_ids": sorted(selected_draft_ids or []),
               "caseset_slug": caseset_slug}
-    key, replay = idempotency.guard(batch_id, "adopt", params, idempotency_key,
-                                    root=root)
-    if replay is not None:
-        return replay
-    r = _adopt.adopt(batch_id, selected_draft_ids=selected_draft_ids,
-                     caseset_slug=caseset_slug, adopted_via=adopted_via,
-                     confirmed_by=confirmed_by)
-    if not r.get("ok"):
-        return _err("E_ADOPT_REJECTED", "采纳没过 cases_gate", detail=r)
-    out = _ok(approved_caseset=r.get("approved_caseset"),
-              cases_gate=r.get("cases_gate"), idempotency_key=key)
-    idempotency.record(batch_id, key, "adopt", out, root=root)
-    return out
+    owner = _batch_partition(batch_id, root)
+    with idempotency.reservation(batch_id, "adopt", params, idempotency_key,
+                                 owner=owner, root=root) as (key, replay):
+        if replay is not None:
+            return replay
+        r = _adopt.adopt(batch_id, selected_draft_ids=selected_draft_ids,
+                         caseset_slug=caseset_slug, adopted_via=adopted_via,
+                         confirmed_by=confirmed_by)
+        if not r.get("ok"):
+            return _err("E_ADOPT_REJECTED", "采纳没过 cases_gate", detail=r)
+        out = _ok(approved_caseset=r.get("approved_caseset"),
+                  cases_gate=r.get("cases_gate"), idempotency_key=key)
+        idempotency.record(batch_id, key, "adopt", out, owner=owner, root=root)
+        return out
 
 
+@_requires_trusted_owner
 def write_confirm(*, batch_id: str, case_ids: list[str] | None = None,
                   decided_by: str = "", confirmed_via: str = "ask_user_card",
                   caller_surface: str = "unknown",
@@ -262,7 +297,7 @@ def write_confirm(*, batch_id: str, case_ids: list[str] | None = None,
 
     `pw_runtime.py:88` 在执行时查 `events.jsonl` 里该用例的 `write_confirm`，
     查不到就 `SKIP_WRITE_UNCONFIRMED`。但生产侧**从来没有任何地方写过这种事件**
-    （只产出 adopt_confirm / tier_confirm / tool_call / gate_token_used 四种）。
+    （当时只产出 adopt_confirm / tier_confirm / tool_call 三种）。
     即：卡能弹、用户能答「4 条都允许」，**写用例照样被拦**，且用户无感知。
     与 BB-502 同形——挂载面与运行时能力面不一致，中间那段是哑的。
 
@@ -323,23 +358,27 @@ def write_confirm(*, batch_id: str, case_ids: list[str] | None = None,
 # ── 6–9. 机械类 ─────────────────────────────────────────────────────────────
 
 
+@_requires_trusted_owner
 def compile_bundle(*, batch_id: str, idempotency_key: str = "",
                    caller_surface: str = "unknown",
                    root: str | None = None) -> dict[str, Any]:
     blocked = _guarded(batch_id, "compile", caller_surface, root)
     if blocked:
         return blocked
-    key, replay = idempotency.guard(batch_id, "compile", {}, idempotency_key, root=root)
-    if replay is not None:
-        return replay
-    r = _compile.compile_bundle(batch_id)
-    if not r.get("ok"):
-        return _err("E_COMPILE_REJECTED", "编译没过 compile-gate", detail=r)
-    out = _ok(bundle=r, idempotency_key=key)
-    idempotency.record(batch_id, key, "compile", out, root=root)
-    return out
+    owner = _batch_partition(batch_id, root)
+    with idempotency.reservation(batch_id, "compile", {}, idempotency_key,
+                                 owner=owner, root=root) as (key, replay):
+        if replay is not None:
+            return replay
+        r = _compile.compile_bundle(batch_id)
+        if not r.get("ok"):
+            return _err("E_COMPILE_REJECTED", "编译没过 compile-gate", detail=r)
+        out = _ok(bundle=r, idempotency_key=key)
+        idempotency.record(batch_id, key, "compile", out, owner=owner, root=root)
+        return out
 
 
+@_requires_trusted_owner
 def execute(*, batch_id: str, variables: dict[str, Any] | None = None,
             case_ids: list[str] | None = None, base_url_override: str = "",
             resume_run_id: str = "", timeout_s: int = 900,
@@ -347,30 +386,35 @@ def execute(*, batch_id: str, variables: dict[str, Any] | None = None,
             caller_surface: str = "unknown", root: str | None = None) -> dict[str, Any]:
     """执行。副作用最重的一个，幂等闸的主战场。
 
-    注意 `variables` **不进 idempotency key**：它可能带 `{{token}}` 这类每次不同的
-    渲染值，进了 key 就永远算不出同一个 key，幂等等于没有。
+    `variables` 只把不可逆摘要纳入 key；既避免凭据落台账，也避免不同执行输入被
+    错误重放。timeout 与执行范围同样属于 key，triggered_by 仍只作审计说明。
     """
     blocked = _guarded(batch_id, "execute", caller_surface, root)
     if blocked:
         return blocked
     params = {"case_ids": sorted(case_ids or []),
               "base_url_override": base_url_override,
-              "resume_run_id": resume_run_id}
-    key, replay = idempotency.guard(batch_id, "execute", params, idempotency_key,
-                                    root=root)
-    if replay is not None:
-        return replay
-    r = _execute.execute(batch_id, variables=variables, case_ids=case_ids,
-                         resume_run_id=resume_run_id,
-                         base_url_override=base_url_override, timeout_s=timeout_s)
-    if not r.get("ok"):
-        return _err("E_EXECUTE_FAILED", str(r.get("error") or "执行失败"), detail=r)
-    out = _ok(run_id=r.get("run_id"), receipt=r.get("receipt"),
-              idempotency_key=key, triggered_by=triggered_by)
-    idempotency.record(batch_id, key, "execute", out, root=root)
-    return out
+              "resume_run_id": resume_run_id,
+              "timeout_s": int(timeout_s),
+              "variables_sha256": sha256_digest(variables or {})}
+    owner = _batch_partition(batch_id, root)
+    with idempotency.reservation(batch_id, "execute", params, idempotency_key,
+                                 owner=owner, root=root) as (key, replay):
+        if replay is not None:
+            return replay
+        r = _execute.execute(batch_id, variables=variables, case_ids=case_ids,
+                             resume_run_id=resume_run_id,
+                             base_url_override=base_url_override, timeout_s=timeout_s,
+                             triggered_by=triggered_by, root=root)
+        if not r.get("ok"):
+            return _err("E_EXECUTE_FAILED", str(r.get("error") or "执行失败"), detail=r)
+        out = _ok(run_id=r.get("run_id"), receipt=r.get("receipt"),
+                  idempotency_key=key, triggered_by=triggered_by)
+        idempotency.record(batch_id, key, "execute", out, owner=owner, root=root)
+        return out
 
 
+@_requires_trusted_owner
 def project(*, run_id: str, caller_surface: str = "unknown",
             root: str | None = None) -> dict[str, Any]:
     r = _project.project(run_id)
@@ -380,6 +424,25 @@ def project(*, run_id: str, caller_surface: str = "unknown",
     return _ok(**{k: v for k, v in r.items() if k != "ok"})
 
 
+def _trace_handle(run_dir: str, verdict: dict[str, Any]) -> str | None:
+    """Return a relative, existing trace handle; never leak an absolute path."""
+    from server.journey.pw_harness import case_slug
+    ident = str(verdict.get("id") or "").split("/")[-1]
+    suffix = case_slug(ident)
+    try:
+        names = os.listdir(run_dir)
+    except OSError:
+        return None
+    for name in names:
+        if not name.endswith(suffix):
+            continue
+        candidate = os.path.join(run_dir, name, "trace.zip")
+        if os.path.isfile(candidate):
+            return os.path.join(name, "trace.zip").replace("\\", "/")
+    return None
+
+
+@_requires_trusted_owner
 def coverage(*, batch_id: str, run_id: str = "", caller_surface: str = "unknown",
              root: str | None = None) -> dict[str, Any]:
     blocked = _guarded(batch_id, "coverage", caller_surface, root)
@@ -394,7 +457,9 @@ def coverage(*, batch_id: str, run_id: str = "", caller_surface: str = "unknown"
 # ── 读接口（薄壳的数据来源）─────────────────────────────────────────────────
 
 
-def list_batches(*, owner: str = "", root: str | None = None) -> dict[str, Any]:
+@_requires_trusted_owner
+def list_batches(*, owner: str = "", caller_surface: str = "unknown",
+                 root: str | None = None) -> dict[str, Any]:
     rows = artifacts.list_batches(owner=owner or None, root=root)
     return _ok(batches=[{
         "batch_id": b["batch_id"], "title": b.get("title", ""),
@@ -415,7 +480,9 @@ def stepper_definition() -> list[dict[str, str]]:
             for k in artifacts.STEPPER_ORDER]
 
 
-def get_batch(*, batch_id: str, root: str | None = None) -> dict[str, Any]:
+@_requires_trusted_owner
+def get_batch(*, batch_id: str, caller_surface: str = "unknown",
+              root: str | None = None) -> dict[str, Any]:
     check = gate.require_batch(batch_id, root=root)
     if not check["ok"]:
         return _err(check["code"], check["message"])
@@ -437,7 +504,41 @@ def get_batch(*, batch_id: str, root: str | None = None) -> dict[str, Any]:
             with open(receipt_path, encoding="utf-8") as fh:
                 row["receipt"] = json.load(fh)
         row["verdicts"] = _project.read_verdicts(rid)
+        for verdict in row["verdicts"]:
+            verdict["trace_rel"] = _trace_handle(rd, verdict)
         runs.append(row)
     return _ok(batch=meta, stepper=steps, stepper_definition=stepper_definition(),
                artifacts=payload, runs=runs,
                events=artifacts.read_events(batch_id, root=root))
+
+
+@_requires_trusted_owner
+def open_trace(*, batch_id: str, run_id: str, trace_rel: str,
+               caller_surface: str = "unknown",
+               root: str | None = None) -> dict[str, Any]:
+    """Open one owner-bound trace after batch/run/path membership checks."""
+    check = gate.require_batch(batch_id, root=root)
+    if not check["ok"]:
+        return _err(check["code"], check["message"])
+    batch = artifacts.load_batch(batch_id, root=root)
+    if run_id not in (batch.get("run_ids") or []):
+        return _err("E_NO_TRACE", "trace 不属于该批次。")
+    rd = artifacts.run_dir(run_id, root=root)
+    candidate = os.path.realpath(os.path.join(rd, str(trace_rel or "")))
+    try:
+        inside = os.path.commonpath([os.path.realpath(rd), candidate]) == \
+            os.path.realpath(rd)
+    except ValueError:
+        inside = False
+    if not inside or os.path.basename(candidate) != "trace.zip" or \
+            not os.path.isfile(candidate):
+        return _err("E_NO_TRACE", "trace 不存在或路径非法。")
+    from server.gateway import journey_console
+    result = journey_console.open_trace(run_id, trace_rel)
+    if not result.get("ok"):
+        return _err("E_TRACE_OPEN", str(result.get("error") or "trace 打开失败"))
+    # MCP/browser payload never returns the server's absolute path.
+    # The host command contains an absolute artifact path. It is useful on the
+    # host-only console but must not cross the authenticated browser/MCP bridge.
+    return _ok(started=bool(result.get("started")),
+               spawn_error=str(result.get("spawn_error") or ""))

@@ -87,6 +87,26 @@ class JobStore:
             self._evict(owner)
         return job
 
+    def create_if_idle(self, owner: str) -> Job | None:
+        """仅在 ``owner`` 没有未结束任务时开任务。
+
+        检查与写入必须在同一把锁里完成。若调用方先 ``running_count`` 再
+        ``create``，两个并发请求都可能在任一方写入前看到 0，随后各开一个
+        花钱任务。闸按 owner 判定：Alice 在跑不影响 Bob 发起自己的任务。
+        """
+        job = Job(id=secrets.token_urlsafe(12), owner=owner)
+        with self._lock:
+            busy = any(
+                current.owner == owner
+                and current.state in (PENDING, RUNNING)
+                for current in self._jobs.values()
+            )
+            if busy:
+                return None
+            self._jobs[job.id] = job
+            self._evict(owner)
+            return job
+
     def _evict(self, owner: str) -> None:
         """只淘汰**已结束**的旧任务。在跑的不能因为超额被丢掉。"""
         mine = [j for j in self._jobs.values() if j.owner == owner]

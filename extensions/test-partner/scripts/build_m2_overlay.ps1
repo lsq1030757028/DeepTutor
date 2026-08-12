@@ -54,6 +54,34 @@ function Assert-SafeTemporaryContext {
     return $pathFull
 }
 
+function Copy-DirectoryTree {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Source,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Destination
+    )
+
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    $robocopy = Get-Command robocopy.exe -ErrorAction SilentlyContinue
+    if ($null -ne $robocopy) {
+        # Copy-Item still trips MAX_PATH on Next's nested route manifests under
+        # long clean-worktree paths. Robocopy is the native directory-tree copy
+        # primitive on Windows; exit codes 0..7 are all successful outcomes.
+        & $robocopy.Source $Source $Destination /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
+        $copyExitCode = $LASTEXITCODE
+        if ($copyExitCode -gt 7) {
+            throw "robocopy failed with exit code ${copyExitCode}: $Source"
+        }
+        return
+    }
+
+    Get-ChildItem -LiteralPath $Source -Force | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $Destination -Recurse -Force
+    }
+}
+
 $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd(
     [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
 )
@@ -110,7 +138,37 @@ else {
     Write-Warning "Skipping web rebuild by explicit request; caller owns build freshness evidence."
 }
 
-$standaloneRoot = Join-Path $repoRoot "web\.next\standalone\DeepTutor\web"
+$requiredServerFilesPath = Join-Path $repoRoot "web\.next\required-server-files.json"
+if (-not (Test-Path -LiteralPath $requiredServerFilesPath)) {
+    throw "Missing Next required-server-files manifest: $requiredServerFilesPath"
+}
+$requiredServerFiles = Get-Content -LiteralPath $requiredServerFilesPath -Raw -Encoding UTF8 |
+    ConvertFrom-Json
+$manifestAppDir = [string]$requiredServerFiles.appDir
+if ([string]::IsNullOrWhiteSpace($manifestAppDir) -or
+    [IO.Path]::GetFullPath($manifestAppDir) -ne [IO.Path]::GetFullPath($webRoot)) {
+    throw "Next standalone manifest does not belong to this web root: $manifestAppDir"
+}
+$relativeAppDir = [string]$requiredServerFiles.relativeAppDir
+$standaloneBase = [IO.Path]::GetFullPath((Join-Path $repoRoot "web\.next\standalone"))
+if ([string]::IsNullOrWhiteSpace($relativeAppDir)) {
+    # Next 16.3 emits the app directly at standalone/ and leaves
+    # relativeAppDir empty. The manifest's absolute appDir check above keeps
+    # this fail-closed: an unrelated or stale build cannot select this root.
+    $standaloneRoot = $standaloneBase
+}
+else {
+    if ([IO.Path]::IsPathRooted($relativeAppDir)) {
+        throw "Unsafe relativeAppDir in required-server-files.json: $relativeAppDir"
+    }
+    $standaloneRoot = [IO.Path]::GetFullPath((Join-Path $standaloneBase $relativeAppDir))
+    if (-not $standaloneRoot.StartsWith(
+        $standaloneBase + [IO.Path]::DirectorySeparatorChar,
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "Next standalone root escaped its build output: $standaloneRoot"
+    }
+}
 $journeyRoute = Join-Path $standaloneRoot ".next\server\app\(workspace)\test-journey"
 
 if (-not (Test-Path -LiteralPath (Join-Path $standaloneRoot "server.js"))) {
@@ -128,7 +186,9 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $context "extensions\test-partner") -Force | Out-Null
 
     Copy-Item -LiteralPath (Join-Path $repoRoot "deeptutor") -Destination (Join-Path $context "deeptutor") -Recurse -Force
-    Copy-Item -LiteralPath (Join-Path $repoRoot "web\.next\standalone") -Destination (Join-Path $context "web\.next\standalone") -Recurse -Force
+    $normalizedStandaloneParent = Join-Path $context "web\.next\standalone\DeepTutor"
+    New-Item -ItemType Directory -Path $normalizedStandaloneParent -Force | Out-Null
+    Copy-DirectoryTree -Source $standaloneRoot -Destination (Join-Path $normalizedStandaloneParent "web")
     Copy-Item -LiteralPath (Join-Path $repoRoot "web\.next\static") -Destination (Join-Path $context "web\.next\static") -Recurse -Force
     Copy-Item -LiteralPath (Join-Path $repoRoot "web\public") -Destination (Join-Path $context "web\public") -Recurse -Force
     Copy-Item -LiteralPath (Join-Path $repoRoot "extensions\test-partner\server") -Destination (Join-Path $context "extensions\test-partner\server") -Recurse -Force

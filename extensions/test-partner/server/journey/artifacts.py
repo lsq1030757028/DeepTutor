@@ -21,9 +21,8 @@
     data/test-workbench/<owner>/runs/<run_id>/
         receipt.json / evidence/ / evidence-bundle.json / verdicts.jsonl / ...
 
-`owner` 默认 `_local`。**M2 只做布局分区，不做鉴权级隔离**——本案的调用通道
-（MCP 工具）拿不到可信 owner，做成"服务端强制 A 读不到 B"是自欺（设计稿 §11）。
-鉴权级隔离随案 B（DT 侧 fork router）延到上线前置闸。
+生产调用由 DeepTutor 的短时签名绑定 owner；扩展验签后同时绑定 owner 与本次
+workbench root。`_local` 仅保留离线兼容，不会被生产工具扫描或自动认领。
 
 ## 为什么每个路径构造函数都带 `root`（BB-503 的正解）
 
@@ -39,6 +38,8 @@ stepper 状态由**产物存在性推导**（presence-derived），不另存进�
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 import json
 import os
 import re
@@ -63,6 +64,16 @@ RUNS_ROOT = os.path.join(WORKBENCH_ROOT, "runs")
 
 #: 未声明 owner 时的归属。0009 的"各看各的"在 M2 只落到布局，默认单人即 `_local`。
 DEFAULT_OWNER = "_local"
+
+# Trusted production calls bind this before entering the older pure journey
+# modules.  Those modules predate multi-user routing and often omit ``owner``;
+# the context makes omission resolve to the verified partition, never to a
+# cross-owner search.  Low-level unit tests may still address ``_local``
+# explicitly, but the MCP production facade rejects it.
+_TRUSTED_OWNER: ContextVar[str | None] = ContextVar(
+    "test_partner_journey_owner", default=None)
+_TRUSTED_ROOT: ContextVar[str | None] = ContextVar(
+    "test_partner_journey_root", default=None)
 
 #: 产物注册表：kind -> (文件名, 展示名)。顺序即 stepper 前六格顺序（产物账本）。
 #: **展示名在这里是唯一真相**——前端与调试面都只渲染服务端给的列表，不各持常量（§9 第 3 条）。
@@ -145,32 +156,68 @@ def safe_owner(owner: Any) -> str:
     return text
 
 
+def current_trusted_owner() -> str | None:
+    return _TRUSTED_OWNER.get()
+
+
+def current_trusted_root() -> str | None:
+    return _TRUSTED_ROOT.get()
+
+
+@contextmanager
+def trusted_owner(owner: Any, *, root: str | None = None):
+    text = str(owner or "").strip()
+    if not text:
+        raise ArtifactError("可信 owner 不能为空")
+    partition = safe_owner(text)
+    token = _TRUSTED_OWNER.set(partition)
+    root_token = None
+    if root is not None:
+        root_token = _TRUSTED_ROOT.set(os.path.abspath(root))
+    try:
+        yield partition
+    finally:
+        if root_token is not None:
+            _TRUSTED_ROOT.reset(root_token)
+        _TRUSTED_OWNER.reset(token)
+
+
+def _partition(owner: str | None) -> str:
+    """Resolve an explicit or already-verified partition without scanning."""
+    if owner is not None and str(owner).strip():
+        return safe_owner(owner)
+    return current_trusted_owner() or DEFAULT_OWNER
+
+
 # ── 根与分区（**所有路径构造的唯一入口**）────────────────────────────────────
 
 
 def workbench_root(root: str | None = None) -> str:
-    """解析工作台根：显式参数 > 环境变量 > 模块常量。
+    """解析工作台根：显式参数 > 可信调用上下文 > 环境变量 > 模块常量。
 
     模块常量放在最后而不是被写死，是为了让调用方（gateway / 测试 / 多实例）
     都能注入，同时保留既有 monkeypatch 用法。
     """
     if root:
         return os.path.abspath(root)
+    trusted = current_trusted_root()
+    if trusted:
+        return trusted
     env = os.environ.get(ROOT_ENV)
     if env:
         return os.path.abspath(env)
     return WORKBENCH_ROOT
 
 
-def owner_root(owner: str = DEFAULT_OWNER, *, root: str | None = None) -> str:
-    return os.path.join(workbench_root(root), safe_owner(owner))
+def owner_root(owner: str | None = None, *, root: str | None = None) -> str:
+    return os.path.join(workbench_root(root), _partition(owner))
 
 
-def batches_root(owner: str = DEFAULT_OWNER, *, root: str | None = None) -> str:
+def batches_root(owner: str | None = None, *, root: str | None = None) -> str:
     return os.path.join(owner_root(owner, root=root), "batches")
 
 
-def runs_root(owner: str = DEFAULT_OWNER, *, root: str | None = None) -> str:
+def runs_root(owner: str | None = None, *, root: str | None = None) -> str:
     return os.path.join(owner_root(owner, root=root), "runs")
 
 
@@ -196,13 +243,15 @@ def _legacy_dir(kind: str, ident: str, root: str | None) -> str:
 
 def _resolve_dir(kind: str, ident: str, owner: str | None,
                  root: str | None) -> tuple[str, str]:
-    """定位既存目录，返回 `(路径, owner)`。找不到则返回按 owner 推导的**目标**路径。
+    """Resolve production calls in one owner; keep offline legacy reads isolated.
 
-    查找顺序：显式 owner → 逐 owner 扫 → M1 平铺布局。
+    A bound trusted owner is authoritative and disables every fallback.  The
+    scan/flat fallback exists only for direct low-level migration and unit-test
+    callers that did not enter the production tool facade.
     """
-    if owner:
-        o = safe_owner(owner)
-        return os.path.join(workbench_root(root), o, kind, ident), o
+    if owner or current_trusted_owner():
+        partition = _partition(owner)
+        return os.path.join(workbench_root(root), partition, kind, ident), partition
     for candidate in list_owners(root):
         path = os.path.join(workbench_root(root), candidate, kind, ident)
         if os.path.isdir(path):
@@ -259,7 +308,7 @@ def create_batch(title: str, *, owner: str = "", base_url: str = "",
                  environment_ref: str = "", source_ref: str = "",
                  root: str | None = None) -> dict[str, Any]:
     batch_id = new_batch_id()
-    partition = safe_owner(owner)
+    partition = _partition(owner or None)
     meta = {
         "artifact": "batch",
         "schema_version": "1",
@@ -295,24 +344,27 @@ def save_batch(meta: dict[str, Any], *, root: str | None = None) -> None:
 
 def list_batches(*, owner: str | None = None,
                  root: str | None = None) -> list[dict[str, Any]]:
-    """列全部批次（默认跨 owner）。M1 平铺布局的存量一并列出，迁移前后都不瞎。"""
+    """只列当前 owner 的批次；旧平铺与其他 owner 默认不可见。"""
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
-    scopes = [safe_owner(owner)] if owner else list_owners(root)
+    trusted = current_trusted_owner()
+    scopes = [_partition(owner)] if (owner or trusted) else list_owners(root)
     dirs = [batches_root(o, root=root) for o in scopes]
-    dirs.append(_legacy_dir("batches", "", root).rstrip(os.sep))
-    for base in dirs:
+    if not owner and not trusted:
+        dirs.append(_legacy_dir("batches", "", root).rstrip(os.sep))
+    for index, base in enumerate(dirs):
         if not os.path.isdir(base):
             continue
         for name in sorted(os.listdir(base), reverse=True):
             if name in seen or not _BATCH_ID_RE.match(name):
                 continue
             try:
-                meta = load_batch(name, root=root)
+                scope = scopes[index] if index < len(scopes) else None
+                meta = load_batch(name, owner=scope, root=root)
             except ArtifactError:
                 continue
             seen.add(name)
-            meta["stepper"] = stepper(name, root=root)
+            meta["stepper"] = stepper(name, owner=scope, root=root)
             out.append(meta)
     out.sort(key=lambda m: m.get("created_at", ""), reverse=True)
     return out

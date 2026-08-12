@@ -9,7 +9,7 @@
 没有 waiter 的通道 = 复刻 BB-502 那个静默降级。
 
 所以这里的形态照抄 `ChatCapability`：把 pipeline 让给主聊，本能力只贡献两样
-东西——**旅程纪律的系统提示块**，与**开旅程时的门票**。
+东西——**旅程纪律的系统提示块**，与可信 Journey 调用所需的 Test 模式上下文。
 
 ## 与 chat 的实质差别只有三点
 
@@ -17,9 +17,9 @@
 2. 系统提示里多一段旅程纪律（`pipeline.TestJourneyPipeline` 追加的 PromptBlock）；
 3. `journey_*` 工具在这一轮里被明确指引使用。
 
-**工具可见性不是差别**：MCP 工具在任何 capability 轮都看得见（渐进披露只降低
-概率、不构成闸，0025 §2 已裁）。硬保证在后果层——门票 + 既存 batch_id + 写确认，
-全在 extensions 侧（`server/journey/gate.py`）。这里**刻意不假装**自己能挡住误调。
+**工具可见性现在也是差别**：普通 chat 的 manifest、加载与 dispatch 都看不到
+Journey；Test 轮由宿主注入短时签名，绑定 owner/session/turn/tool/args，扩展侧验签后
+才触碰产物目录。既存 batch_id、写确认和产物牙仍在 extensions 侧继续兜住业务后果。
 
 ## BB-508：纪律段怎么进 prompt（别再改回去）
 

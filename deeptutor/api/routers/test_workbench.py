@@ -47,18 +47,24 @@ logger = logging.getLogger(__name__)
 # 扩展接线与用户目录都下沉到 test_workbench_paths（共用，且断开与生成面的循环）。
 from deeptutor.api.routers.test_workbench_paths import (  # noqa: E402
     EXT_ROOT as _EXT_ROOT,
+)
+from deeptutor.api.routers.test_workbench_paths import (
     IMPORT_ERROR as _IMPORT_ERROR,
+)
+from deeptutor.api.routers.test_workbench_paths import (
     _wb,
+)
+from deeptutor.api.routers.test_workbench_paths import (
     deliveries_root as _deliveries_root,
+)
+from deeptutor.api.routers.test_workbench_paths import (
     drafts_root as _drafts_root,
+)
+from deeptutor.api.routers.test_workbench_paths import (
     require_extension as _require_extension,
 )
 
 router = APIRouter()
-
-
-
-
 
 
 @router.get("/health")
@@ -128,9 +134,10 @@ def patch_case(delivery_id: str, case_id: str, body: CasePatch) -> dict[str, Any
     try:
         return wb.update_case(delivery_id, case_id, patch, _deliveries_root())
     except wb.WorkbenchError as exc:
-        raise HTTPException(status_code=400, detail={
-            "code": getattr(exc, "code", "WORKBENCH_ERROR"),
-            "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=400,
+            detail={"code": getattr(exc, "code", "WORKBENCH_ERROR"), "message": str(exc)},
+        ) from exc
 
 
 # ── HAR 体检（设计稿第 2 屏）─────────────────────────────────────────────────
@@ -152,8 +159,6 @@ MAX_HAR_BYTES = 40 * 1024 * 1024
 再往上放，解析时的峰值内存（字符串 + 解析后的对象，几倍膨胀）就不好收场了——
 这一点在本项目构建镜像时被 apt 的 OOM 教训过一次，宁可保守。
 """
-
-
 
 
 async def _read_upload_capped(file: UploadFile) -> bytes:
@@ -216,8 +221,11 @@ async def inspect_har(file: UploadFile = File(...)) -> dict[str, Any]:
     draft_id = f"har-{uuid4().hex[:12]}"
     draft_path = _drafts_root() / f"{draft_id}.json"
     draft_path.write_text(
-        json.dumps({"draft_id": draft_id, "source_name": file.filename, "report": report},
-                   ensure_ascii=False, indent=2),
+        json.dumps(
+            {"draft_id": draft_id, "source_name": file.filename, "report": report},
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
@@ -232,9 +240,11 @@ async def inspect_har(file: UploadFile = File(...)) -> dict[str, Any]:
             "credentials_redacted": True,
             "pii_redacted_in_report": False,
             "pii_redacted_on_export": True,
-            "message": ("凭证已换成变量占位。身份证、手机号、邮箱这类个人信息在本报告里"
-                        "保留原值（执行时要用），但**发给模型和导出成产物时都会换成占位符**。"
-                        "自由文本里的姓名抓不到，对外发之前仍请自行过一眼。"),
+            "message": (
+                "凭证已换成变量占位。身份证、手机号、邮箱这类个人信息在本报告里"
+                "保留原值（执行时要用），但**发给模型和导出成产物时都会换成占位符**。"
+                "自由文本里的姓名抓不到，对外发之前仍请自行过一眼。"
+            ),
         },
     }
 

@@ -316,6 +316,38 @@ def test_a_second_run_on_the_same_batch_is_refused_while_one_is_live(root):
     gate.set()
 
 
+def test_concurrent_starts_on_the_same_batch_admit_exactly_one(root):
+    """The active check and registration are one atomic admission decision."""
+    import threading
+
+    name = make_batch(root)
+    release = threading.Event()
+    fake = FakeExecutor(block=release)
+    runs = RunRegistry(executor=fake, deliveries_root_dir=root)
+    barrier = threading.Barrier(8)
+    admitted = []
+    refused = []
+
+    def attempt():
+        barrier.wait()
+        try:
+            admitted.append(runs.start(
+                delivery_id=name, env="测试环境", case_ids=["TC-001"]))
+        except WorkbenchError as exc:
+            refused.append(exc.code)
+
+    callers = [threading.Thread(target=attempt) for _ in range(8)]
+    for caller in callers:
+        caller.start()
+    for caller in callers:
+        caller.join(timeout=5)
+
+    assert len(admitted) == 1
+    assert refused == ["RUN_IN_PROGRESS"] * 7
+    assert len(fake.calls) == 1
+    release.set()
+
+
 def test_an_executor_that_refuses_shows_up_as_an_error_run(root):
     name = make_batch(root)
     fake = FakeExecutor(result={"ok": False, "error": "ENV_NOT_FOUND",

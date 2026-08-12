@@ -9,6 +9,14 @@ const webRoot = path.resolve(__dirname, "..");
 const distRoot = path.join(webRoot, "dist", "node-tests");
 const testRoot = path.join(distRoot, "tests");
 
+if (process.features.require_module !== true) {
+  console.error(
+    `Node ${process.version} cannot run the complete web test suite. ` +
+      "Use Node >=22.12 so CommonJS-compiled tests can load ESM dependencies.",
+  );
+  process.exit(1);
+}
+
 function run(cmd, args) {
   const result = spawnSync(cmd, args, {
     cwd: webRoot,

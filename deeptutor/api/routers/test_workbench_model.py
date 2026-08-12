@@ -96,8 +96,7 @@ async def call_model(prompt: str, *, system: str, spec: CallSpec) -> str:
     model = _first_usable_model()
     if model is None:
         raise ModelUnavailable(
-            "还没有可用的模型。请先在 设置 → 模型 里配置一个，"
-            "或让管理员把某个模型授权给你。"
+            "还没有可用的模型。请先在 设置 → 模型 里配置一个，或让管理员把某个模型授权给你。"
         )
 
     kwargs: dict[str, Any] = {
@@ -114,11 +113,8 @@ async def call_model(prompt: str, *, system: str, spec: CallSpec) -> str:
         kwargs["response_format"] = {"type": "json_object"}
 
     try:
-        return await asyncio.wait_for(complete(prompt, **kwargs),
-                                      timeout=spec.timeout_s)
+        return await asyncio.wait_for(complete(prompt, **kwargs), timeout=spec.timeout_s)
     except asyncio.TimeoutError as exc:
         # 不自动重试：重试一个已经超时的长请求是账单放大器，
         # 该不该再来一次由人决定。
-        raise ModelTimeout(
-            f"模型 {spec.timeout_s:.0f} 秒没有返回。可以少要几条再试一次。"
-        ) from exc
+        raise ModelTimeout(f"模型 {spec.timeout_s:.0f} 秒没有返回。可以少要几条再试一次。") from exc

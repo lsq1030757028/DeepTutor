@@ -59,8 +59,7 @@ def journey_system_block(language: str = "zh") -> str:
     正是 MODULES 那条漏改不报错的放大器。空串至少会让人发现模型没按纪律走。
     """
     try:
-        prompts = PromptManager().load_prompts(
-            PROMPT_MODULE, PROMPT_AGENT, language=language)
+        prompts = PromptManager().load_prompts(PROMPT_MODULE, PROMPT_AGENT, language=language)
     except Exception:  # noqa: BLE001 - 提示词读不到不该让整轮崩
         return ""
     parts = [str(prompts.get(key) or "").strip() for key in JOURNEY_PROMPT_KEYS]

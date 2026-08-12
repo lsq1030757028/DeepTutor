@@ -31,8 +31,17 @@ on:
       # 只列我们自己的接线文件，不整个 `deeptutor/**` 兜底：那样每次上游同步
       # 都全量跑，额度纪律就白立了。
       - "deeptutor/api/routers/test_workbench*.py"
+      - "deeptutor/api/routers/test_journey.py"
       - "deeptutor/api/main.py"
+      - "deeptutor/services/mcp/manager.py"
+      - "deeptutor/services/test_journey/**"
+      - "deeptutor/runtime/orchestrator.py"
+      - "deeptutor/runtime/providers/**"
+      - "deeptutor/agents/test/**"
+      - "web/components/test-journey/**"
+      - "web/app/(workspace)/home/**"
       - "Dockerfile"
+      - "Dockerfile.m2overlay"
   pull_request:
     paths:
       - "extensions/test-partner/**"
@@ -45,8 +54,17 @@ on:
       # 只列我们自己的接线文件，不整个 `deeptutor/**` 兜底：那样每次上游同步
       # 都全量跑，额度纪律就白立了。
       - "deeptutor/api/routers/test_workbench*.py"
+      - "deeptutor/api/routers/test_journey.py"
       - "deeptutor/api/main.py"
+      - "deeptutor/services/mcp/manager.py"
+      - "deeptutor/services/test_journey/**"
+      - "deeptutor/runtime/orchestrator.py"
+      - "deeptutor/runtime/providers/**"
+      - "deeptutor/agents/test/**"
+      - "web/components/test-journey/**"
+      - "web/app/(workspace)/home/**"
       - "Dockerfile"
+      - "Dockerfile.m2overlay"
   workflow_dispatch:
 
 # 同一分支上新推送即取消上一次未跑完的 run；main 不取消（要留完整基线证据）

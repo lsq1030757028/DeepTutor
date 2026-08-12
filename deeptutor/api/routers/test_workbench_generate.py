@@ -30,12 +30,16 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from deeptutor.api.routers.test_workbench_model import call_model, has_usable_model
 from deeptutor.api.routers.test_workbench_paths import (
     drafts_root as _drafts_root,
+)
+from deeptutor.api.routers.test_workbench_paths import (
     owner_id as _owner,
+)
+from deeptutor.api.routers.test_workbench_paths import (
     require_extension as _require_extension,
 )
-from deeptutor.api.routers.test_workbench_model import call_model, has_usable_model
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +89,7 @@ def _load_material(draft_id: str):
 
 # ── 能力探测 ──────────────────────────────────────────────────────────────
 
+
 @router.get("/generate/capability")
 def capability() -> dict[str, Any]:
     """页面据此决定是给生成入口，还是给"去配模型"的指引。
@@ -104,6 +109,7 @@ def capability() -> dict[str, Any]:
 
 
 # ── 第一段：起草场景（短，同步返回） ─────────────────────────────────────
+
 
 class ScenarioRequest(BaseModel):
     draft_id: str = Field(..., min_length=1)
@@ -128,6 +134,7 @@ async def make_scenario(body: ScenarioRequest) -> dict[str, Any]:
 
 # ── 第二三段：生成用例（长，异步任务） ───────────────────────────────────
 
+
 class GenerateRequest(BaseModel):
     draft_id: str = Field(..., min_length=1)
     #: 用户改过的场景描述。**留空才让模型重新起草**——
@@ -140,11 +147,6 @@ class GenerateRequest(BaseModel):
 @router.post("/generate/jobs")
 async def start_generation(body: GenerateRequest) -> dict[str, Any]:
     owner = _owner()
-    if _STORE.running_count(owner) > 0:
-        raise HTTPException(
-            status_code=409,
-            detail="你已经有一个生成任务在跑了。等它结束或先取消，再发起新的。",
-        )
     if not has_usable_model():
         raise HTTPException(
             status_code=409,
@@ -152,11 +154,17 @@ async def start_generation(body: GenerateRequest) -> dict[str, Any]:
         )
 
     material = _load_material(body.draft_id)
-    job = _STORE.create(owner)
+    job = _STORE.create_if_idle(owner)
+    if job is None:
+        raise HTTPException(
+            status_code=409,
+            detail="你已经有一个生成任务在跑了。等它结束或先取消，再发起新的。",
+        )
 
     def on_progress(p) -> None:
-        _STORE.update(job.id, state=_jobs.RUNNING, stage=p.stage,
-                      done=p.done, total=p.total, note=p.note)
+        _STORE.update(
+            job.id, state=_jobs.RUNNING, stage=p.stage, done=p.done, total=p.total, note=p.note
+        )
 
     def should_cancel() -> bool:
         current = _STORE.get(job.id, owner)
@@ -166,7 +174,8 @@ async def start_generation(body: GenerateRequest) -> dict[str, Any]:
         _STORE.update(job.id, state=_jobs.RUNNING, stage="scenario")
         try:
             result = await generate(
-                call_model, material,
+                call_model,
+                material,
                 scenario=body.scenario,
                 max_cases=body.max_cases,
                 batch_size=body.batch_size,
@@ -181,15 +190,22 @@ async def start_generation(body: GenerateRequest) -> dict[str, Any]:
             logger.exception("生成任务 %s 失败", job.id)
             _STORE.update(job.id, state=_jobs.FAILED, error=f"生成失败：{exc}")
         else:
-            _STORE.update(job.id, state=_jobs.DONE, result={
-                "scenario": result.scenario,
-                "picked_endpoints": result.picked_endpoints,
-                "skipped_reason": result.skipped_reason,
-                "cases": result.cases,
-                "notes": result.notes,
-                "calls_used": result.calls_used,
-                "complete": result.complete,
-            })
+            _STORE.update(
+                job.id,
+                state=_jobs.DONE,
+                result={
+                    "scenario": result.scenario,
+                    "picked_endpoints": result.picked_endpoints,
+                    "skipped_reason": result.skipped_reason,
+                    "cases": result.cases,
+                    "notes": result.notes,
+                    "calls_used": result.calls_used,
+                    "complete": result.complete,
+                    # build_material 已在唯一出境闸完成脱敏；把同一份形状随任务
+                    # 结果留到采纳，交付批次才知道令牌过期后该怎样重新登录。
+                    "login_request": material.login,
+                },
+            )
 
     # create_task 复制当前上下文，用户身份跟着任务走。线程不行，见模块 docstring。
     asyncio.create_task(run())
@@ -235,6 +251,7 @@ def cancel_job(job_id: str) -> dict[str, Any]:
 
 
 # ── 采纳：勾选是入库的唯一闸门 ────────────────────────────────────────────
+
 
 class AdoptRequest(BaseModel):
     #: 要采纳的用例编号。**空列表直接拒**——"一条都没勾"多半是误点，
@@ -290,11 +307,11 @@ def adopt_cases(job_id: str, body: AdoptRequest) -> dict[str, Any]:
         rejected = sorted(set(patch) - set(wb.EDITABLE_FIELDS))
         if rejected:
             raise HTTPException(
-                status_code=400,
-                detail=f"这些字段不允许修改：{'、'.join(rejected)}（用例 {cid}）")
+                status_code=400, detail=f"这些字段不允许修改：{'、'.join(rejected)}（用例 {cid}）"
+            )
         if patch:
             case.update(patch)
-            case["origin"] = "human"      # 采纳前改过的，同样留痕
+            case["origin"] = "human"  # 采纳前改过的，同样留痕
         picked.append(case)
 
     from server import delivery  # type: ignore[import-not-found]
@@ -311,8 +328,12 @@ def adopt_cases(job_id: str, body: AdoptRequest) -> dict[str, Any]:
         out_root=deliveries_root(),
     )
     if not result.get("ok", False):
-        raise HTTPException(status_code=500, detail={
-            "error": result.get("error"), "message": result.get("message"),
-            "hint": result.get("hint"),
-        })
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": result.get("error"),
+                "message": result.get("message"),
+                "hint": result.get("hint"),
+            },
+        )
     return {"adopted": len(picked), "delivery": result}

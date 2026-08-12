@@ -90,12 +90,6 @@ function explanations(t: TFunction): Record<string, Explained> {
         "Clarify again before adopting. There is deliberately no “continue anyway” option here — with that switch, this gate would not exist.",
       ),
     },
-    [JourneyErrorCode.GATE_REQUIRED]: {
-      what: t("This action needs a journey ticket, and this turn does not have one."),
-      next: t(
-        "Go back to chat, pick the Test mode and start a journey — batches are created there.",
-      ),
-    },
     [JourneyErrorCode.NO_BATCH]: {
       what: t("This batch cannot be found."),
       next: t(

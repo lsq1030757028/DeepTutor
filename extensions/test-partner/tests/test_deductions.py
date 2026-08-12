@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 """具名扣除机制自测（manager 2026-08-11 裁定的第三条路）。
 
-两案都被否掉：长期红不可接受（红久了没人看，真红混进来认不出），
-花第 6 行改上游断言也不必要（每次同步必撞 + 花掉最后的硬余量）。
-正解是照抄圆桌线回归闸的「具名扣除」形态，并加两条硬要求：
-**清单机械可读** + **闸打印「本次扣除 N 条」**——扣除本身要可见，否则它就是另一种静默。
+扣除只用于已被独立基线证明的非本分支红项；能修正测试契约或测试环境时就应删除。
+清单允许为零，但始终保持**机械可读**并让闸打印「本次扣除 N 条」——
+扣除本身要可见，否则它就是另一种静默。
 
 本文件盯的是这套机制自己别烂掉。
 """
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -20,6 +20,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIST_PATH = os.path.join(HERE, "scripts", "known-deductions.json")
 TOOL = os.path.join(HERE, "scripts", "deductions.py")
 GATE = os.path.join(HERE, "scripts", "regression_gate.sh")
+P3_FLOW = os.path.join(HERE, "scripts", "verify_p3_flow.sh")
 
 
 def _run(*args, cwd=HERE):
@@ -94,14 +95,13 @@ def test_real_list_validates():
 def test_pytest_deselect_render():
     out = _run("--layer", "upstream-tests", "--format", "pytest-deselect")
     assert out.returncode == 0
-    assert "--deselect tests/core/test_capabilities_runtime.py::" in out.stdout
-    assert "--deselect tests/api/test_cors_settings.py" in out.stdout
+    assert out.stdout.strip() == ""
 
 
 def test_grep_pattern_render():
     out = _run("--layer", "web-node-tests", "--format", "grep-pattern")
     assert out.returncode == 0
-    assert "code-block-themes" in out.stdout
+    assert out.stdout.strip() == ""
 
 
 def test_print_shows_the_count():
@@ -138,12 +138,10 @@ def test_gate_validates_the_list_before_using_it():
 # ── 与 fork 注册的对应关系 ─────────────────────────────────────────────────
 
 
-def test_capability_set_assertion_is_deducted_by_full_test_name():
-    """按**测试全名**扣，不按文件扣——按文件扣会连带把同文件里其他真红也藏了。"""
-    row = next(r for r in _rows() if r["id"] == "upstream-capability-set-assertion")
-    assert row["selector"].endswith(
-        "::test_builtin_capability_registry_covers_documented_capabilities")
-    assert "::" in row["selector"]
+def test_capability_set_assertion_is_no_longer_deducted():
+    """Test 已进入权威能力清单后，这条断言必须真跑，不能继续被豁免。"""
+    selectors = {row["selector"] for row in _rows()}
+    assert not any("test_builtin_capability_registry" in item for item in selectors)
 
 
 # ── 作用域：扣得准不准，与清单能不能判红是两件事 ───────────────────────────
@@ -208,9 +206,12 @@ def test_validator_rejects_a_vague_verification_date(tmp_path):
 
 
 def test_print_shows_the_verification_stamp():
-    """闸打印里要能看到「上次核」，否则这段等于只写给校验器看。"""
+    """有扣除时显示复核时间；零扣除时明确显示无，不制造空白歧义。"""
     out = _run("--print")
-    assert "上次核" in out.stdout
+    if _rows():
+        assert "上次核" in out.stdout
+    else:
+        assert "本次扣除 0 条" in out.stdout and "（无）" in out.stdout
 
 
 def test_gate_pins_the_interpreter_instead_of_using_ambient_python():
@@ -243,3 +244,101 @@ def test_gate_fails_closed_when_the_venv_is_missing():
         gate = fh.read()
     assert "扩展 venv 不存在" in gate
     assert "python -m venv .venv" in gate
+
+
+def test_gate_keeps_source_and_user_data_immutable_in_docker():
+    """Windows Git Bash 不能改写容器路径，也不能让回归写进工作树。"""
+    with open(GATE, encoding="utf-8") as fh:
+        gate = fh.read()
+    assert "MSYS_NO_PATHCONV=1 docker run" in gate
+    assert '-v "$WIN_ROOT:/repo:ro"' in gate
+    assert '-v "$WIN_ROOT/data:/seed-data:ro"' in gate
+    assert "-v /repo/data" in gate
+    assert "cp -a /seed-data/. /repo/data/" in gate
+    assert "DEEPTUTOR_IGNORE_PROCESS_ENV_OVERRIDES=0" in gate
+
+
+def _run_bash(source_path, command):
+    bash = shutil.which("bash")
+    if os.name == "nt":
+        git_bash = os.path.join(
+            os.environ.get("ProgramFiles", r"C:\Program Files"),
+            "Git", "bin", "bash.exe",
+        )
+        if os.path.isfile(git_bash):
+            bash = git_bash
+    if not bash:
+        pytest.skip("bash is not available in this test environment")
+    relative = os.path.relpath(source_path, HERE).replace(os.sep, "/")
+    return subprocess.run(
+        [bash, "-c", f"source '{relative}'; {command}"],
+        cwd=HERE,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+
+def test_p3_flow_exit_code_matches_failure_count_without_side_effects():
+    assert _run_bash(P3_FLOW, "flow_exit_code 0").returncode == 0
+    assert _run_bash(P3_FLOW, "flow_exit_code 1").returncode != 0
+
+
+def test_empty_node_deduction_pattern_cannot_hide_failures():
+    node_output = "ok 1 - good\nnot ok 2 - real-regression"
+    out = _run_bash(
+        GATE,
+        "filter_unexpected_node_failures "
+        f"'{node_output}' ''",
+    )
+    assert out.returncode == 0
+    assert "not ok 2 - real-regression" in out.stdout
+
+
+def test_named_node_deduction_only_filters_its_matching_failure():
+    node_output = "not ok 1 - known-baseline\nnot ok 2 - real-regression"
+    out = _run_bash(
+        GATE,
+        "filter_unexpected_node_failures "
+        f"'{node_output}' 'known-baseline'",
+    )
+    assert out.returncode == 0
+    assert "known-baseline" not in out.stdout
+    assert "not ok 2 - real-regression" in out.stdout
+
+
+def test_gate_uses_one_configurable_node_runtime_for_every_web_check():
+    with open(GATE, encoding="utf-8") as fh:
+        gate = fh.read()
+    assert 'NODE_BIN="${NODE_BIN:-node}"' in gate
+    assert '"$NODE_BIN" scripts/i18n_parity.mjs' in gate
+    assert '"$NODE_BIN" scripts/run-node-tests.mjs' in gate
+    assert '"$NODE_BIN" node_modules/eslint/bin/eslint.js' in gate
+
+
+def test_gate_blocks_high_or_critical_npm_vulnerabilities():
+    with open(GATE, encoding="utf-8") as fh:
+        gate = fh.read()
+    assert 'NPM_BIN="${NPM_BIN:-npm}"' in gate
+    assert '"$NPM_BIN" audit --audit-level=high --no-fund' in gate
+    assert "high/critical 必须为 0" in gate
+
+
+def test_ci_paths_cover_overlay_and_trusted_journey_bridge():
+    """安全桥或 overlay 单独改动时，也必须触发 test-partner 的完整回归闸。"""
+    workflow_path = os.path.abspath(os.path.join(
+        HERE, "..", "..", ".github", "workflows", "test-partner.yml"
+    ))
+    with open(workflow_path, encoding="utf-8") as fh:
+        workflow = fh.read()
+    required_paths = (
+        '"Dockerfile.m2overlay"',
+        '"deeptutor/api/routers/test_journey.py"',
+        '"deeptutor/services/test_journey/**"',
+        '"deeptutor/services/mcp/manager.py"',
+        '"deeptutor/runtime/providers/**"',
+        '"web/components/test-journey/**"',
+    )
+    for path in required_paths:
+        assert workflow.count(path) == 2, path

@@ -208,6 +208,72 @@ def test_user_scenario_is_passed_through_untouched(monkeypatch, as_alice, materi
     assert seen.get("scenario") == "我自己写的"
 
 
+def test_login_request_flows_from_material_through_job_to_adopted_delivery(
+        monkeypatch, as_alice, clean_store, tmp_path):
+    """已脱敏登录元数据不能在生成任务与采纳批次之间断掉。"""
+    login_request = {
+        "method": "POST",
+        "url": "https://api.example.test/login",
+        "headers": {"content-type": "application/json"},
+        "body": {
+            "raw": '{"username":"{{login_username}}",'
+                   '"password":"{{login_password}}"}',
+        },
+        "token_extract": {"from": "json", "path": "$.data.token"},
+    }
+    material = Material(
+        endpoints=[{"method": "POST", "path": "/api/x", "calls": 1}],
+        login=login_request,
+        stats={},
+        notes=[],
+        scrub_hits={"username": 1, "password": 1},
+    )
+    monkeypatch.setattr(gen, "_load_material", lambda draft_id: material)
+    _model(monkeypatch, ready=True)
+
+    async def fake_generate(call, mat, **kw):
+        assert mat.login == login_request
+        return types.SimpleNamespace(
+            scenario="登录后查询", picked_endpoints=[], skipped_reason="",
+            cases=[{
+                "id": "TC-001",
+                "title": "查询",
+                "request": {"method": "GET", "url": "/api/x"},
+                "assertions": [{"kind": "status", "expect": 200}],
+            }],
+            notes=[], calls_used=1, complete=True,
+        )
+
+    monkeypatch.setattr(gen, "generate", fake_generate)
+
+    async def finish_job():
+        payload = await gen.start_generation(gen.GenerateRequest(draft_id="har-1"))
+        for _ in range(50):
+            await asyncio.sleep(0)
+            job = clean_store.get(payload["job_id"], "alice")
+            if job and job.state == jobs_mod.DONE:
+                return job
+        raise AssertionError("后台生成任务没有完成")
+
+    job = asyncio.run(finish_job())
+    assert job.result["login_request"] == login_request
+
+    seen = {}
+    from server import delivery as delivery_mod
+
+    def fake_save(cases, **kw):
+        seen["login_request"] = kw.get("login_request")
+        return {"ok": True, "delivery_dir": str(tmp_path)}
+
+    monkeypatch.setattr(delivery_mod, "save_delivery", fake_save)
+    monkeypatch.setattr(
+        "deeptutor.api.routers.test_workbench_paths.deliveries_root",
+        lambda: str(tmp_path))
+
+    gen.adopt_cases(job.id, gen.AdoptRequest(case_ids=["TC-001"]))
+    assert seen["login_request"] == login_request
+
+
 # ── 采纳：勾选是入库的唯一闸门，服务端也要守 ─────────────────────────────
 
 def _done_job(store, owner="alice", n=3):

@@ -23,9 +23,15 @@ COPY --chown=deeptutor:deeptutor deeptutor/ ./deeptutor/
 
 RUN python -c "from deeptutor.runtime.bootstrap.builtin_capabilities import BUILTIN_CAPABILITY_CLASSES as c; assert c.get('test') == 'deeptutor.agents.test.capability:TestCapability'; from deeptutor.agents.test.capability import TestCapability; assert TestCapability.manifest.name == 'test'"
 
-# 新前端。当前仓库是多层工作区，Next standalone 会保留 tracing root，
-# 真正可运行根位于 standalone/DeepTutor/web/；复制上层目录会把新构建埋到
-# /app/web/DeepTutor/web，而 supervisor 仍从 /app/web 启动旧 server.js。
+# 新前端。Next standalone 会保留 tracing root，路径随干净 worktree 位置变化；
+# build_m2_overlay.ps1 读取 required-server-files.json 的 relativeAppDir，把本次
+# 真正可运行根规范化暂存为 standalone/DeepTutor/web/。Dockerfile 只消费这个
+# 固定的 staging 契约，避免把多层 tracing root 埋到 /app/web 之下。先删除基镜像
+# 的旧前端：Next 16.3 的 standalone 内含新的链接/目录布局，合并覆盖既可能冲突，
+# 也可能把旧版残留带进新镜像；这里交付的是完整替换，不是增量拼装。
+RUN rm -rf /app/web \
+    && mkdir -p /app/web \
+    && chown deeptutor:deeptutor /app/web
 COPY --chown=deeptutor:deeptutor web/.next/standalone/DeepTutor/web/ ./web/
 COPY --chown=deeptutor:deeptutor web/.next/static/ ./web/.next/static/
 COPY --chown=deeptutor:deeptutor web/public/ ./web/public/
