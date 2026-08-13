@@ -54,19 +54,17 @@ pipeline {
         }
 
         stage('Required local-equivalent tests') {
-            agent {
-                docker {
-                    image 'python:3.11-slim'
-                    reuseNode true
-                }
-            }
             steps {
-                sh '''
-                    set -eu
-                    python -m pip install -q -r extensions/test-partner/requirements-dev.txt
-                    cd extensions/test-partner
-                    python -m pytest -q --no-header
-                '''
+                script {
+                    docker.image('python:3.11-slim').inside {
+                        sh '''
+                            set -eu
+                            python -m pip install -q -r extensions/test-partner/requirements-dev.txt
+                            cd extensions/test-partner
+                            python -m pytest -q --no-header
+                        '''
+                    }
+                }
             }
         }
     }
