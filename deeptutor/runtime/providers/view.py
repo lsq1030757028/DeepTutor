@@ -129,6 +129,25 @@ async def _build(
     # is identity, so an administrator is unaffected.
     allowed = allowed.widen(tool.get_definition().name for tool in cli_pool)
 
+    # Journey tools are a capability boundary, not ordinary administrator-
+    # granted plugins. Plain chat/Playground must neither advertise nor dispatch
+    # them, even for an otherwise unrestricted administrator.
+    journey_names = {
+        tool.get_definition().name
+        for tool in (*shared_pool, *owned_pool)
+        if _is_test_journey_tool(tool)
+    }
+    if journey_names:
+        visible_names = {
+            tool.get_definition().name
+            for tool in (*shared_pool, *owned_pool, *cli_pool)
+            if allowed.allows(tool.get_definition().name)
+        }
+        if scope.active_capability == "test":
+            allowed = Allowlist.of(visible_names)
+        else:
+            allowed = Allowlist.of(visible_names - journey_names)
+
     pool = tuple(
         tool
         for tool in (*shared_pool, *owned_pool, *cli_pool)
@@ -163,6 +182,15 @@ async def _build(
         else render_deferred_tools_manifest(list(pool), language=language)
     )
     return ProviderToolView(registry=registry, loader=loader, pool=pool, manifest=manifest)
+
+
+def _is_test_journey_tool(tool: BaseTool) -> bool:
+    try:
+        from deeptutor.services.test_journey.trust import is_test_journey_tool
+
+        return is_test_journey_tool(tool)
+    except Exception:
+        return False
 
 
 async def _owned_tools(manager: Any, scope: ToolScope) -> list[BaseTool]:

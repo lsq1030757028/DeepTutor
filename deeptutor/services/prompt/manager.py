@@ -36,6 +36,9 @@ class PromptManager:
         "notebook",
         "visualize",
         "chat",
+        # [fork] 测试旅程。**漏改这一行不报错**——load_prompts 查不到模块会静默
+        # 回落，模型照跑但没有旅程纪律。有测试守：tests/test_fork_capabilities.py
+        "test",
     ]
 
     # Modules that are not under deeptutor/agents/ directory

@@ -29,60 +29,42 @@ DeepTutor 自带按用户的工作区（`deeptutor/multi_user/paths.py` 的 `Use
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 import sys
 from typing import Any
+from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from deeptutor.multi_user.context import get_current_user_or_none
 from deeptutor.multi_user.paths import ADMIN_WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
 
-# ── extensions 接线：把 test-partner 目录塞进 sys.path，见模块 docstring ──────
-_EXT_ROOT = Path(__file__).resolve().parents[3] / "extensions" / "test-partner"
-if _EXT_ROOT.is_dir() and str(_EXT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_EXT_ROOT))
-
-try:
-    from server.gateway import workbench as _wb  # type: ignore[import-not-found]
-except ImportError as exc:  # pragma: no cover - 只在扩展没打进镜像时触发
-    _wb = None
-    _IMPORT_ERROR = exc
-    logger.warning(
-        "测试工作台扩展未加载：%s（找过 %s）。"
-        "镜像里没有 extensions/ 时会走到这里——Dockerfile 的 COPY 漏了。",
-        exc, _EXT_ROOT,
-    )
-else:
-    _IMPORT_ERROR = None
+# 扩展接线与用户目录都下沉到 test_workbench_paths（共用，且断开与生成面的循环）。
+from deeptutor.api.routers.test_workbench_paths import (  # noqa: E402
+    EXT_ROOT as _EXT_ROOT,
+)
+from deeptutor.api.routers.test_workbench_paths import (
+    IMPORT_ERROR as _IMPORT_ERROR,
+)
+from deeptutor.api.routers.test_workbench_paths import (
+    _wb,
+)
+from deeptutor.api.routers.test_workbench_paths import (
+    deliveries_root as _deliveries_root,
+)
+from deeptutor.api.routers.test_workbench_paths import (
+    drafts_root as _drafts_root,
+)
+from deeptutor.api.routers.test_workbench_paths import (
+    require_extension as _require_extension,
+)
 
 router = APIRouter()
-
-
-def _deliveries_root() -> str:
-    """当前用户的交付批次目录。
-
-    admin 的 scope 根是 `data/`，普通用户是 `data/users/<uid>/`——两者都由
-    DeepTutor 给出，这里只在其下再开一层 `test-workbench/deliveries`，
-    不自己拼用户 id，免得和平台的迁移逻辑各说各话。
-    """
-    user = get_current_user_or_none()
-    base = Path(user.scope.root) if user is not None else ADMIN_WORKSPACE_ROOT
-    root = base / "test-workbench" / "deliveries"
-    root.mkdir(parents=True, exist_ok=True)
-    return str(root)
-
-
-def _require_extension() -> Any:
-    if _wb is None:
-        raise HTTPException(
-            status_code=503,
-            detail=f"测试工作台扩展未加载：{_IMPORT_ERROR}",
-        )
-    return _wb
 
 
 @router.get("/health")
@@ -119,3 +101,191 @@ def get_delivery(delivery_id: str) -> dict[str, Any]:
         # 批次 id 非法或不存在都走这里。id 校验在 workbench.safe_delivery_id 里，
         # 非法直接抛而不是"清洗后继续"——那是路径穿越的常见入口。
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class CasePatch(BaseModel):
+    """一条用例的可编辑字段。全部可选——只传要改的那几个。
+
+    字段白名单在扩展层（`workbench.EDITABLE_FIELDS`）再校一次：
+    这里的模型定义是给 OpenAPI 看的，真正的闸不能只长在最外层。
+    """
+
+    title: str | None = None
+    module: str | None = None
+    priority: str | None = None
+    case_type: str | None = None
+    preconditions: str | None = None
+    steps: list[str] | None = None
+    expected: str | None = None
+    test_data: str | None = None
+    endpoints: list[str] | None = None
+    request: dict[str, Any] | None = None
+
+
+@router.patch("/deliveries/{delivery_id}/cases/{case_id}")
+def patch_case(delivery_id: str, case_id: str, body: CasePatch) -> dict[str, Any]:
+    """改一条已采纳用例（决策 0012 ADR-2）。
+
+    改完标记 `origin=human` 并按落盘时同一套规则复校，不合格拒存。
+    只动 `cases.json`；已导出的产物是历史快照，不追改（要新的就重新导出）。
+    """
+    wb = _require_extension()
+    patch = {k: v for k, v in body.model_dump().items() if v is not None}
+    try:
+        return wb.update_case(delivery_id, case_id, patch, _deliveries_root())
+    except wb.WorkbenchError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": getattr(exc, "code", "WORKBENCH_ERROR"), "message": str(exc)},
+        ) from exc
+
+
+# ── HAR 体检（设计稿第 2 屏）─────────────────────────────────────────────────
+#
+# 这一步**不调模型**，是纯本地解析，所以免费、立即出结果。
+#
+# 最硬的一条纪律：**HAR 原件绝不落盘。** 它含未脱敏的 Authorization / Cookie /
+# 账号密码，一旦落进用户目录，后续任何一次打包、导出、备份都会把它带出去。
+# 这里只在内存里解析，落盘的是**脱敏后的报告**（草稿），供后面生成用例时引用。
+
+MAX_HAR_BYTES = 40 * 1024 * 1024
+"""HAR 上传体积上限。
+
+不是拍脑袋定的：对标 MeterSphere 时看到它的真实 issue #25162——浏览器录制的 HAR
+导入直接报 Jackson `exceeds the maximum length (5000000)`，而且是**用户传完了才吃异常**，
+没有前置提示。这里改成流式读、边读边计数、超限立刻拒，不等把整个文件读进内存再说。
+
+40 MB 是权衡后的值：一次典型抓包（约 400 个请求）在 3 MB 量级，40 MB 已经是几千个请求；
+再往上放，解析时的峰值内存（字符串 + 解析后的对象，几倍膨胀）就不好收场了——
+这一点在本项目构建镜像时被 apt 的 OOM 教训过一次，宁可保守。
+"""
+
+
+async def _read_upload_capped(file: UploadFile) -> bytes:
+    """流式读上传内容，超限即拒。
+
+    分块读而不是 `await file.read()` 一把梭，就是为了在超限的那一刻就停手，
+    而不是先把一个几百 MB 的文件读进内存、再回头说"太大了"。
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(64 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_HAR_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"HAR 超过 {MAX_HAR_BYTES // (1024 * 1024)} MB 上限。"
+                    "抓包时先按域名过滤一下，或只保留要测的那段操作再导出。"
+                ),
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+@router.post("/har/inspect")
+async def inspect_har(file: UploadFile = File(...)) -> dict[str, Any]:
+    """上传 HAR，本地体检，返回脱敏后的报告并存成草稿。
+
+    返回里带 `draft_id`，下一步「描述场景 → 生成用例」凭它引用这份体检结果，
+    不必把 HAR 再传一遍（也就不必在服务端留着原件）。
+    """
+    _require_extension()  # 扩展没装时先给 503，别等到 import 才炸出 ImportError
+    from server import har_parse  # type: ignore[import-not-found]
+
+    raw = await _read_upload_capped(file)
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="HAR 不是 UTF-8 文本。它应当是浏览器导出的 .har（JSON），不是压缩包或二进制。",
+        ) from exc
+
+    report = har_parse.parse_har_report(har_content=content)
+    # parse_har_report 出错时返回带 error 字段的结果而不抛异常（工具边界的既定口径），
+    # 这里把它翻成 HTTP 语义，同时把它给的 hint 一起带出去——那句 hint 是给人看的。
+    if not report.get("ok", False):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": report.get("error"),
+                "message": report.get("message"),
+                "hint": report.get("hint"),
+            },
+        )
+
+    draft_id = f"har-{uuid4().hex[:12]}"
+    draft_path = _drafts_root() / f"{draft_id}.json"
+    draft_path.write_text(
+        json.dumps(
+            {"draft_id": draft_id, "source_name": file.filename, "report": report},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    return {
+        "draft_id": draft_id,
+        "source_name": file.filename,
+        "report": report,
+        # 界面上必须如实说，不许写成"已全部脱敏"。三层分开讲，因为它们的口径真的不同：
+        # 凭证在解析时就换成了占位；PII 在**这份报告里仍是原值**（执行要用真值，
+        # 而报告只落在你自己的目录里）；出境给模型与导出给别人这两条路各有一道闸。
+        "redaction_notice": {
+            "credentials_redacted": True,
+            "pii_redacted_in_report": False,
+            "pii_redacted_on_export": True,
+            "message": (
+                "凭证已换成变量占位。身份证、手机号、邮箱这类个人信息在本报告里"
+                "保留原值（执行时要用），但**发给模型和导出成产物时都会换成占位符**。"
+                "自由文本里的姓名抓不到，对外发之前仍请自行过一眼。"
+            ),
+        },
+    }
+
+
+@router.get("/har/drafts/{draft_id}")
+def get_har_draft(draft_id: str) -> dict[str, Any]:
+    """取回一份体检草稿。id 走与批次同一套校验，非法直接拒。"""
+    wb = _require_extension()
+    try:
+        safe = wb.safe_delivery_id(draft_id)
+    except wb.WorkbenchError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    path = _drafts_root() / f"{safe}.json"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"草稿 {safe} 不存在。")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+# ── 生成面 ────────────────────────────────────────────────────────────────
+# 会花钱的接口单独成文件（`test_workbench_generate.py`），挂在这里。
+# 分开的理由是审查面：想知道"哪些接口会调模型"，读那一个文件就够。
+#
+# 放在文件末尾而不是顶部 import：那个模块反过来要 import 本模块的
+# `_drafts_root` / `_require_extension`，顶部导入会成环。
+def _include_generate_routes() -> None:
+    from deeptutor.api.routers import test_workbench_generate
+
+    router.include_router(test_workbench_generate.router)
+
+
+_include_generate_routes()
+
+
+# ── 执行与导出面 ──────────────────────────────────────────────────────────
+# 会对被测环境发真实请求的接口同样单独成文件（`test_workbench_execute.py`）。
+# 同样放末尾 include：那个模块依赖 test_workbench_paths，与本模块无环，
+# 但挂载位置统一收在这里——main.py 只认识本 router 一个入口。
+def _include_execute_routes() -> None:
+    from deeptutor.api.routers import test_workbench_execute
+
+    router.include_router(test_workbench_execute.router)
+
+
+_include_execute_routes()

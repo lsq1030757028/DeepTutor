@@ -74,7 +74,21 @@ class ChatOrchestrator:
 
         async def _run() -> None:
             try:
-                await capability.run(context, bus)
+                from deeptutor.multi_user.paths import current_owner_id
+                from deeptutor.services.test_journey.trust import (
+                    TrustedJourneyContext,
+                    bind_trusted_journey_context,
+                )
+
+                trusted = TrustedJourneyContext(
+                    owner_id=current_owner_id(),
+                    session_id=context.session_id,
+                    turn_id=_turn_id or context.session_id,
+                    capability=cap_name,
+                    surface="capability",
+                )
+                with bind_trusted_journey_context(trusted):
+                    await capability.run(context, bus)
             except Exception as exc:
                 logger.error("Capability %s failed: %s", cap_name, exc, exc_info=True)
                 await bus.error(str(exc), source=cap_name)

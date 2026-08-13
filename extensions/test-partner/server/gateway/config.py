@@ -151,8 +151,8 @@ def _clean_text(value: Any, limit: int) -> str:
 def valid_base_url(base_url: str) -> bool:
     """base_url 必须是 http(s) 绝对地址。与 `server/execute.normalize_base_url`
     同口径——那边是执行前的最后一道，这边是存盘前的第一道，两道都要过。"""
-    parts = urlsplit(str(base_url or "").strip())
-    return parts.scheme.lower() in ("http", "https") and bool(parts.netloc)
+    from server.journey.redlines import safe_target_url
+    return bool(safe_target_url(base_url)["ok"])
 
 
 def normalize_variables(raw: Any) -> dict[str, str]:
@@ -215,9 +215,11 @@ def normalize_environment(raw: Any) -> dict[str, Any]:
             code="ENV_BASE_URL_REQUIRED")
     if not valid_base_url(base_url):
         raise EnvironmentConfigError(
-            f"base_url「{base_url}」不是合法的 http(s) 绝对地址，"
-            "要带协议头，例如 https://api-test.example.com。",
+            "base_url 不是安全的 http(s) 绝对地址；不能内嵌用户名、密码、"
+            "query 或 fragment，敏感值请放环境变量。",
             code="ENV_BASE_URL_INVALID")
+    from server.journey.redlines import safe_target_url
+    base_url = safe_target_url(base_url)["url"]
     return {
         "name": name,
         "base_url": base_url,

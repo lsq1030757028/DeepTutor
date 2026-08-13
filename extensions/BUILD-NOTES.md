@@ -156,3 +156,121 @@ GitHub Actions 仍被停（所有 job 零步骤、分配不到 runner，手动�
 一度按 `app.routes` 过滤 `path` 找不到工作台路由，差点当成"路由没挂"。
 实际是这版 DeepTutor 用 `_IncludedRouter`（32 个）惰性包装，静态取不到 `.path`。
 **权威来源是 `app.openapi()` 的 paths**，不是 `app.routes` 的属性——查错了地方。
+
+---
+
+## P3 全链路端到端验证（2026-08-07）
+
+脚本：`extensions/test-partner/scripts/verify_p3_flow.sh`。**19/19 PASS。**
+同样用副本卷 `deeptutor-data-verify` + 独立端口 3785，第 0 步先自证现役实例未被触碰。
+
+### 这次和骨架验证的差别：跑了真模型
+
+该实例已配模型（`model_ready: true`），所以第 8 步不是走空态分支，
+而是**真发起了一次生成并跑完**。结果：
+
+| 项 | 实测 |
+|---|---|
+| 生成 | 8 条用例，`complete=true`，共 4 次模型调用 |
+| AI 挑端点 | 自己挑了 2 个，每个带 `why`；`skipped_reason` 有值 |
+| 断言质量 | **8 条全部有响应体断言**，没有一条只断言 status |
+| 意图分布 | 正常 / 异常 / 鉴权 都有 |
+
+### 出境闸的实证
+
+模型起草的场景原文：
+
+> 先登录账号，然后提交了一个包含SKU-1、数量2和 **`<手机号>`** 的订单创建请求。
+
+两件事同时被证明了：
+
+1. **PII 没有出境**——模型看到的是 `<手机号>` 而不是 `13800138000`（BB-430 的闸生效）；
+2. **模型照抄了占位符，没有编造一个真手机号**——这正是三段提示词里那条
+   「占位符是脱敏结果，原样保留，绝不要编造真实值」要的效果。不写那句的话，
+   模型会自作主张填一个像样的号码，用例就带上假数据。
+
+全量结果里逐个搜过：手机号真值、Bearer 令牌、明文密码，**三个都没出现**。
+
+### 两处第一版写错的检查（记下来，免得下次再踩）
+
+1. `/openapi.json` 打到了**前端**端口。前端只转发 `/api/*` 与 `/ws/*`，
+   `/openapi.json` 在那一面本来就是 404——要打容器内后端的 `:8001`。
+   当时能力探测那条是通的，正是靠它才看出"路由是活的、是检查查错了面"。
+2. HAR 上传用 `mktemp` 的路径，curl 在 Git Bash 下吃不进去，
+   于是文件根本没发出去、端点正确地报了 `Field required: file`。
+   **两条都是测试写错不是产品坏了**——但这个判断是靠"手工直接打一次端点成功"
+   证出来的，不是靠读代码猜的。
+
+---
+
+## P3 执行/导出/环境面端到端验证（2026-08-08）
+
+脚本：`extensions/test-partner/scripts/verify_p3_workbench.sh`。**27/27 PASS。**
+同样用副本卷 + 端口 3785，第 0 步先自证现役实例未被触碰。
+
+覆盖面：新 8 条路由在 openapi、环境金库建/删/去值投影/掩码、金库落点实测在
+`owner_secrets_dir`（0011 落点二）、执行起跑→轮询→逐条结论→**真通过**
+（夹具用例打容器内后端自己的 health 端点，断言 status+body 双过）、
+报告落盘进批次目录、四格式导出、单文件下载、zip 打包、路径穿越被拒。
+
+浏览器实测另走了一遍界面（批次列表→详情→环境表单→执行→导出面板→下载清单），
+**中文环境名经 UI 的 UTF-8 路径保存成功**——这条 Git Bash curl 验不了
+（CJK 被按 GBK 发出，FastAPI 报 body 解析错，是 harness 限制不是产品缺陷）。
+
+### 这轮验证挖出的真缺陷（已修，bug-bank BB-435）
+
+执行跑通但 `execution_report.json` **落不进批次目录**：
+`execute._resolve_report_dir` 的防任意写闸只认扩展自带的 `deliveries/` 模块常量，
+宿主部署下每用户批次根在 `/app/data/...`，合法目录被当"任意路径"拒掉，
+报告 fallback 到镜像内只读路径直接 PermissionError。
+修法与 `save_delivery` 的 `out_root` 同构：`execute_cases` 增 `deliveries_root`
+注入参（不上 MCP 工具面），`RunRegistry` 传台账同根。
+**单测测不出它**——所有单测都用模块常量根；这类"多部署形态下常量与语境脱节"
+只有真容器形态能暴露，这正是每轮改动都要重跑容器级验证的理由。
+
+### 本地回归闸（2026-08-08 起，CI 停摆期间的合入前唯一入口）
+
+`extensions/test-partner/scripts/regression_gate.sh`——四层一次跑完，任何一层红=整体红：
+扩展 pytest 全量 → i18n parity（脚本在 `web/scripts/` 下）→ 前端 node 测试 + eslint
+（要求 `web && npm ci` 已做过一次）→ 上游 `tests/api` 镜像内挂仓跑。
+首跑全绿：850 + parity OK + 334（扣 4 个已知上游坏件）+ 262（扣 cors 文件 4 例）。
+
+已知基线扣除的两组（扣已知、其余任何红都算真红）：前端 4 个测试文件因上游测试
+构建把带 `export` 的 `code-block-themes.js` 交给 `require` 而载入即炸（这 4 个文件
+在我们分支 diff 里零命中）；`tests/api/test_cors_settings.py` 整文件（其中 2 例
+在纯上游基线镜像同红，见上文归因）。Actions 恢复后本闸不废弃，转为合入前预检。
+
+### 三个 harness 坑（都不是产品问题）
+
+1. Git Bash 的 curl 发 CJK JSON 会变 GBK 字节——脚本里凡带中文的 payload 用 ASCII 或走 python。
+2. `docker exec` 不带 `-i` 时 heredoc 整个被丢，python 静默跑空脚本——夹具"造了"其实没造。
+3. Windows 版 curl 把 `/tmp/...` 当别的盘符路径，`-o` 的文件根本没写出来——落盘用相对路径。
+
+---
+
+## 闭环实现的验证（2026-08-10 · 决策 0012）
+
+脚本：`extensions/test-partner/scripts/verify_closure.sh`，端口 3786，副本卷。
+**16/16 PASS**，逐条对应 spec 的 AC-1～AC-8。
+
+### 三个坑，都是脚手架不是产品
+
+判定方法一律是「与真实形态对照」，不是读代码猜：
+
+1. **PATCH 报 500 / PermissionError**——`docker exec` 默认以 root 造夹具，
+   批次目录归 root，而应用进程是 `deeptutor` 用户，写不进去。
+   判据：真实批次目录属主全是 `deeptutor`，夹具那个是 `root`。
+   修法：`docker exec -u deeptutor`。产品侧顺带把裸 500 改成
+   `CASES_WRITE_FAILED` 可读错误——属主不对时用户该看到原因而不是 Internal Server Error。
+2. **夹具"没造出来"**——`python -c` 里的中文标题被 Git Bash 按 GBK 发出，
+   容器按 UTF-8 读成乱码，匹配永远不中。**本仓第三次踩同一个坑**，
+   已在脚本里写死 ASCII 标识并注释原因。
+3. **构建"成功"其实失败**——`docker build ... | tail -4` 把退出码换成了 tail 的 0。
+   与 `regression_gate.sh` 第 4 层修过的是同一个错误，这次犯在 docker 上。
+   **凡要判断成败的命令，不许接管道**；要看尾部就先重定向到文件再 tail。
+
+### 一处坏闸被自己抓出来
+
+AC-8（真值不出现在响应里）第一版写成「grep 不到就算过」——
+接口挂掉返回空串时它照样绿。改成**先断言响应体可识别、再断言不含真值**。
+与 P1 记过的"因不存在而恒真的断言"是同一类，只是这次发生在自己新写的脚本里。

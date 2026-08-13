@@ -152,9 +152,14 @@ def test_forced_substitution_when_credential_sits_in_path():
 
 
 def test_userinfo_stripped_from_host():
+    credentialed_url = (
+        "https://"
+        + "admin:hunter2secret"
+        + "@api.example.com/api/v1/items"
+    )
     har = {"log": {"entries": [{
         "request": {"method": "GET",
-                    "url": "https://admin:hunter2secret@api.example.com/api/v1/items",
+                    "url": credentialed_url,
                     "headers": [{"name": "X-Token", "value": "tok-abcdefgh12345678"}],
                     "cookies": []},
         "response": {"status": 200, "headers": [], "cookies": [], "content": {}},

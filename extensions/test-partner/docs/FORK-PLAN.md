@@ -76,11 +76,13 @@ P1 顺带拆掉两个首发雷（上游 `pypi-release.yml` 会往 PyPI 发包、
 
 纯搬运，不改行为。目的是让 667 例在新家继续全绿，作为后续所有改动的护栏。
 
-- [ ] `server/` 全套 → `extensions/test-partner/`（parse_har / validate_cases / save_delivery /
+- [x] `server/` 全套 → `extensions/test-partner/`（parse_har / validate_cases / save_delivery /
       execute_cases / gateway / args_tolerance）
-- [ ] 667 例测试同迁，CI 配置复制自 P0
-- [ ] `skills/`、`partner/`、`tapd-runtime/` 同迁
-- [ ] 执行层四条安全红线**逐条复验**（跨 host 拒发 / 变量残留 skip / 凭据零回显 / 无断言不算过）
+- [x] 667 例测试同迁（后续增至 850，本地实跑全绿），CI 配置复制自 P0
+- [x] `skills/`、`partner/`、`tapd-runtime/` 同迁
+- [x] 执行层四条安全红线**逐条复验**（跨 host 拒发 / 变量残留 skip / 凭据零回显 / 无断言不算过
+      ——test_execute.py + test_api_router.py 各有对应用例，2026-08-08 实跑 104 例含此四条全绿；
+      此四框长期漏勾，2026-08-08 全量盘点时回勾）
 
 **验收**：fork 仓 CI 里 667 例全绿；四条红线各有对应测试可点开。
 **明确不做**：不改任何行为、不重构、不优化。搬运和改造混在一起就无法定位问题。
@@ -106,14 +108,16 @@ P1 顺带拆掉两个首发雷（上游 `pypi-release.yml` 会往 PyPI 发包、
 同轮用户另一条指示：`没必要从零搭一套`，要求先对标 MeterSphere / Apifox
 一类现成的接口用例管理工具再设计。对标结论进 v2 设计稿。
 
-- [ ] **前置勘察**（半天，独立成步）：DeepTutor 前端组件体系、路由结构、状态管理、
-      设计 token 的可复用程度。勘察结论可能推翻下面的形态细节——**先勘察再动手，不许边做边猜**。
-- [ ] 后端 API：走 DeepTutor 自身的路由体系，不再绕 MCP 传结构化数据
-- [ ] 前端：工作台作为 DeepTutor 界面内的原生页面，用它的设计系统与组件
-- [ ] 配置能力并入同一处，不再是独立页面
+- [x] **前置勘察**（半天，独立成步）：结论在 `recon-deeptutor-extension-points.md`
+- [x] 后端 API：走 DeepTutor 自身的路由体系（`test_workbench{,_generate,_model,_paths,_execute}.py`，
+      19 条路由；执行/导出/环境面 2026-08-08 落地，容器级验证 27/27）
+- [x] 前端：设计稿第 1-9 屏全部原生落地（Hub 列表 + 新建四步 + 批次详情/执行/导出 + 环境面板）
+- [x] 配置能力并入：局部配置（环境与变量）在工作台内，金库落
+      `owner_secrets_dir`（0011 落点二）；公共配置按 0011 裁定**不自建**（第 10 屏作废）
 - [ ] **MCP 面保留**：聊天链路（TAPD 需求→用例，UAT-2 已实测通过）继续经 MCP 提供
-- [ ] 原生原生 JS 单页（`server/gateway/webapp.py` 内嵌 HTML）退役
-- [ ] 每一处改动既有文件都登记进 `UPSTREAM-TOUCHPOINTS.md`
+- [ ] 原生 JS 单页（`server/gateway/webapp.py` 内嵌 HTML）退役
+      ——待 0011 的 TAPD 令牌迁移（走平台 MCP 配置面）落地后一并退
+- [x] 每一处改动既有文件都登记进 `UPSTREAM-TOUCHPOINTS.md`（现 6 条）
 
 **验收**：从 DeepTutor 界面单一入口进工作台，跑通「批次 → 用例 → 执行 → 结果」，
 凭据在页面与两份报告中均不出现真值。
@@ -141,12 +145,43 @@ P1 顺带拆掉两个首发雷（上游 `pypi-release.yml` 会往 PyPI 发包、
 
 ## P5 · 上游同步演练（半天）
 
-- [ ] `git fetch upstream`，走一次完整 merge 流程
-- [ ] 量化冲突面，核对 `UPSTREAM-TOUCHPOINTS.md` 是否准确
-- [ ] 把流程写成 `docs/UPSTREAM-SYNC.md`（下次照着做即可）
+- [x] `git fetch upstream`，走一次完整 merge 流程（2026-08-08，`ut1.5.8-base` → **v1.5.10**）
+- [x] 量化冲突面：**0 文本冲突**；上游改 4454 文件，其中 4322 是误提交的构建产物，
+      真源码 132；我们 3 处触点全部自动合并成功。`UPSTREAM-TOUCHPOINTS.md` 经此验证**准确**
+- [x] 把流程写成 [UPSTREAM-SYNC.md](UPSTREAM-SYNC.md)（含两个必踩的坑与最小验证断言）
+
+演练在独立 worktree（分支 `drill/upstream-sync-v1510`）完成，**未合入任何共享分支**——
+真同步等 P3 合 main 之后再做，届时照手册走一遍即可。
 
 **验收**：登记表与实际冲突点吻合；同步流程可重复。
 **人闸**：无。
+
+---
+
+## 后续目标（backlog · 未排期）
+
+### G1 · 让 DT 的聊天 agent 了解 DeepTutor 自身（2026-08-08 用户新增）
+
+用户原话：`目前我跟DT聊天时，它只知道自己是DeepTutor的agent，但不了解当前的DeepTutor
+系统知识，导致我问它信息的时候它需要去github上查官方文档，这个我认为应该有一个工具能够
+让它直接获取到相关信息，甚至必要时它可以推荐我如何使用或开发DeepTutor`。
+
+现状勘察（2026-08-08）：聊天 agent 的知识入口有四类现成机制——
+Knowledge Center 知识库（`rag`/`kb_files` 工具）、技能（`read_skill`，按 manifest 挂载）、
+联网（`web_search`/`web_fetch`/`github`，即目前"去 GitHub 查"的路径）、MCP 服务。
+系统自带文档（README/docs/CONTAINERIZATION 等）**不在生产镜像里**（上游 Dockerfile
+不 COPY docs），也没有任何"自我知识"的内建落点。
+
+候选路线（按 0011「先用平台现成机制」排序，未拍板）：
+
+| 路线 | 做法 | 代价 |
+|---|---|---|
+| A · 零代码试点 | 把官方文档灌进一个 Knowledge Center 知识库，聊天时挂上，agent 走 `rag` 直接答 | 只有导入劳动；按用户手动挂、升级要手动刷新 |
+| B · 技能层 | 写一份「DeepTutor 使用与开发顾问」SKILL.md，挂进技能 manifest，agent 按需 `read_skill` | 文档策展；适合"怎么用/怎么开发"的过程性指导 |
+| C · 内建工具 | 镜像带 docs + 新增 `deeptutor_docs` 检索工具 | 动上游触点（Dockerfile + 工具注册表），维护成本最高 |
+
+建议：先 A（一次导入即可验证"有了本体知识后回答质量"），价值成立再决定
+要不要 B/C 的"开箱即用"形态。**待用户拍板后排期。**
 
 ---
 

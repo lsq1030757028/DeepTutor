@@ -91,6 +91,36 @@ def test_dockerfile_is_json_driven_without_bundle_sed() -> None:
     assert "export_runtime_settings_to_env" in content
 
 
+def test_dockerfile_uses_tls_and_retries_for_debian_packages() -> None:
+    """Every apt stage must survive transient mirror/proxy failures.
+
+    The Debian slim images currently ship ``http://deb.debian.org`` sources.
+    A transient HTTP 502 used to abort the entire candidate-image build before
+    project code was copied, even though an HTTPS update against the same base
+    succeeded. Builder and production stages promote their inherited sources
+    to TLS; development inherits the production source file. All three apt
+    stages apply retries to both metadata and archive downloads.
+    """
+    root = Path(__file__).resolve().parents[2]
+    content = (root / "Dockerfile").read_text(encoding="utf-8")
+
+    assert content.count("sed -i 's|http://deb.debian.org|https://deb.debian.org|g'") == 2
+    assert "http://deb.debian.org/debian" not in content
+    assert content.count("apt-get -o Acquire::Retries=5 update") == 3
+    assert content.count("apt-get -o Acquire::Retries=5 install") == 3
+    assert "curl --retry 5 --retry-all-errors --connect-timeout 30" in content
+    assert "RUSTUP_MAX_RETRIES=5 sh -s -- -y --profile=minimal" in content
+
+
+def test_production_image_records_immutable_source_revision() -> None:
+    """A release tag is mutable; the image itself must expose its source SHA."""
+    root = Path(__file__).resolve().parents[2]
+    content = (root / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "ARG DEEPTUTOR_BUILD_REVISION=unknown" in content
+    assert 'org.opencontainers.image.revision="${DEEPTUTOR_BUILD_REVISION}"' in content
+
+
 def test_supervisord_runs_as_root_with_unprivileged_children() -> None:
     """supervisord itself must run as root so it can open the container's
     stdout/stderr (``/dev/fd/1,2`` — root-owned pipes under a rootful daemon

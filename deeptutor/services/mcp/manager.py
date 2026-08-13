@@ -123,15 +123,35 @@ class MCPToolAdapter(BaseTool):
         return self._server_name
 
     @property
+    def original_name(self) -> str:
+        """Unwrapped server-side name, used for provider-specific policy."""
+        return self._original_name
+
+    @property
     def server_name(self) -> str:
         """Deprecated alias for :attr:`provider_id`; kept for API compatibility."""
         return self._server_name
 
     def get_definition(self) -> ToolDefinition:
+        schema = self._input_schema
+        if self._server_name == "test-partner" and self._original_name.startswith("journey_"):
+            from deeptutor.services.test_journey.trust import RESERVED_ARGUMENTS
+
+            schema = dict(self._input_schema)
+            properties = schema.get("properties")
+            if isinstance(properties, dict):
+                schema["properties"] = {
+                    name: spec
+                    for name, spec in properties.items()
+                    if name not in RESERVED_ARGUMENTS
+                }
+            required = schema.get("required")
+            if isinstance(required, list):
+                schema["required"] = [name for name in required if name not in RESERVED_ARGUMENTS]
         return ToolDefinition(
             name=self._wrapped_name,
             description=f"[{self._server_name}] {self._description}",
-            raw_parameters=self._input_schema,
+            raw_parameters=schema,
         )
 
     async def execute(self, **kwargs: Any) -> ToolResult:
@@ -140,6 +160,58 @@ class MCPToolAdapter(BaseTool):
         # notifications during a long call, and that is the only thing a reader
         # has to look at while a five-minute render or crawl is running.
         event_sink = kwargs.pop("event_sink", None)
+        if self._server_name == "test-partner" and self._original_name.startswith("journey_"):
+            from deeptutor.services.test_journey.trust import (
+                RESERVED_ARGUMENTS,
+                JourneyTrustError,
+                current_resolved_user_decision,
+                current_trusted_journey_context,
+                effective_arguments,
+                sign_bridge_context,
+                sign_user_decision_context,
+            )
+
+            context = current_trusted_journey_context()
+            if context is None or context.capability != "test":
+                return ToolResult(
+                    content=(
+                        "This Journey tool is only available inside an "
+                        "authenticated Test capability turn."
+                    ),
+                    success=False,
+                )
+            for reserved in RESERVED_ARGUMENTS:
+                kwargs.pop(reserved, None)
+            effective = effective_arguments(kwargs, self._input_schema)
+            try:
+                needs_user_decision = self._original_name == "journey_write_confirm" or (
+                    self._original_name == "journey_ingest"
+                    and bool(str(effective.get("requirement_entity") or "").strip())
+                )
+                if needs_user_decision:
+                    decision = current_resolved_user_decision()
+                    if decision is None:
+                        return ToolResult(
+                            content=(
+                                "This Journey gate requires a resolved interactive "
+                                "user decision from this same Test turn."
+                            ),
+                            success=False,
+                        )
+                    kwargs["decision_context"] = sign_user_decision_context(
+                        context, decision, tool=self._original_name, arguments=effective
+                    )
+                kwargs["bridge_context"] = sign_bridge_context(
+                    context,
+                    tool=self._original_name,
+                    arguments=effective,
+                )
+            except JourneyTrustError as exc:
+                logger.error("Journey trust bridge is not configured: %s", exc)
+                return ToolResult(
+                    content="The Journey trust bridge is not configured.",
+                    success=False,
+                )
         text = await self._manager.call_tool(
             self._owner,
             self._server_name,
