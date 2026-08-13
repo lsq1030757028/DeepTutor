@@ -34,6 +34,7 @@ const webRoot = path.resolve(process.cwd());
 const localesRoot = path.join(webRoot, "locales");
 const enRoot = path.join(localesRoot, "en");
 const zhRoot = path.join(localesRoot, "zh");
+const runtimePath = path.join(webRoot, "i18n", "en-runtime.json");
 
 if (!fs.existsSync(enRoot) || !fs.existsSync(zhRoot)) {
   console.error(`[i18n:parity] Missing locales roots: ${enRoot} or ${zhRoot}`);
@@ -82,6 +83,18 @@ for (const rel of enFiles) {
       for (const k of extraKeys) console.error(`  - ${k}`);
     }
   }
+}
+
+const enApp = loadJson(path.join(enRoot, "app.json"));
+const expectedRuntime = Object.fromEntries(
+  Object.entries(enApp).filter(([key, value]) => value !== key),
+);
+const actualRuntime = loadJson(runtimePath);
+if (JSON.stringify(actualRuntime) !== JSON.stringify(expectedRuntime)) {
+  ok = false;
+  console.error(
+    "[i18n:parity] i18n/en-runtime.json is stale. Run `npm run i18n:runtime`.",
+  );
 }
 
 if (!ok) process.exit(1);
