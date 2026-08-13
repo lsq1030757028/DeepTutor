@@ -179,6 +179,7 @@ def test_coding_pipeline_keeps_the_complete_no_deploy_uat_gate():
         "git merge-base --is-ancestor",
         "--junitxml=/workspace/ci-artifacts/test-partner.xml",
         "pytest -q tests deeptutor/learning/tests",
+        "mcr.microsoft.com/playwright/python@sha256:3de745b23fc4b33f",
         "npm run test:node",
         "npm run i18n:parity",
         "npm run build",
@@ -187,5 +188,6 @@ def test_coding_pipeline_keeps_the_complete_no_deploy_uat_gate():
     for command in required:
         assert command in pipeline
     assert "no-deploy" in pipeline
+    assert "python:3.11-slim" not in pipeline
     assert "deeptutor start" not in pipeline
     assert "--port 3785" not in pipeline

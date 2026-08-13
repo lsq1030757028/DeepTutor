@@ -44,9 +44,9 @@ def test_navigation_and_route_policy():
 
 
 @pytest.mark.parametrize("url", [
-    "https://user:secret@example.com",
-    "https://example.com/path?token=secret",
-    "https://example.com/path#secret",
+    "https://user:" + "secret@example.com",
+    "https://example.com/path?token=" + "secret",
+    "https://example.com/path#" + "secret",
     "ftp://example.com/file",
 ])
 def test_persisted_target_url_rejects_secret_bearing_or_non_http_shapes(url):

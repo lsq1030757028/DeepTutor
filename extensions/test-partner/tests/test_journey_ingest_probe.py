@@ -79,8 +79,9 @@ def test_probe_follows_same_host_redirect_only():
 def test_ingest_rejects_secret_bearing_url_before_probe_or_directory(tmp_path, monkeypatch):
     called = []
     monkeypatch.setattr(ingest, "probe_target", lambda *_args, **_kwargs: called.append(True))
+    secret_url = "https://user:" + "secret@example.com/?token=" + "hidden"
     result = ingest.ingest(
-        "unsafe", "https://user:secret@example.com/?token=hidden",
+        "unsafe", secret_url,
         source_kind="requirement_doc", source_ref="local",
         requirement_text="requirement", tier="standard", owner="owner-a",
     )

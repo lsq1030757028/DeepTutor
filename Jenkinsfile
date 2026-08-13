@@ -93,8 +93,14 @@ pipeline {
                     docker run --rm \
                         -v "$PWD:/workspace" \
                         -w /workspace \
-                        python:3.11-slim \
-                        sh -c 'owner="$(stat -c "%u:%g" /workspace)"; trap "chown -R $owner /workspace" EXIT; python -m pip install -q -r extensions/test-partner/requirements-dev.txt; cd extensions/test-partner; python -m pytest -q --no-header --junitxml=/workspace/ci-artifacts/test-partner.xml'
+                        python:3.11-bookworm \
+                        sh -c 'owner="$(stat -c "%u:%g" /workspace)"; trap "chown -R $owner /workspace" EXIT; git --version; python -m pip install -q -r extensions/test-partner/requirements-dev.txt; cd extensions/test-partner; python -m pytest -q --no-header -k "not test_ui_track_real_browser" --junitxml=/workspace/ci-artifacts/test-partner.xml'
+                    docker run --rm \
+                        -v "$PWD:/workspace" \
+                        -w /workspace \
+                        -e PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+                        mcr.microsoft.com/playwright/python@sha256:3de745b23fc4b33fccbcb3f592ee52dd5c80ce79f19f839c825ce23364e403c1 \
+                        sh -c 'owner="$(stat -c "%u:%g" /workspace)"; trap "chown -R $owner /workspace" EXIT; git --version; python -m pip install -q -r extensions/test-partner/requirements-dev.txt; cd extensions/test-partner; python -m pytest -q --no-header tests/test_journey_exec.py::test_ui_track_real_browser --junitxml=/workspace/ci-artifacts/test-partner-browser.xml'
                 '''
             }
         }
