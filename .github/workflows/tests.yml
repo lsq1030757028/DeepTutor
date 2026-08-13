@@ -1,32 +1,9 @@
 name: Tests
 
+# 2026-08-13：私有仓 Actions 不再作为必过门禁（额度会烧穿整条闸）。
+# 必过构建在 CODING 固定 SHA。本文件只留手动备用。
 on:
-  push:
-    branches:
-      - main
-      - dev
-    paths:
-      - "deeptutor/**"
-      - "deeptutor_cli/**"
-      - "tests/**"
-      - "requirements/**"
-      - "requirements.txt"
-      - "pyproject.toml"
-      - "web/**"
-      - ".github/workflows/tests.yml"
-  pull_request:
-    branches:
-      - main
-      - dev
-    paths:
-      - "deeptutor/**"
-      - "deeptutor_cli/**"
-      - "tests/**"
-      - "requirements/**"
-      - "requirements.txt"
-      - "pyproject.toml"
-      - "web/**"
-      - ".github/workflows/tests.yml"
+  workflow_dispatch:
 
 jobs:
   lint:

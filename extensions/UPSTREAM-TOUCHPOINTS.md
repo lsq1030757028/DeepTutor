@@ -27,6 +27,7 @@
 
 | 3 | `deeptutor/api/main.py` | 注册测试工作台 router：import 块加 1 项 + 1 个 `include_router`（带 `dependencies=_auth`）。路由注册是集中式的，没有插件位 | 保留这两处，其余取上游。**`dependencies=_auth` 不可省**——裸挂会让落盘静默写进 admin 工作区（决策 0009） | **否** |
 | 4 | `Dockerfile` | 加 2 行 `COPY extensions/test-partner/{server,skills}/`。上游只 COPY `deeptutor/` `deeptutor_cli/` `scripts/`，**没有这两行镜像里就没有我们的代码**（P1 等价性验证时发现） | 保留这两行，其余取上游 | **否**——COPY 清单是集中式的 |
+| 5 | `.github/workflows/tests.yml` | 去掉 `push`/`pull_request` 自动触发，只留 `workflow_dispatch`。私有仓 Actions 额度会烧穿必过闸（决策 0034） | 同步上游时保留 `on: workflow_dispatch`，其余 jobs 取上游 | **否** |
 
 ### 预计将增（P3 剩余，勘察已确认，尚未动手）
 
