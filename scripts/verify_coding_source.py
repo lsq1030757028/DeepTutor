@@ -25,14 +25,21 @@ def git(repo: Path, *args: str) -> str:
 def repo_from_remote(url: str) -> str:
     raw = url.strip()
     if raw.startswith("git@"):
-        _, _, suffix = raw.partition(":")
-        path = suffix
+        authority, separator, path = raw.partition(":")
+        _, _, hostname = authority.partition("@")
+        if not separator or hostname.lower() != "github.com":
+            raise SystemExit("origin must be github.com")
     else:
         parsed = urlsplit(raw)
-        if (parsed.hostname or "").lower() != "github.com":
-            raise SystemExit("origin must be github.com")
+        if (
+            parsed.scheme.lower() != "https"
+            or (parsed.hostname or "").lower() != "github.com"
+        ):
+            raise SystemExit("origin must use https://github.com")
         path = parsed.path
-    path = path.removeprefix("/").removesuffix(".git").lower()
+    path = (
+        path.removeprefix("/").removesuffix("/").removesuffix(".git").lower()
+    )
     if path != CANONICAL:
         raise SystemExit(f"origin is not {CANONICAL}")
     return path

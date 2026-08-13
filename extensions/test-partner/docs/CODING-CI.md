@@ -5,7 +5,7 @@ GitHub 只记账。合入与发布的必过证据在 CODING，不在 Actions。
 ## 本地（每个 PR 先跑）
 
 ```bash
-bash extensions/test-partner/scripts/regression_gate.sh
+python -m pytest -q extensions/test-partner
 ```
 
 ## CODING（U2 配好钥匙之后）
