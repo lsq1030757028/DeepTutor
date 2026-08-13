@@ -10,7 +10,13 @@ python -m pytest -q extensions/test-partner
 
 ## CODING（U2 配好钥匙之后）
 
-参数：
+原生 PUSH 触发（默认日常路径）：
+
+- `CCI_TRIGGER_METHOD=PUSH`
+- `GIT_LOCAL_BRANCH=<branch>`：转换为 `refs/heads/<branch>`，tag/MR/危险 ref 拒绝
+- `GIT_COMMIT=<40 位小写 SHA>`：作为唯一 checkout 与校验 SHA
+
+手动/API 回退参数：
 
 - `GITHUB_REF`：`refs/heads/<branch>`
 - `GITHUB_COMMIT`：40 位小写 SHA
@@ -27,6 +33,8 @@ python -m pytest -q extensions/test-partner
 ## 依赖锁审查
 
 只增加 Node 版本约束时，`package-lock.json` 只能同步根包的 `engines`；不得顺带升级 Next、Sharp 或其他依赖。若确需升级依赖，必须拆成独立变更并单独验收。
+
+未知触发方式失败关闭；原生 PUSH 不启用自动合并，也不存在部署 stage。
 
 ## 回执
 
