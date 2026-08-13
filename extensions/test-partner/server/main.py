@@ -267,6 +267,304 @@ def execute_cases(cases: CasesArg, base_url: str = "", variables: Any = None,
                                  auth_token_variable=auth_token_variable)
 
 
+# ── req 旅程调用面（M2 第 0 号施工项，ADR-M2-01）────────────────────────────
+#
+# M1 交付的九原子工具此前**没有任何对外调用面**——闭环能跑，但没人能从 DT 侧调它。
+# M2 的三件主事（TAPD 全链 / 薄壳 / 聊天人闸）全压在这条面上，故它先于其余一切。
+#
+# 形态约束（ADR-M2-01）：
+#   · 工具是**原子**的，这里没有"一键跑全流程"——默认组合由聊天 agent 按档位决定；
+#   · 返回体首字段固定 `{ok, code, ...}`，消费方靠约定解析（MCP 传的是字符串）；
+#   · 所有工具先验 DeepTutor 短时签名；`journey_ingest` 是唯一能建批次的工具，
+#     其余一律要求既存 batch_id。owner/capability/tool/args 都由可信 claims 绑定。
+#
+# 工具数与 `server/journey/tools.py:TOOL_NAMES` 对拍（G2），漂移即 CI 红。
+
+
+def _journey_bridge(tool: str, bridge_context: Any,
+                    effective_args: dict[str, Any]) -> Any:
+    """Verify before importing/calling code that may touch Journey storage."""
+    from server.journey.bridge_auth import BridgeAuthError, verify_context
+    try:
+        return verify_context(bridge_context, tool=tool,
+                              effective_args=effective_args)
+    except BridgeAuthError as exc:
+        return {"ok": False, "code": "E_TRUST_CONTEXT_REQUIRED",
+                "message": str(exc)}
+
+
+@mcp.tool()
+def journey_ingest(title: str, base_url: str,
+                   workspace_id: str = "", story_id: str = "",
+                   requirement_text: str = "", source_kind: str = "tapd",
+                   source_ref: str = "", environment_ref: str = "",
+                   tier: str = "", tier_confirmed_via: str = "",
+                   requirement_entity: str = "",
+                   requirement_entity_confirmed_via: str = "",
+                   prepare_requirement_entity: bool = False,
+                   intake_context: str = "",
+                   owner: str = "", caller_surface: str = "unknown",
+                   decision_context: str = "",
+                   bridge_context: str = "") -> dict[str, Any]:
+    """接入 + 定档：只接受 DeepTutor Test capability 的可信桥接调用。
+
+    oracle 二选一：给 TAPD 需求号（workspace_id + story_id，服务端直接取原文并冻结
+    快照 + digest），或给本地需求正文 requirement_text。两个都不给不建批次。
+    tier 不给时只回档位确认卡数据（人闸未走完就没有这个产物）。
+    """
+    effective = {
+        "title": title, "base_url": base_url, "workspace_id": workspace_id,
+        "story_id": story_id, "requirement_text": requirement_text,
+        "source_kind": source_kind, "source_ref": source_ref,
+        "environment_ref": environment_ref, "tier": tier,
+        "tier_confirmed_via": tier_confirmed_via,
+        "requirement_entity": requirement_entity,
+        "requirement_entity_confirmed_via": requirement_entity_confirmed_via,
+        "prepare_requirement_entity": prepare_requirement_entity,
+        "intake_context": intake_context,
+    }
+    trusted = _journey_bridge("journey_ingest", bridge_context, effective)
+    if isinstance(trusted, dict):
+        return trusted
+    from server.journey import tools as _jt
+    return _jt.ingest(title=title, base_url=base_url, source_kind=source_kind,
+                      source_ref=source_ref,
+                      workspace_id=workspace_id, story_id=story_id,
+                      requirement_text=requirement_text,
+                      environment_ref=environment_ref, tier=tier,
+                      tier_confirmed_via=tier_confirmed_via,
+                      requirement_entity=requirement_entity,
+                      requirement_entity_confirmed_via=(
+                          requirement_entity_confirmed_via
+                      ),
+                      prepare_requirement_entity=prepare_requirement_entity,
+                      intake_context=intake_context,
+                      decision_context=decision_context,
+                      _decision_arguments=effective,
+                      _bridge_claims=trusted,
+                      owner=trusted.owner, caller_surface=trusted.surface)
+
+
+@mcp.tool()
+def journey_clarify(batch_id: str, rules: Any, confirmed_facts_md: str,
+                    clarifications: Any = None,
+                    owner: str = "", caller_surface: str = "unknown",
+                    bridge_context: str = "") -> dict[str, Any]:
+    """澄清：落 business_frame（R 规则 + confirmed_facts，过 sot_gate）。
+
+    rules 每条 {rule_id, statement, source_quote?, probing?}。非探测性规则必须带
+    source_quote（需求原文引句）——需求正文撑不住的预期标 probing=true，不进 PASS 判据。
+    """
+    effective = {"batch_id": batch_id, "rules": rules,
+                 "confirmed_facts_md": confirmed_facts_md,
+                 "clarifications": clarifications}
+    trusted = _journey_bridge("journey_clarify", bridge_context, effective)
+    if isinstance(trusted, dict):
+        return trusted
+    from server.journey import tools as _jt
+    return _jt.clarify(batch_id=batch_id, rules=rules or [],
+                       confirmed_facts_md=confirmed_facts_md,
+                       clarifications=clarifications, owner=trusted.owner,
+                       caller_surface=trusted.surface)
+
+
+@mcp.tool()
+def journey_analyze(batch_id: str, example_map: Any, analysis_md: str,
+                    owner: str = "", caller_surface: str = "unknown",
+                    bridge_context: str = "") -> dict[str, Any]:
+    """分析：落 test_analysis（Example Map + 消费面盘点，过 downstream_gate）。"""
+    effective = {"batch_id": batch_id, "example_map": example_map,
+                 "analysis_md": analysis_md}
+    trusted = _journey_bridge("journey_analyze", bridge_context, effective)
+    if isinstance(trusted, dict):
+        return trusted
+    from server.journey import tools as _jt
+    return _jt.analyze(batch_id=batch_id, example_map=example_map or [],
+                       analysis_md=analysis_md, owner=trusted.owner,
+                       caller_surface=trusted.surface)
+
+
+@mcp.tool()
+def journey_draft_cases(batch_id: str, cases: Any, uncovered_rules: Any = None,
+                        owner: str = "", caller_surface: str = "unknown",
+                        bridge_context: str = "") -> dict[str, Any]:
+    """用例草稿：落 case_draft。未覆盖的规则要在 uncovered_rules 里显式声明原因。"""
+    effective = {"batch_id": batch_id, "cases": cases,
+                 "uncovered_rules": uncovered_rules}
+    trusted = _journey_bridge("journey_draft_cases", bridge_context, effective)
+    if isinstance(trusted, dict):
+        return trusted
+    from server.journey import tools as _jt
+    return _jt.draft_cases(batch_id=batch_id, cases=cases or [],
+                           uncovered_rules=uncovered_rules,
+                           owner=trusted.owner, caller_surface=trusted.surface)
+
+
+@mcp.tool()
+def journey_write_confirm(batch_id: str, case_ids: Any = None,
+                          decided_by: str = "", confirmed_via: str = "ask_user_card",
+                          owner: str = "", caller_surface: str = "unknown",
+                          decision_context: str = "",
+                          bridge_context: str = "") -> dict[str, Any]:
+    """写确认落账：把「哪几条写用例获准执行」写进批次 events.jsonl。
+
+    人闸卡四（写确认）答完后调这一次。**不调它，写用例执行时一律
+    SKIP_WRITE_UNCONFIRMED**——卡弹过、用户答过，都不算数。
+
+    `case_ids` 传空数组是**合法答案**（对应卡上「都跳过，只跑只读的」），
+    会落一条显式的「一条都不授权」，与「这道闸还没走」在账本上可区分。
+    """
+    effective = {"batch_id": batch_id, "case_ids": case_ids,
+                 "decided_by": decided_by, "confirmed_via": confirmed_via}
+    trusted = _journey_bridge("journey_write_confirm", bridge_context, effective)
+    if isinstance(trusted, dict):
+        return trusted
+    from server.journey import tools as _jt
+    return _jt.write_confirm(batch_id=batch_id, case_ids=list(case_ids or []),
+                             decided_by=decided_by, confirmed_via=confirmed_via,
+                             decision_context=decision_context,
+                             _decision_arguments=effective,
+                             _bridge_claims=trusted,
+                             owner=trusted.owner, caller_surface=trusted.surface)
+
+
+@mcp.tool()
+def journey_adopt(batch_id: str, selected_draft_ids: Any, caseset_slug: str = "",
+                  adopted_via: str = "workbench_selection", confirmed_by: str = "",
+                  idempotency_key: str = "",
+                  owner: str = "", caller_surface: str = "unknown",
+                  bridge_context: str = "") -> dict[str, Any]:
+    """采纳冻结：落 ApprovedCaseSet（双 digest）。
+
+    采纳前会**重取一次 TAPD 原文比对 digest**：需求变了就阻断采纳并要求重新澄清。
+    这条没有绕过开关。
+    """
+    effective = {
+        "batch_id": batch_id, "selected_draft_ids": selected_draft_ids,
+        "caseset_slug": caseset_slug, "adopted_via": adopted_via,
+        "confirmed_by": confirmed_by, "idempotency_key": idempotency_key,
+    }
+    trusted = _journey_bridge("journey_adopt", bridge_context, effective)
+    if isinstance(trusted, dict):
+        return trusted
+    from server.journey import tools as _jt
+    return _jt.adopt(batch_id=batch_id, selected_draft_ids=selected_draft_ids or [],
+                     caseset_slug=caseset_slug, adopted_via=adopted_via,
+                     confirmed_by=confirmed_by, idempotency_key=idempotency_key,
+                     owner=trusted.owner, caller_surface=trusted.surface)
+
+
+@mcp.tool()
+def journey_compile(batch_id: str, idempotency_key: str = "",
+                    owner: str = "", caller_surface: str = "unknown",
+                    bridge_context: str = "") -> dict[str, Any]:
+    """编译：把采纳集编成 pytest+Playwright 工程（AutomationBundle），过 compile-gate。"""
+    effective = {"batch_id": batch_id, "idempotency_key": idempotency_key}
+    trusted = _journey_bridge("journey_compile", bridge_context, effective)
+    if isinstance(trusted, dict):
+        return trusted
+    from server.journey import tools as _jt
+    return _jt.compile_bundle(batch_id=batch_id, idempotency_key=idempotency_key,
+                              owner=trusted.owner, caller_surface=trusted.surface)
+
+
+@mcp.tool()
+def journey_execute(batch_id: str, variables: Any = None, case_ids: Any = None,
+                    base_url_override: str = "", resume_run_id: str = "",
+                    timeout_s: int = 900, idempotency_key: str = "",
+                    triggered_by: str = "fresh",
+                    owner: str = "", caller_surface: str = "unknown",
+                    bridge_context: str = "") -> dict[str, Any]:
+    """执行：跑 bundle 并产 run_receipt 与证据素材（五条红线在运行时兜底）。
+
+    同一批输入重复调用不会产生第二个 run（幂等），返回上次结果并标 replayed=true。
+    写用例仍受写确认闸约束，重放不跳过人闸。
+    timeout_s 只接受 1..1200 秒；越界会在创建 run 和占用执行槽之前拒绝。
+    """
+    effective = {
+        "batch_id": batch_id, "variables": variables, "case_ids": case_ids,
+        "base_url_override": base_url_override, "resume_run_id": resume_run_id,
+        "timeout_s": timeout_s, "idempotency_key": idempotency_key,
+        "triggered_by": triggered_by,
+    }
+    trusted = _journey_bridge("journey_execute", bridge_context, effective)
+    if isinstance(trusted, dict):
+        return trusted
+    from server.journey import tools as _jt
+    return _jt.execute(batch_id=batch_id, variables=variables, case_ids=case_ids,
+                       base_url_override=base_url_override,
+                       resume_run_id=resume_run_id, timeout_s=timeout_s,
+                       idempotency_key=idempotency_key, triggered_by=triggered_by,
+                       owner=trusted.owner, caller_surface=trusted.surface)
+
+
+@mcp.tool()
+def journey_project(run_id: str, owner: str = "", caller_surface: str = "unknown",
+                    bridge_context: str = "") -> dict[str, Any]:
+    """投影：run 证据 → verdicts.jsonl（唯一投影器，过 evidence_gate + mechanical_check）。"""
+    trusted = _journey_bridge("journey_project", bridge_context, {"run_id": run_id})
+    if isinstance(trusted, dict):
+        return trusted
+    from server.journey import tools as _jt
+    return _jt.project(run_id=run_id, owner=trusted.owner,
+                       caller_surface=trusted.surface)
+
+
+@mcp.tool()
+def journey_coverage(batch_id: str, run_id: str = "",
+                     owner: str = "", caller_surface: str = "unknown",
+                     bridge_context: str = "") -> dict[str, Any]:
+    """覆盖收口：落 coverage_ledger。gap 没有解释就不 done。"""
+    effective = {"batch_id": batch_id, "run_id": run_id}
+    trusted = _journey_bridge("journey_coverage", bridge_context, effective)
+    if isinstance(trusted, dict):
+        return trusted
+    from server.journey import tools as _jt
+    return _jt.coverage(batch_id=batch_id, run_id=run_id,
+                        owner=trusted.owner, caller_surface=trusted.surface)
+
+
+@mcp.tool()
+def journey_list_batches(owner: str = "", caller_surface: str = "unknown",
+                         bridge_context: str = "") -> dict[str, Any]:
+    """列批次（含九格产物账本与账本的完整定义）。薄壳列表页的数据来源。"""
+    trusted = _journey_bridge("journey_list_batches", bridge_context, {})
+    if isinstance(trusted, dict):
+        return trusted
+    from server.journey import tools as _jt
+    return _jt.list_batches(owner=trusted.owner,
+                            caller_surface=trusted.surface)
+
+
+@mcp.tool()
+def journey_get_batch(batch_id: str, owner: str = "",
+                      caller_surface: str = "unknown",
+                      bridge_context: str = "") -> dict[str, Any]:
+    """批次详情：元信息 + 九格账本 + 已产出的产物 + 各 run 的收据与结论 + 事件流。"""
+    trusted = _journey_bridge("journey_get_batch", bridge_context,
+                              {"batch_id": batch_id})
+    if isinstance(trusted, dict):
+        return trusted
+    from server.journey import tools as _jt
+    return _jt.get_batch(batch_id=batch_id, owner=trusted.owner,
+                         caller_surface=trusted.surface)
+
+
+@mcp.tool()
+def journey_open_trace(batch_id: str, run_id: str, trace_rel: str,
+                       owner: str = "", caller_surface: str = "unknown",
+                       bridge_context: str = "") -> dict[str, Any]:
+    """打开批次所属 UI run 的 trace；仅可信 workbench 调用可用。"""
+    effective = {"batch_id": batch_id, "run_id": run_id,
+                 "trace_rel": trace_rel}
+    trusted = _journey_bridge("journey_open_trace", bridge_context, effective)
+    if isinstance(trusted, dict):
+        return trusted
+    from server.journey import tools as _jt
+    return _jt.open_trace(batch_id=batch_id, run_id=run_id, trace_rel=trace_rel,
+                          owner=trusted.owner, caller_surface=trusted.surface)
+
+
 def start_gateway() -> str:
     """先把配置面拉起来，返回它的地址（起不来时返回空串，不拦 MCP 面）。
 

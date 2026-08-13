@@ -33,6 +33,12 @@ class DeepSolveRequestConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class TestRequestConfig(BaseModel):
+    """Test mode has no public free-form config; unknown keys are rejected."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class DeepQuestionRequestConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -109,6 +115,10 @@ def validate_deep_solve_request_config(
     return _validate_model(DeepSolveRequestConfig, raw_config, label="deep solve")
 
 
+def validate_test_request_config(raw_config: dict[str, Any] | None) -> TestRequestConfig:
+    return _validate_model(TestRequestConfig, raw_config, label="test")
+
+
 def validate_deep_question_request_config(
     raw_config: dict[str, Any] | None,
 ) -> DeepQuestionRequestConfig:
@@ -128,6 +138,7 @@ def build_request_schema(model_type: type[BaseModel]) -> dict[str, Any]:
 CAPABILITY_CONFIG_VALIDATORS: dict[str, Callable[[dict[str, Any] | None], Any]] = {
     "chat": validate_chat_request_config,
     "deep_solve": validate_deep_solve_request_config,
+    "test": validate_test_request_config,
     "deep_question": validate_deep_question_request_config,
     "deep_research": validate_research_request_config,
     "math_animator": validate_math_animator_request_config,
@@ -137,6 +148,7 @@ CAPABILITY_CONFIG_VALIDATORS: dict[str, Callable[[dict[str, Any] | None], Any]] 
 CAPABILITY_REQUEST_SCHEMAS: dict[str, dict[str, Any]] = {
     "chat": build_request_schema(ChatRequestConfig),
     "deep_solve": build_request_schema(DeepSolveRequestConfig),
+    "test": build_request_schema(TestRequestConfig),
     "deep_question": build_request_schema(DeepQuestionRequestConfig),
     "deep_research": build_request_schema(DeepResearchRequestConfig),
     "math_animator": build_request_schema(MathAnimatorRequestConfig),
@@ -166,6 +178,7 @@ __all__ = [
     "ChatRequestConfig",
     "DeepQuestionRequestConfig",
     "DeepSolveRequestConfig",
+    "TestRequestConfig",
     "VisualizeRequestConfig",
     "build_request_schema",
     "get_capability_request_schema",
@@ -173,5 +186,6 @@ __all__ = [
     "validate_chat_request_config",
     "validate_deep_question_request_config",
     "validate_deep_solve_request_config",
+    "validate_test_request_config",
     "validate_visualize_request_config",
 ]
