@@ -180,7 +180,8 @@ def warm_up(api_base: str = "", *, timeout_s: int = 30,
             headers["Authorization"] = f"Bearer {bearer}"
         req = urllib.request.Request(
             base + "/api/v1/settings/mcp", headers=headers, method="GET")
-        with urllib.request.urlopen(req, timeout=timeout_s) as resp:  # noqa: S310
+        opener = urllib.request.build_opener(_NoRedirect())
+        with opener.open(req, timeout=timeout_s) as resp:  # noqa: S310
             return 200 <= resp.status < 300
     except (urllib.error.URLError, OSError, ValueError):
         return False

@@ -175,19 +175,68 @@ def test_warm_up_sends_configured_auth(monkeypatch):
         def __exit__(self, *_args):
             return False
 
-    def fake_urlopen(request, timeout):
-        seen["authorization"] = request.get_header("Authorization")
-        seen["url"] = request.full_url
-        seen["timeout"] = timeout
-        return Response()
+    class Opener:
+        def open(self, request, timeout):
+            seen["authorization"] = request.get_header("Authorization")
+            seen["url"] = request.full_url
+            seen["timeout"] = timeout
+            return Response()
 
-    monkeypatch.setattr(oracle.urllib.request, "urlopen", fake_urlopen)
+    def fake_build_opener(*handlers):
+        assert any(isinstance(handler, oracle._NoRedirect) for handler in handlers)
+        return Opener()
+
+    monkeypatch.setattr(oracle.urllib.request, "build_opener", fake_build_opener)
     assert oracle.warm_up(config=_ConfigStub(), timeout_s=7)
     assert seen == {
         "authorization": "Bearer dt-token-for-test",
         "url": "http://deeptutor.test:8011/api/v1/settings/mcp",
         "timeout": 7,
     }
+
+
+def test_warm_up_bearer_does_not_follow_redirect_to_another_origin():
+    token = "sentinel-warmup-token"
+
+    class Sink(BaseHTTPRequestHandler):
+        hits = 0
+        authorization = ""
+
+        def do_GET(self):  # noqa: N802
+            type(self).hits += 1
+            type(self).authorization = self.headers.get("Authorization", "")
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    sink = _serve(Sink)
+
+    class Redirect(BaseHTTPRequestHandler):
+        authorization = ""
+
+        def do_GET(self):  # noqa: N802
+            type(self).authorization = self.headers.get("Authorization", "")
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{sink.server_port}/steal")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    source = _serve(Redirect)
+    try:
+        assert oracle.warm_up(
+            api_base=f"http://127.0.0.1:{source.server_port}",
+            config=_ConfigStub(token),
+        ) is False
+        assert Redirect.authorization == f"Bearer {token}"
+        assert Sink.hits == 0
+        assert Sink.authorization == ""
+    finally:
+        source.shutdown()
+        sink.shutdown()
 
 
 def test_direct_bearer_does_not_follow_redirect_to_another_origin():
