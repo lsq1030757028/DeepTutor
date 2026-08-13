@@ -54,13 +54,18 @@ pipeline {
         }
 
         stage('Required local-equivalent tests') {
+            agent {
+                docker {
+                    image 'python:3.11-slim'
+                    reuseNode true
+                }
+            }
             steps {
                 sh '''
                     set -eu
-                    python3 -m venv /tmp/dt-ci-venv
-                    /tmp/dt-ci-venv/bin/pip install -q -r extensions/test-partner/requirements-dev.txt
+                    python -m pip install -q -r extensions/test-partner/requirements-dev.txt
                     cd extensions/test-partner
-                    /tmp/dt-ci-venv/bin/python -m pytest -q --no-header
+                    python -m pytest -q --no-header
                 '''
             }
         }
