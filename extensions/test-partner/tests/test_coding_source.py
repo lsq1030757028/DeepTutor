@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,6 +26,27 @@ SPEC.loader.exec_module(VERIFY_CODING_SOURCE)
 )
 def test_canonical_github_remote_is_accepted(remote):
     assert VERIFY_CODING_SOURCE.repo_from_remote(remote) == "lsq1030757028/deeptutor"
+
+
+def test_remote_normalization_does_not_require_python_39_string_methods(monkeypatch):
+    class Python38Path(str):
+        def removeprefix(self, _prefix):
+            raise AssertionError("Python 3.9-only str.removeprefix must not be used")
+
+        def removesuffix(self, _suffix):
+            raise AssertionError("Python 3.9-only str.removesuffix must not be used")
+
+    parsed = SimpleNamespace(
+        scheme="https",
+        hostname="github.com",
+        path=Python38Path("/lsq1030757028/DeepTutor.git/"),
+    )
+    monkeypatch.setattr(VERIFY_CODING_SOURCE, "urlsplit", lambda _url: parsed)
+
+    assert (
+        VERIFY_CODING_SOURCE.repo_from_remote("https://github.com/placeholder")
+        == "lsq1030757028/deeptutor"
+    )
 
 
 @pytest.mark.parametrize(

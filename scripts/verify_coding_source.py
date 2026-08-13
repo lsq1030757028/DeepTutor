@@ -37,9 +37,13 @@ def repo_from_remote(url: str) -> str:
         ):
             raise SystemExit("origin must use https://github.com")
         path = parsed.path
-    path = (
-        path.removeprefix("/").removesuffix("/").removesuffix(".git").lower()
-    )
+    if path.startswith("/"):
+        path = path[1:]
+    if path.endswith("/"):
+        path = path[:-1]
+    if path.endswith(".git"):
+        path = path[:-4]
+    path = path.lower()
     if path != CANONICAL:
         raise SystemExit(f"origin is not {CANONICAL}")
     return path
