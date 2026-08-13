@@ -15,6 +15,9 @@
 3. 本机合入前跑 `python -m pytest -q extensions/test-partner`。CODING 默认只跑扩展层 pytest（0008 四层里的第 1 层），降低云上时间。
 4. 部署默认关。发 3785 须用户另批。
 5. Deploy Key 一仓一把，只读，不复用萌伴 Web。
+6. 关联 CODING 原生代码源后，PUSH 使用平台内置的 `GIT_LOCAL_BRANCH` 与
+   `GIT_COMMIT` 绑定安全分支和精确 SHA；`GITHUB_REF` / `GITHUB_COMMIT`
+   仅保留给 MANUAL/API 回退。MR、CRON、tag 与未知触发类型失败关闭，自动合并和部署仍关闭。
 
 ## 证伪
 
