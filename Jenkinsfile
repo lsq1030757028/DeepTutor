@@ -98,9 +98,9 @@ pipeline {
                     docker run --rm \
                         -v "$PWD:/workspace" \
                         -w /workspace \
-                        -e PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
-                        mcr.microsoft.com/playwright/python@sha256:3de745b23fc4b33fccbcb3f592ee52dd5c80ce79f19f839c825ce23364e403c1 \
-                        sh -c 'owner="$(stat -c "%u:%g" /workspace)"; trap "chown -R $owner /workspace" EXIT; git --version; python -m pip install -q -r extensions/test-partner/requirements-dev.txt; cd extensions/test-partner; python -m pytest -q --no-header tests/test_journey_exec.py::test_ui_track_real_browser --junitxml=/workspace/ci-artifacts/test-partner-browser.xml'
+                        -e PLAYWRIGHT_BROWSERS_PATH=/tmp/ms-playwright \
+                        python:3.11-bookworm \
+                        sh -c 'owner="$(stat -c "%u:%g" /workspace)"; trap "chown -R $owner /workspace" EXIT; printf "Acquire::Retries \"5\";\nAcquire::https::Timeout \"30\";\n" > /etc/apt/apt.conf.d/80-ci-retries; sed -i "s|http://deb.debian.org|https://deb.debian.org|g" /etc/apt/sources.list.d/debian.sources; python -m pip install -q -r extensions/test-partner/requirements-dev.txt; n=0; until python -m playwright install --with-deps chromium; do n=$((n+1)); test "$n" -lt 3; done; cd extensions/test-partner; python -m pytest -q --no-header tests/test_journey_exec.py::test_ui_track_real_browser --junitxml=/workspace/ci-artifacts/test-partner-browser.xml'
                 '''
             }
         }
