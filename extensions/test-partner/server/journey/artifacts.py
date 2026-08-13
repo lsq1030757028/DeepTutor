@@ -296,8 +296,8 @@ def _read_json(path: str) -> dict[str, Any]:
     return data
 
 
-def _write_json(path: str, data: dict[str, Any]) -> None:
-    """Atomically replace one JSON file without sharing a temporary pathname.
+def atomic_write_text(path: str, content: str) -> None:
+    """Publish one text artifact without exposing a partial destination file.
 
     Every writer gets a private temporary file in the destination directory.
     A fixed ``batch.json.tmp`` lets two otherwise valid runs overwrite or move
@@ -309,7 +309,7 @@ def _write_json(path: str, data: dict[str, Any]) -> None:
         prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, indent=1)
+            fh.write(content)
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, path)
@@ -318,6 +318,26 @@ def _write_json(path: str, data: dict[str, Any]) -> None:
             os.unlink(tmp)
         except FileNotFoundError:
             pass
+
+
+def atomic_write_json(path: str, data: Any, *, indent: int = 1) -> None:
+    """Serialize and atomically publish one JSON value."""
+    atomic_write_text(
+        path,
+        json.dumps(data, ensure_ascii=False, indent=indent),
+    )
+
+
+def remove_if_exists(path: str) -> None:
+    """Atomically remove one obsolete artifact directory entry, if present."""
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
+def _write_json(path: str, data: dict[str, Any]) -> None:
+    atomic_write_json(path, data)
 
 
 def _assert_batch_payload_safe(data: dict[str, Any], label: str) -> None:
@@ -478,6 +498,15 @@ def batch_mutation_lock(batch_id: str, *, owner: str | None = None,
     """Serialize state-changing tools for one owner-bound batch."""
     target = batch_dir(batch_id, owner=owner, root=root)
     with _file_lock(os.path.join(target, ".mutation.lock")):
+        yield
+
+
+@contextmanager
+def run_projection_lock(run_id: str, *, owner: str | None = None,
+                        root: str | None = None) -> Iterator[None]:
+    """Serialize projection and mechanical publication for one completed run."""
+    target = run_dir(run_id, owner=owner, root=root)
+    with _file_lock(os.path.join(target, ".project.lock")):
         yield
 
 

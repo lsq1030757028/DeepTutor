@@ -3,6 +3,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
 import os
+import time
 
 import pytest
 
@@ -17,6 +18,22 @@ def _append_run_process(root, batch_id, run_id, owner, start_event, result_queue
         result_queue.put((run_id, "ok"))
     except Exception as exc:  # pragma: no cover - parent reports child detail
         result_queue.put((run_id, f"{type(exc).__name__}: {exc}"))
+
+
+def _hold_projection_process(root, run_id, owner, start_event, counter_lock,
+                             active, peak, result_queue):
+    start_event.wait(10)
+    try:
+        with artifacts.run_projection_lock(run_id, owner=owner, root=root):
+            with counter_lock:
+                active.value += 1
+                peak.value = max(peak.value, active.value)
+            time.sleep(0.12)
+            with counter_lock:
+                active.value -= 1
+        result_queue.put("ok")
+    except Exception as exc:  # pragma: no cover - parent reports child detail
+        result_queue.put(f"{type(exc).__name__}: {exc}")
 
 
 @pytest.fixture()
@@ -80,6 +97,34 @@ def test_concurrent_process_run_registration_keeps_every_run(tmp_path):
     loaded = artifacts.load_batch(meta["batch_id"], owner=owner, root=root)
     assert set(loaded["run_ids"]) == set(run_ids)
     assert len(loaded["run_ids"]) == len(run_ids)
+
+
+def test_run_projection_lock_serializes_spawned_processes(tmp_path):
+    root = str(tmp_path)
+    owner = "projection-owner"
+    run_id = "r-20260813-projectlock"
+    artifacts.run_dir(run_id, create=True, owner=owner, root=root)
+    ctx = multiprocessing.get_context("spawn")
+    start_event = ctx.Event()
+    counter_lock = ctx.Lock()
+    active = ctx.Value("i", 0)
+    peak = ctx.Value("i", 0)
+    result_queue = ctx.Queue()
+    workers = [ctx.Process(
+        target=_hold_projection_process,
+        args=(root, run_id, owner, start_event, counter_lock,
+              active, peak, result_queue),
+    ) for _ in range(4)]
+    for worker in workers:
+        worker.start()
+    start_event.set()
+    results = [result_queue.get(timeout=20) for _ in workers]
+    for worker in workers:
+        worker.join(timeout=20)
+        assert worker.exitcode == 0
+
+    assert results == ["ok"] * len(workers)
+    assert peak.value == 1
 
 
 def test_batch_id_path_escape_blocked(store):

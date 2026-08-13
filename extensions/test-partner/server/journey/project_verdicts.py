@@ -23,6 +23,12 @@ def project(run_id: str) -> dict[str, Any]:
     run_dir = artifacts.run_dir(run_id)
     if not os.path.isdir(run_dir):
         return {"ok": False, "error": f"run 不存在:{run_id}"}
+    with artifacts.run_projection_lock(run_id):
+        return _project_locked(run_id, run_dir)
+
+
+def _project_locked(run_id: str, run_dir: str) -> dict[str, Any]:
+    """Project one run while its complete publish sequence is serialized."""
     receipt_path = os.path.join(run_dir, "receipt.json")
     try:
         with open(receipt_path, encoding="utf-8") as fh:
@@ -98,6 +104,14 @@ def project(run_id: str) -> dict[str, Any]:
 
 
 def read_verdicts(run_id: str) -> list[dict[str, Any]]:
+    """Read the canonical verdict view after any same-run publish completes."""
+    if not os.path.isdir(artifacts.run_dir(run_id)):
+        return []
+    with artifacts.run_projection_lock(run_id):
+        return _read_verdicts_locked(run_id)
+
+
+def _read_verdicts_locked(run_id: str) -> list[dict[str, Any]]:
     path = os.path.join(artifacts.run_dir(run_id), "verdicts.jsonl")
     if not os.path.isfile(path):
         return []

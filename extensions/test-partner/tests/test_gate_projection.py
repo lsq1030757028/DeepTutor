@@ -208,6 +208,34 @@ def test_write_projection_deterministic(tmp_path):
     assert os.path.exists(os.path.join(root, "verdicts.rejected.json"))
 
 
+def test_clean_reprojection_removes_stale_rejected_diagnostics(tmp_path):
+    root = make_fixture(tmp_path)
+    first = vp.project_and_write(root)
+    rejected_path = os.path.join(root, "verdicts.rejected.json")
+    assert first["rejected"] and os.path.exists(rejected_path)
+
+    bundle_paths = [
+        os.path.join(dirpath, vp.BUNDLE_NAME)
+        for dirpath, _dirnames, filenames in os.walk(root)
+        if vp.BUNDLE_NAME in filenames
+    ]
+    bundle_path = os.path.join(root, "api", vp.BUNDLE_NAME)
+    for other_bundle_path in bundle_paths:
+        if other_bundle_path != bundle_path:
+            os.unlink(other_bundle_path)
+    bundle = B([{
+        "id": "T1-clean", "claim": "接口返回新字段", "verdict": "pass",
+        "strength": "hard-anchor", "evidence": ["e/a.json"],
+        "evidence_types": ["api"],
+    }])
+    with open(bundle_path, "w", encoding="utf-8") as fh:
+        json.dump(bundle, fh, ensure_ascii=False)
+
+    clean = vp.project_and_write(root)
+    assert clean["code"] == 0
+    assert not os.path.exists(rejected_path)
+
+
 def test_vocab_single_source():
     # ⑯⑰ 等价：词表单点定义，mechanical_check 只 import 不复制
     from server.journey.gates import mechanical_check as mc

@@ -26,6 +26,8 @@ import os
 import time
 from typing import Any
 
+from server.journey import artifacts
+
 # ── 词表（单点定义）────────────────────────────────────────────────────────
 OBSERVED = ["api", "http", "db", "dom", "log", "screenshot", "live"]
 LOCATOR = ["source", "spec", "file", "code"]
@@ -248,13 +250,20 @@ def project_and_write(run_dir: str) -> dict[str, Any]:
         r["code"] = 4
         return r
     out_file = os.path.join(run_dir, "verdicts.jsonl")
-    with open(out_file, "w", encoding="utf-8") as fh:
-        for l in r["lines"]:
-            fh.write(json.dumps(l, ensure_ascii=False) + "\n")
+    artifacts.atomic_write_text(
+        out_file,
+        "".join(json.dumps(line, ensure_ascii=False) + "\n"
+                for line in r["lines"]),
+    )
+    rejected_file = os.path.join(run_dir, "verdicts.rejected.json")
     if r["rejected"]:
-        with open(os.path.join(run_dir, "verdicts.rejected.json"), "w",
-                  encoding="utf-8") as fh:
-            json.dump(r["rejected"], fh, ensure_ascii=False, indent=2)
+        artifacts.atomic_write_json(
+            rejected_file,
+            r["rejected"],
+            indent=2,
+        )
+    else:
+        artifacts.remove_if_exists(rejected_file)
     r["code"] = 2 if r["errs"] else (3 if r["rejected"] else 0)
     r["out_file"] = out_file
     return r

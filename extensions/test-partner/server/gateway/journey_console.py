@@ -28,6 +28,7 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from server.journey import artifacts
 from server.journey import process_registry as preg
+from server.journey import project_verdicts
 from server.journey.pw_harness import case_slug
 
 
@@ -84,26 +85,21 @@ def _run_result(run_id: str) -> dict[str, Any]:
         with open(receipt_path, encoding="utf-8") as fh:
             receipt = json.load(fh)
     verdicts = []
-    vpath = os.path.join(rd, "verdicts.jsonl")
-    if os.path.isfile(vpath):
-        with open(vpath, encoding="utf-8") as fh:
-            for line in fh:
-                if line.strip():
-                    v = json.loads(line)
-                    slug = case_slug(v["id"].split("/")[-1] if "/" in v["id"] else v["id"])
-                    # trace 存在性：run 目录下该 case 的 trace.zip
-                    trace_rel = None
-                    for d in os.listdir(rd):
-                        cand = os.path.join(rd, d, "trace.zip")
-                        if os.path.isfile(cand) and d.endswith(case_slug(v["id"].split("/")[-1])):
-                            trace_rel = os.path.join(d, "trace.zip")
-                            break
-                    verdicts.append({
-                        "id": v["id"], "verdict": v["verdict"],
-                        "note": v.get("note", ""),
-                        "evidence": [e.get("ref") for e in v.get("evidence", [])],
-                        "trace_rel": trace_rel,
-                    })
+    for v in project_verdicts.read_verdicts(run_id):
+        slug = case_slug(v["id"].split("/")[-1] if "/" in v["id"] else v["id"])
+        # trace 存在性：run 目录下该 case 的 trace.zip
+        trace_rel = None
+        for d in os.listdir(rd):
+            cand = os.path.join(rd, d, "trace.zip")
+            if os.path.isfile(cand) and d.endswith(case_slug(v["id"].split("/")[-1])):
+                trace_rel = os.path.join(d, "trace.zip")
+                break
+        verdicts.append({
+            "id": v["id"], "verdict": v["verdict"],
+            "note": v.get("note", ""),
+            "evidence": [e.get("ref") for e in v.get("evidence", [])],
+            "trace_rel": trace_rel,
+        })
     return {"run_id": run_id, "receipt": receipt, "verdicts": verdicts}
 
 

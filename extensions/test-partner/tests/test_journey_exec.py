@@ -6,6 +6,8 @@ UI 轨（真 chromium）单独一条集成测试，环境缺 playwright 时跳�
 import json
 import os
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -646,6 +648,98 @@ def test_projection_is_deterministic_rewrite_not_append(store, target):
     p2 = project_verdicts.project(r["run_id"])
     assert p1["ok"] and p2["ok"]
     assert len(project_verdicts.read_verdicts(r["run_id"])) == 2
+
+
+def test_project_serializes_same_run_and_atomically_publishes_ledgers(
+        store, target, monkeypatch):
+    """Concurrent project calls serialize and publish each ledger atomically."""
+    _bid, run = executed_run(store, target)
+    real_project_and_write = project_verdicts.verdict_projection.project_and_write
+    real_replace = os.replace
+    counter_lock = threading.Lock()
+    active = 0
+    max_active = 0
+    published: list[str] = []
+
+    def slow_project_and_write(run_dir):
+        nonlocal active, max_active
+        with counter_lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            time.sleep(0.08)
+            return real_project_and_write(run_dir)
+        finally:
+            with counter_lock:
+                active -= 1
+
+    def record_replace(src, dst):
+        published.append(os.path.basename(dst))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(
+        project_verdicts.verdict_projection,
+        "project_and_write",
+        slow_project_and_write,
+    )
+    monkeypatch.setattr(os, "replace", record_replace)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(
+            lambda _index: project_verdicts.project(run["run_id"]), range(4)
+        ))
+
+    assert all(result["ok"] for result in results), results
+    assert max_active == 1
+    assert "verdicts.jsonl" in published
+    assert "f9_mechanical.json" in published
+    assert len(project_verdicts.read_verdicts(run["run_id"])) == 2
+    with open(os.path.join(run["run_dir"], "f9_mechanical.json"),
+              encoding="utf-8") as fh:
+        assert json.load(fh)["verdict"] == "PASS"
+    assert not any(name.endswith(".tmp") for name in os.listdir(run["run_dir"]))
+
+
+def test_read_verdicts_waits_for_same_run_projection(store, target, monkeypatch):
+    """The canonical reader cannot observe a projection midway through publish."""
+    _bid, run = executed_run(store, target)
+    real_project_and_write = project_verdicts.verdict_projection.project_and_write
+    projection_started = threading.Event()
+    allow_projection = threading.Event()
+    reader_started = threading.Event()
+
+    def blocking_project_and_write(run_dir):
+        projection_started.set()
+        assert allow_projection.wait(timeout=5)
+        return real_project_and_write(run_dir)
+
+    def read_after_attempt():
+        reader_started.set()
+        return project_verdicts.read_verdicts(run["run_id"])
+
+    monkeypatch.setattr(
+        project_verdicts.verdict_projection,
+        "project_and_write",
+        blocking_project_and_write,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        projection = pool.submit(project_verdicts.project, run["run_id"])
+        assert projection_started.wait(timeout=5)
+        reader = pool.submit(read_after_attempt)
+        assert reader_started.wait(timeout=5)
+        assert not reader.done()
+        allow_projection.set()
+        assert projection.result(timeout=5)["ok"]
+        assert len(reader.result(timeout=5)) == 2
+
+
+def test_read_verdicts_does_not_create_a_missing_run(store):
+    missing_run_id = "r-20260813-missing1"
+    missing_run_dir = artifacts.run_dir(missing_run_id)
+
+    assert project_verdicts.read_verdicts(missing_run_id) == []
+    assert not os.path.exists(missing_run_dir)
 
 
 # ── coverage ───────────────────────────────────────────────────────────────

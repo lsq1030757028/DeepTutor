@@ -27,6 +27,7 @@ import re
 import time
 from typing import Any
 
+from server.journey import artifacts
 from server.journey.gates.verdict_projection import BUNDLE_NAME, OBSERVED  # noqa: F401  词表单点
 
 UNIVERSAL = re.compile(r"(全部|所有|任何|一律|必然|全量|每一?台|无一例外)")
@@ -183,7 +184,6 @@ def check_run(run_dir: str) -> dict[str, Any]:
 def check_and_write(run_dir: str, out_path: str | None = None) -> dict[str, Any]:
     res = check_run(run_dir)
     path = out_path or os.path.join(run_dir, "f9_mechanical.json")
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(res, fh, ensure_ascii=False, indent=1)
+    artifacts.atomic_write_json(path, res, indent=1)
     res["out_path"] = path
     return res
