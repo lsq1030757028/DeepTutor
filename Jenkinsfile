@@ -55,16 +55,14 @@ pipeline {
 
         stage('Required local-equivalent tests') {
             steps {
-                script {
-                    docker.image('python:3.11-slim').inside {
-                        sh '''
-                            set -eu
-                            python -m pip install -q -r extensions/test-partner/requirements-dev.txt
-                            cd extensions/test-partner
-                            python -m pytest -q --no-header
-                        '''
-                    }
-                }
+                sh '''
+                    set -eu
+                    docker run --rm \
+                        -v "$PWD:/workspace" \
+                        -w /workspace \
+                        python:3.11-slim \
+                        sh -c 'python -m pip install -q -r extensions/test-partner/requirements-dev.txt && cd extensions/test-partner && python -m pytest -q --no-header'
+                '''
             }
         }
     }
