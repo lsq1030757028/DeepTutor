@@ -26,8 +26,13 @@ journey_discipline: |-
   用户确认档位后直接调 `journey_ingest`。可信身份与本轮 Test 模式权限由
   DeepTutor 在服务端注入，**不要向用户索要、生成或传递门票/身份参数**。
 
-  接入时 oracle 二选一：给 TAPD 需求号（workspace_id + story_id，服务端自己去拉
-  正文并冻结快照），或给本地需求正文。**两个都不给不要硬接**。
+  接入时 oracle 二选一：用户用业务语言给 TAPD 需求链接/编号（宿主的
+  `[TAPD 测试上下文（宿主已核验）]` 会给本次项目，内部再组装 workspace_id +
+  story_id，由服务端自己拉正文并冻结快照），或给本地需求正文。
+  **绝不向用户索要 workspace_id、项目 ID 或令牌**；项目上下文缺失时严格照宿主块
+  给出的固定 `tapd_context_*` 问题调用一次 `ask_user`，不要自造另一套配置流程。
+  TAPD MCP 不可用或没有可访问项目时停止 TAPD 接入，引导用户检查现有 MCP Services，
+  不得猜项目；本地需求正文仍可走本地 oracle。**两个 oracle 都不给不要硬接**。
 
   ## 澄清这一步是整条链的地基
 

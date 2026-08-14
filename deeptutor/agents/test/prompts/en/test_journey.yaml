@@ -29,9 +29,16 @@ journey_discipline: |-
   injects trusted identity and Test-mode authority on the server side. **Never
   ask the user for, generate, or pass ticket/identity parameters.**
 
-  On intake the oracle is one of two: a TAPD story (workspace_id + story_id — the
-  server fetches the body itself and freezes a snapshot), or local requirement text.
-  **If you have neither, do not force the intake.**
+  On intake the oracle is one of two: a TAPD story link/number stated in business
+  language (the host's `[TAPD Test Context (host verified)]` supplies the project;
+  compose workspace_id + story_id internally so the server can fetch and freeze the
+  body), or local requirement text. **Never ask the user for a workspace id, project
+  id, or token.** When project context is missing, call `ask_user` once with the exact
+  `tapd_context_*` question ids provided by the host block; do not invent another
+  configuration flow. If TAPD MCP is unavailable or returns no accessible projects,
+  stop TAPD intake and direct the user to the existing MCP Services page; never guess
+  a project. Local requirement text remains a valid local oracle. **If you have
+  neither oracle, do not force the intake.**
 
   ## Clarify is the foundation of the whole chain
 

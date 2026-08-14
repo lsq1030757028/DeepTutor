@@ -1,4 +1,4 @@
-"""[fork] 「测试」capability 的 pipeline —— 只为把旅程纪律真送进 system prompt。
+"""[fork] 「测试」capability 的 pipeline —— 旅程纪律与宿主级 TAPD 上下文。
 
 ## 为什么需要这个文件（BB-508）
 
@@ -19,7 +19,9 @@
 最后一行硬余量；0025 §2 已为同类问题拒过一次。所以走子类：新增文件免登记，
 `AgenticChatPipeline` 的一切（`ask_user` 的 waiter、MCP 工具组装、重放语义）照常继承。
 
-**这里刻意只 override 一个钩子**，不复制父类任何逻辑。自建流水线才是复刻 BB-502。
+这里继续只复用父 pipeline 的钩子，不复制 agent loop：系统块注入旅程纪律，pre-loop
+用已有 MCP 只读发现项目，ask_user resume 只保存用户真实回答的非敏感上下文。
+自建流水线才是复刻 BB-502。
 
 ## 判据在哪
 
@@ -31,10 +33,26 @@
 
 from __future__ import annotations
 
+import re
+from typing import Any
+
 from deeptutor.agents.chat.agentic_pipeline import AgenticChatPipeline
 from deeptutor.capabilities.protocol import PromptBlock
 from deeptutor.core.context import UnifiedContext
+from deeptutor.core.stream_bus import StreamBus
 from deeptutor.services.prompt.manager import PromptManager
+from deeptutor.services.tapd_context import (
+    TapdProfile,
+    TapdProject,
+    answer_map,
+    load_profile,
+    parse_projects_payload,
+    project_from_answer,
+    render_context_briefing,
+    resolve_context,
+    save_profile,
+    wants_default,
+)
 
 #: prompt 模块名。必须同时出现在 `PromptManager.MODULES` 里，
 #: 否则 `load_prompts` 查不到本模块而**静默回落**——那是登记表里唯一
@@ -67,7 +85,10 @@ def journey_system_block(language: str = "zh") -> str:
 
 
 class TestJourneyPipeline(AgenticChatPipeline):
-    """主聊 pipeline + 一段旅程纪律。除该块外与 chat 逐字节相同。"""
+    """主聊 pipeline + 旅程纪律 + TAPD 的宿主级轻上下文。"""
+
+    _tapd_projects: tuple[TapdProject, ...] = ()
+    _tapd_selected_project: TapdProject | None = None
 
     def _capability_system_blocks(self, context: UnifiedContext) -> list[PromptBlock]:
         # 先拿父类的（用户另外开着的 loop capability 照常生效），再追加自己的。
@@ -77,3 +98,241 @@ class TestJourneyPipeline(AgenticChatPipeline):
         if content:
             blocks.append(PromptBlock(JOURNEY_BLOCK_NAME, content))
         return blocks
+
+    async def _capability_pre_loop_briefings(
+        self,
+        context: UnifiedContext,
+        stream: StreamBus,
+    ) -> str:
+        """Resolve TAPD project scope before the first Test-mode model call.
+
+        The credential stays inside the user's MCP connection.  This adapter
+        invokes only the read-only ``tapd_projects`` logical tool and combines
+        its live scope with non-secret owner/session preferences.
+        """
+        inherited = await super()._capability_pre_loop_briefings(context, stream)
+        tapd = await self._tapd_context_briefing(context)
+        return "\n\n".join(part for part in (inherited.strip(), tapd.strip()) if part)
+
+    async def _tapd_context_briefing(self, context: UnifiedContext) -> str:
+        from deeptutor.multi_user.paths import current_owner_id
+
+        oracle_mode = self._test_oracle_mode(context)
+        if oracle_mode == "local":
+            context.metadata["tapd_context"] = {"status": "not_required", "missing": []}
+            return (
+                "[本地测试需求（宿主已识别）]\n用户已提供本地需求正文或附件。直接使用本地 oracle，"
+                "不要询问 TAPD 项目、身份、角色、workspace_id 或令牌。"
+                if context.language.lower().startswith("zh")
+                else "[Local test requirement (host detected)]\nThe user supplied local requirement "
+                "text or an attachment. Use the local oracle directly; do not ask for a TAPD project, "
+                "identity, role, workspace id, or token."
+            )
+
+        owner_id = current_owner_id()
+        profile = load_profile(owner_id)
+        session_project = await self._load_session_project(context.session_id)
+        tool_name = self._logical_mcp_tool_name("tapd_projects")
+        if not tool_name:
+            resolution = resolve_context(
+                (),
+                profile=profile,
+                discovery_error="TAPD MCP is not connected or does not expose tapd_projects",
+            )
+        else:
+            try:
+                result = await self.tool_lookup.execute(tool_name, user="")
+                projects, error = parse_projects_payload(result)
+            except Exception as exc:  # noqa: BLE001 - fail closed into the user-facing branch
+                projects, error = [], f"TAPD project discovery failed: {type(exc).__name__}"
+            resolution = resolve_context(
+                projects,
+                profile=profile,
+                user_message=context.user_message,
+                session_project=session_project,
+                discovery_error=error,
+            )
+
+        self._tapd_projects = resolution.projects
+        self._tapd_selected_project = resolution.selected_project
+        context.metadata["tapd_context"] = {
+            "status": resolution.status,
+            "project_name": (
+                resolution.selected_project.name if resolution.selected_project else ""
+            ),
+            "project_source": resolution.project_source,
+            "missing": list(resolution.missing),
+        }
+        if resolution.project_source == "request" and resolution.selected_project is not None:
+            await self._save_session_project(context.session_id, resolution.selected_project)
+        return render_context_briefing(
+            resolution,
+            language=context.language,
+            tapd_required=oracle_mode == "tapd",
+        )
+
+    async def _await_user_reply_and_resolve(
+        self,
+        *,
+        context: UnifiedContext,
+        stream: StreamBus,
+        dispatch: Any,
+    ) -> bool:
+        """Reuse ask_user, capturing only TAPD context answers after resume."""
+        waiter = context.metadata.get("wait_for_user_reply")
+        captured: dict[str, Any] = {}
+
+        if callable(waiter):
+
+            async def _capturing_waiter() -> Any:
+                raw = await waiter()
+                captured["raw"] = raw
+                return raw
+
+            context.metadata["wait_for_user_reply"] = _capturing_waiter
+        try:
+            resumed = await super()._await_user_reply_and_resolve(
+                context=context,
+                stream=stream,
+                dispatch=dispatch,
+            )
+        finally:
+            if callable(waiter):
+                context.metadata["wait_for_user_reply"] = waiter
+
+        if not resumed or "raw" not in captured:
+            return resumed
+        selected = await self._persist_tapd_answers(context, captured["raw"])
+        if selected is not None:
+            for tool_message in dispatch.tool_messages:
+                if tool_message.get("tool_call_id") == dispatch.pause_tool_call_id:
+                    tool_message["content"] = (
+                        f"{tool_message.get('content', '')}\n\n"
+                        "[Host-resolved TAPD context] "
+                        f"project={selected.name}; internal workspace_id={selected.id}. "
+                        "Use the id only in tool arguments; do not show or ask it of the user."
+                    )
+                    break
+        return resumed
+
+    async def _persist_tapd_answers(
+        self, context: UnifiedContext, raw_reply: Any
+    ) -> TapdProject | None:
+        answers = answer_map(raw_reply)
+        relevant = {key: value for key, value in answers.items() if key.startswith("tapd_context_")}
+        if not relevant:
+            return None
+
+        selected = project_from_answer(
+            relevant.get("tapd_context_project", ""), self._tapd_projects
+        )
+        if selected is None:
+            selected = self._tapd_selected_project
+        if selected is not None and "tapd_context_project" in relevant:
+            await self._save_session_project(context.session_id, selected)
+            self._tapd_selected_project = selected
+
+        from deeptutor.multi_user.paths import current_owner_id
+
+        owner_id = current_owner_id()
+        previous = load_profile(owner_id)
+        identity = relevant.get("tapd_context_identity", "").strip() or previous.tapd_identity
+        role = relevant.get("tapd_context_role", "").strip() or previous.role
+        default_project = previous.default_project
+        remember = relevant.get("tapd_context_remember_project", "")
+        if selected is not None and wants_default(remember):
+            default_project = selected
+        if (
+            identity != previous.tapd_identity
+            or role != previous.role
+            or default_project != previous.default_project
+        ):
+            save_profile(
+                owner_id,
+                TapdProfile(
+                    tapd_identity=identity,
+                    role=role,
+                    default_project=default_project,
+                ),
+            )
+        return selected
+
+    def _logical_mcp_tool_name(self, logical_name: str) -> str:
+        """Find an MCP logical name without assuming the user's server name."""
+        matches: list[str] = []
+        for tool in getattr(self, "_deferred_pool", ()):
+            definition = tool.get_definition()
+            original = str(getattr(tool, "original_name", "") or "")
+            name = str(definition.name or "")
+            if (
+                original == logical_name
+                or name == logical_name
+                or name.endswith(f"_{logical_name}")
+            ):
+                matches.append(name)
+        unique = sorted(set(matches))
+        # Two configured servers exposing the same logical capability are not
+        # interchangeable: picking one by sort order could use the wrong token.
+        return unique[0] if len(unique) == 1 else ""
+
+    @staticmethod
+    def _test_oracle_mode(context: UnifiedContext) -> str:
+        """Classify only explicit source evidence; uncertainty must not force TAPD."""
+        declared = str(context.metadata.get("test_oracle_source") or "").strip().lower()
+        if declared in {"tapd", "local"}:
+            return declared
+        text = str(context.user_message or "")
+        folded = text.casefold()
+        local_markers = (
+            "需求正文",
+            "验收标准",
+            "以下需求",
+            "本地需求",
+            "requirement text",
+            "acceptance criteria",
+            "use this text",
+            "local requirement",
+        )
+        if context.attachments or any(marker in folded for marker in local_markers):
+            return "local"
+        if (
+            "tapd" in folded
+            or "workspace_id" in folded
+            or "story_id" in folded
+            or re.search(r"(?<!\d)#?\d{5,}(?!\d)", folded)
+        ):
+            return "tapd"
+        return "unknown"
+
+    @staticmethod
+    async def _load_session_project(session_id: str) -> TapdProject | None:
+        if not session_id:
+            return None
+        try:
+            from deeptutor.services.session import get_session_store
+
+            session = await get_session_store().get_session(session_id)
+        except Exception:  # noqa: BLE001 - absence means no session override
+            return None
+        preferences = session.get("preferences") if isinstance(session, dict) else None
+        tapd = preferences.get("tapd_context") if isinstance(preferences, dict) else None
+        raw = tapd.get("project") if isinstance(tapd, dict) else None
+        if not isinstance(raw, dict):
+            return None
+        project_id = str(raw.get("id") or "").strip()
+        name = str(raw.get("name") or "").strip()
+        return TapdProject(id=project_id, name=name) if project_id and name else None
+
+    @staticmethod
+    async def _save_session_project(session_id: str, project: TapdProject) -> None:
+        if not session_id:
+            return
+        try:
+            from deeptutor.services.session import get_session_store
+
+            await get_session_store().update_session_preferences(
+                session_id,
+                {"tapd_context": {"project": project.to_dict()}},
+            )
+        except Exception:  # noqa: BLE001 - one turn may continue without sticky override
+            return
