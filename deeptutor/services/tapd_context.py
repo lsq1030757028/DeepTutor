@@ -29,6 +29,8 @@ class TapdSessionContext:
     project: TapdProject | None = None
     tapd_identity: str = ""
     business_role: str = ""
+    session_context: str = ""
+    session_context_expires_at: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +40,8 @@ class TapdContextResolution:
     project_source: str = ""
     tapd_identity: str = ""
     role: str = ""
+    session_context: str = ""
+    session_context_expires_at: str = ""
     project_options: tuple[str, ...] = ()
     missing: tuple[str, ...] = ()
     error_code: str = ""
@@ -60,10 +64,131 @@ def parse_public_payload(raw: Any) -> dict[str, Any] | None:
 
 
 def accessible_project_names(status: Mapping[str, Any] | None) -> tuple[str, ...]:
-    values = status.get("accessible_project_names") if isinstance(status, Mapping) else None
-    if not isinstance(values, list):
+    if not validate_context_status_payload(status):
         return ()
-    return tuple(_clean_text(value) for value in values if _clean_text(value))
+    values = status.get("accessible_project_names") if isinstance(status, Mapping) else None
+    return tuple(values) if isinstance(values, list) else ()
+
+
+def validate_context_status_payload(payload: Mapping[str, Any] | None) -> bool:
+    """Accept only the shared status envelope; contradictions fail closed."""
+    if not isinstance(payload, Mapping):
+        return False
+    status = payload.get("status")
+    if not isinstance(status, str) or status not in {
+        "ok",
+        "needs_input",
+        "blocked",
+        "failed",
+    }:
+        return False
+    if not _valid_read_markers(payload) or not _valid_error(payload.get("error"), status):
+        return False
+    profile_state = payload.get("profile_state")
+    names = payload.get("accessible_project_names")
+    if profile_state is not None and not isinstance(profile_state, str):
+        return False
+    if names is not None and not _string_list(names):
+        return False
+    if isinstance(names, list) and len(names) != len(set(names)):
+        return False
+    if status in {"ok", "needs_input"} and (
+        not isinstance(profile_state, str) or not isinstance(names, list)
+    ):
+        return False
+    profile = payload.get("profile")
+    if profile is None:
+        return status != "ok"
+    if not isinstance(profile, Mapping):
+        return False
+    for key in ("default_project_name", "tapd_identity", "business_role"):
+        if key in profile and not isinstance(profile[key], str):
+            return False
+    if "verified_at" in profile and not isinstance(profile["verified_at"], str):
+        return False
+    if status == "ok":
+        required = tuple(
+            profile.get(key)
+            for key in (
+                "default_project_name",
+                "tapd_identity",
+                "business_role",
+            )
+        )
+        if not all(isinstance(value, str) and value.strip() for value in required):
+            return False
+        if profile["default_project_name"] not in names:
+            return False
+    return True
+
+
+def validate_context_resolve_payload(
+    payload: Mapping[str, Any] | None,
+    *,
+    accessible_names: Iterable[str] = (),
+) -> bool:
+    """Validate resolution types and its agreement with the visible workspace set."""
+    if not isinstance(payload, Mapping):
+        return False
+    status = payload.get("status")
+    if not isinstance(status, str) or status not in {
+        "ok",
+        "needs_confirmation",
+        "needs_input",
+        "blocked",
+        "failed",
+    }:
+        return False
+    if not _valid_read_markers(payload) or not _valid_error(payload.get("error"), status):
+        return False
+    options = payload.get("project_options")
+    if options is not None and not _string_list(options):
+        return False
+    if status != "ok":
+        return payload.get("resolution") in (None, {})
+    resolution = payload.get("resolution")
+    if not isinstance(resolution, Mapping):
+        return False
+    required = tuple(resolution.get(key) for key in ("workspace_id", "project_name", "source"))
+    if not all(isinstance(value, str) and value.strip() for value in required):
+        return False
+    claim_keys = {
+        "session_context",
+        "session_context_expires_at",
+        "session_context_ttl_seconds",
+        "session_context_source",
+    }
+    claim_present = claim_keys.intersection(payload)
+    if claim_present and claim_present != claim_keys:
+        return False
+    if claim_present:
+        ttl = payload.get("session_context_ttl_seconds")
+        if (
+            not isinstance(payload.get("session_context"), str)
+            or not payload["session_context"].strip()
+            or len(payload["session_context"]) > 4096
+            or not isinstance(payload.get("session_context_expires_at"), str)
+            or not payload["session_context_expires_at"].strip()
+            or isinstance(ttl, bool)
+            or ttl != 900
+            or payload.get("session_context_source") != "user_confirmed"
+        ):
+            return False
+    names = tuple(accessible_names)
+    return not names or resolution["project_name"] in names
+
+
+def validate_context_save_payload(payload: Mapping[str, Any] | None) -> bool:
+    """Validate acknowledgement from the shared persistent profile owner."""
+    if not isinstance(payload, Mapping) or payload.get("status") != "ok":
+        return False
+    if not _valid_error(payload.get("error"), "ok"):
+        return False
+    effect = payload.get("effect")
+    tapd_write = payload.get("tapd_write")
+    return (effect is None or effect == "workspace-write") and (
+        tapd_write is None or tapd_write is False
+    )
 
 
 def project_hint_from_message(
@@ -90,7 +215,10 @@ def resolve_shared_context(
     session: TapdSessionContext = TapdSessionContext(),
 ) -> TapdContextResolution:
     """Combine the two public context operations with one session override."""
-    if not isinstance(status_payload, Mapping) or not isinstance(resolve_payload, Mapping):
+    if not validate_context_status_payload(status_payload) or not validate_context_resolve_payload(
+        resolve_payload,
+        accessible_names=accessible_project_names(status_payload),
+    ):
         return TapdContextResolution(
             status="unavailable",
             error_code="MCP_RESULT_INVALID",
@@ -142,6 +270,14 @@ def resolve_shared_context(
 
     identity = session.tapd_identity or _profile_value(status_payload, "tapd_identity")
     role = session.business_role or _profile_value(status_payload, "business_role")
+    same_session_project = bool(
+        session.project and session.project.id and session.project.id == project_id
+    )
+    session_context = _clean_claim(resolve_payload.get("session_context"))
+    session_context_expires_at = _clean_text(resolve_payload.get("session_context_expires_at"))
+    if not session_context and same_session_project:
+        session_context = session.session_context
+        session_context_expires_at = session.session_context_expires_at
     missing = tuple(
         key for key, value in (("tapd_identity", identity), ("role", role)) if not value
     )
@@ -172,6 +308,8 @@ def resolve_shared_context(
         project_source=_clean_text(resolution.get("source")),
         tapd_identity=identity,
         role=role,
+        session_context=session_context,
+        session_context_expires_at=session_context_expires_at,
         project_options=options,
         missing=missing,
     )
@@ -291,7 +429,7 @@ def project_from_answer(
 
 
 def project_from_resolve_payload(payload: Mapping[str, Any] | None) -> TapdProject | None:
-    if not isinstance(payload, Mapping) or str(payload.get("status") or "").casefold() != "ok":
+    if not validate_context_resolve_payload(payload):
         return None
     resolution = payload.get("resolution")
     if not isinstance(resolution, Mapping):
@@ -327,6 +465,39 @@ def _clean_text(value: Any) -> str:
     return " ".join(printable.split())[:MAX_BUSINESS_TEXT]
 
 
+def _clean_claim(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()[:4096]
+
+
+def _valid_read_markers(payload: Mapping[str, Any]) -> bool:
+    effect = payload.get("effect")
+    tapd_write = payload.get("tapd_write")
+    return (effect is None or effect == "read") and (tapd_write is None or tapd_write is False)
+
+
+def _valid_error(value: Any, status: str) -> bool:
+    empty = value is None or value == "" or (isinstance(value, Mapping) and not value)
+    if status == "ok":
+        return empty
+    if empty:
+        return status == "needs_input"
+    return (
+        isinstance(value, Mapping)
+        and isinstance(value.get("code"), str)
+        and bool(value["code"].strip())
+        and isinstance(value.get("message"), str)
+        and bool(value["message"].strip())
+    )
+
+
+def _string_list(value: Any) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(item, str) and bool(item.strip()) for item in value
+    )
+
+
 def _safe_context_reason(code: str, *, zh: bool) -> str:
     if zh:
         return {
@@ -355,5 +526,8 @@ __all__ = [
     "project_hint_from_message",
     "render_context_briefing",
     "resolve_shared_context",
+    "validate_context_resolve_payload",
+    "validate_context_save_payload",
+    "validate_context_status_payload",
     "wants_default",
 ]

@@ -69,8 +69,14 @@ def _ready_status(
     }
 
 
-def _resolved(project_id: str = "1", name: str = "DeepTutor", source: str = "saved_default"):
-    return {
+def _resolved(
+    project_id: str = "1",
+    name: str = "DeepTutor",
+    source: str = "saved_default",
+    *,
+    session_claim: str = "",
+):
+    payload = {
         "status": "ok",
         "resolution": {
             "workspace_id": project_id,
@@ -79,6 +85,16 @@ def _resolved(project_id: str = "1", name: str = "DeepTutor", source: str = "sav
         },
         "error": None,
     }
+    if session_claim:
+        payload.update(
+            {
+                "session_context": session_claim,
+                "session_context_expires_at": "2026-08-14T08:15:00Z",
+                "session_context_ttl_seconds": 900,
+                "session_context_source": "user_confirmed",
+            }
+        )
+    return payload
 
 
 def _pipeline(payloads: dict[str, dict], *, providers: tuple[str, ...] = ("personal-tapd",)):
@@ -92,6 +108,7 @@ def _pipeline(payloads: dict[str, dict], *, providers: tuple[str, ...] = ("perso
     ]
     pipeline._tapd_selected_project = None
     pipeline._tapd_story_candidates = ()
+    pipeline._tapd_session_context = ""
     return pipeline
 
 
@@ -148,7 +165,12 @@ async def test_u2_first_use_asks_once_with_business_names_and_keeps_answers_sess
                     "project_options": ["DeepTutor", "Mengban Web"],
                     "error": {"code": "PROJECT_CONFIRMATION_REQUIRED", "message": "请选择项目"},
                 },
-                _resolved("2", "Mengban Web", "explicit"),
+                _resolved(
+                    "2",
+                    "Mengban Web",
+                    "explicit",
+                    session_claim="tapdsc1.opaque.signature",
+                ),
             ],
         }
     )
@@ -180,7 +202,17 @@ async def test_u2_first_use_asks_once_with_business_names_and_keeps_answers_sess
         "project": {"id": "2", "name": "Mengban Web"},
         "tapd_identity": "李四",
         "business_role": "一线测试人员",
+        "session_context": "tapdsc1.opaque.signature",
+        "session_context_expires_at": "2026-08-14T08:15:00Z",
     }
+    assert pipeline.registry.calls[-1] == (
+        "tapd_context_resolve",
+        {
+            "project_hint": "Mengban Web",
+            "tapd_identity": "李四",
+            "business_role": "一线测试人员",
+        },
+    )
     assert [call[0] for call in pipeline.registry.calls].count("tapd_context_save") == 0
 
 
@@ -193,7 +225,12 @@ async def test_u3_explicit_project_is_a_session_override_and_does_not_change_def
     pipeline = _pipeline(
         {
             "tapd_context_status": _ready_status(projects=("DeepTutor", "Mengban Web")),
-            "tapd_context_resolve": _resolved("2", "Mengban Web", "explicit"),
+            "tapd_context_resolve": _resolved(
+                "2",
+                "Mengban Web",
+                "explicit",
+                session_claim="tapdsc1.explicit.signature",
+            ),
         }
     )
 
@@ -206,7 +243,14 @@ async def test_u3_explicit_project_is_a_session_override_and_does_not_change_def
     )
 
     assert "本次项目: Mengban Web" in briefing
-    assert pipeline.registry.calls[1] == ("tapd_context_resolve", {"project_hint": "Mengban Web"})
+    assert pipeline.registry.calls[1] == (
+        "tapd_context_resolve",
+        {
+            "project_hint": "Mengban Web",
+            "tapd_identity": "张三",
+            "business_role": "QA 负责人",
+        },
+    )
     assert session.preferences["tapd_context"]["project"] == {"id": "2", "name": "Mengban Web"}
     assert all(call[0] != "tapd_context_save" for call in pipeline.registry.calls)
 
@@ -262,6 +306,157 @@ async def test_duplicate_context_provider_fails_closed_without_calling_either() 
     assert "TAPD 上下文：不可用" in briefing
     assert "重复" in briefing
     assert pipeline.registry.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mutation", "value"),
+    (
+        ("ok_with_error", {"code": "CONTRADICTORY", "message": "must fail closed"}),
+        ("project_names_not_list", "DeepTutor"),
+        ("profile_identity_not_string", True),
+    ),
+)
+async def test_malformed_context_status_stops_before_resolve(
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    value: object,
+) -> None:
+    monkeypatch.setattr("deeptutor.services.session.get_session_store", lambda: _SessionStore())
+    status = _ready_status()
+    if mutation == "ok_with_error":
+        status["error"] = value
+    elif mutation == "project_names_not_list":
+        status["accessible_project_names"] = value
+    else:
+        status["profile"]["tapd_identity"] = value
+    pipeline = _pipeline(
+        {
+            "tapd_context_status": status,
+            "tapd_context_resolve": _resolved(),
+        }
+    )
+
+    briefing = await pipeline._tapd_context_briefing(
+        UnifiedContext(
+            session_id=f"invalid-{mutation}", user_message="从 TAPD 取需求", language="zh"
+        )
+    )
+
+    assert "不可用" in briefing
+    assert [call[0] for call in pipeline.registry.calls] == ["tapd_context_status"]
+
+
+@pytest.mark.asyncio
+async def test_malformed_context_resolve_is_blocked_and_not_saved_to_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _SessionStore()
+    monkeypatch.setattr("deeptutor.services.session.get_session_store", lambda: session)
+    resolved = _resolved()
+    resolved["error"] = {"code": "CONTRADICTORY", "message": "must fail closed"}
+    pipeline = _pipeline(
+        {
+            "tapd_context_status": _ready_status(),
+            "tapd_context_resolve": resolved,
+        }
+    )
+
+    briefing = await pipeline._tapd_context_briefing(
+        UnifiedContext(session_id="invalid-resolve", user_message="从 TAPD 取需求", language="zh")
+    )
+
+    assert "不可用" in briefing
+    assert session.preferences == {}
+
+
+@pytest.mark.asyncio
+async def test_malformed_session_claim_fields_are_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _SessionStore()
+    monkeypatch.setattr("deeptutor.services.session.get_session_store", lambda: session)
+    resolved = _resolved(
+        "1",
+        "DeepTutor",
+        "explicit",
+        session_claim="tapdsc1.opaque.signature",
+    )
+    resolved["session_context_ttl_seconds"] = True
+    pipeline = _pipeline(
+        {
+            "tapd_context_status": _ready_status(),
+            "tapd_context_resolve": resolved,
+        }
+    )
+
+    briefing = await pipeline._tapd_context_briefing(
+        UnifiedContext(session_id="invalid-claim", user_message="从 TAPD 取需求", language="zh")
+    )
+
+    assert "不可用" in briefing
+    assert session.preferences == {}
+
+
+@pytest.mark.asyncio
+async def test_context_resolve_project_must_be_in_status_accessible_projects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _SessionStore()
+    monkeypatch.setattr("deeptutor.services.session.get_session_store", lambda: session)
+    pipeline = _pipeline(
+        {
+            "tapd_context_status": _ready_status(projects=("DeepTutor",)),
+            "tapd_context_resolve": _resolved(
+                "2",
+                "Mengban Web",
+                "explicit",
+                session_claim="tapdsc1.stale.signature",
+            ),
+        }
+    )
+
+    briefing = await pipeline._tapd_context_briefing(
+        UnifiedContext(session_id="cross-context", user_message="从 TAPD 取需求", language="zh")
+    )
+
+    assert "不可用" in briefing
+    assert session.preferences == {}
+
+
+@pytest.mark.asyncio
+async def test_contradictory_context_save_ack_is_not_accepted_as_persisted_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _SessionStore()
+    monkeypatch.setattr("deeptutor.services.session.get_session_store", lambda: session)
+    pipeline = _pipeline(
+        {
+            "tapd_context_resolve": _resolved("2", "Mengban Web", "explicit"),
+            "tapd_context_save": {
+                "status": "ok",
+                "effect": "workspace-write",
+                "tapd_write": False,
+                "error": {"code": "CONTRADICTORY", "message": "must fail closed"},
+            },
+        }
+    )
+    pipeline._tapd_project_options = ("DeepTutor", "Mengban Web")
+
+    selected = await pipeline._persist_tapd_answers(
+        UnifiedContext(session_id="bad-save"),
+        {
+            "answers": [
+                {"questionId": "tapd_context_project", "text": "Mengban Web"},
+                {"questionId": "tapd_context_remember_project", "text": "设为默认"},
+                {"questionId": "tapd_context_identity", "text": "王五"},
+                {"questionId": "tapd_context_role", "text": "QA 负责人"},
+            ]
+        },
+    )
+
+    assert selected is None
+    assert session.preferences["tapd_context"]["project"] == {"id": "2", "name": "Mengban Web"}
 
 
 @pytest.mark.asyncio
@@ -372,7 +567,12 @@ async def test_explicit_project_can_override_a_revoked_default_for_this_session(
                     "message": "已保存的默认项目不在当前可访问范围",
                 },
             },
-            "tapd_context_resolve": _resolved("2", "Mengban Web", "explicit"),
+            "tapd_context_resolve": _resolved(
+                "2",
+                "Mengban Web",
+                "explicit",
+                session_claim="tapdsc1.stale.signature",
+            ),
         }
     )
 
@@ -387,6 +587,7 @@ async def test_explicit_project_can_override_a_revoked_default_for_this_session(
     assert "上下文已齐" in briefing
     assert "本次项目: Mengban Web" in briefing
     assert session.preferences["tapd_context"]["project"] == {"id": "2", "name": "Mengban Web"}
+    assert session.preferences["tapd_context"]["session_context"] == "tapdsc1.stale.signature"
     assert all(call[0] != "tapd_context_save" for call in pipeline.registry.calls)
 
 
@@ -414,7 +615,16 @@ async def test_existing_ask_user_resume_resolves_business_name_into_session_proj
         "deeptutor.agents.chat.agentic_pipeline.AgenticChatPipeline._await_user_reply_and_resolve",
         fake_parent_resume,
     )
-    pipeline = _pipeline({"tapd_context_resolve": _resolved("2", "Mengban Web", "explicit")})
+    pipeline = _pipeline(
+        {
+            "tapd_context_resolve": _resolved(
+                "2",
+                "Mengban Web",
+                "explicit",
+                session_claim="tapdsc1.resume.signature",
+            )
+        }
+    )
     pipeline._tapd_project_options = ("DeepTutor", "Mengban Web")
 
     async def waiter():  # noqa: ANN202
