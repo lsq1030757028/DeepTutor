@@ -74,6 +74,9 @@ services:
       - ./data:/app/data
 
     environment:
+      # Required for signed Test Journey calls. No repository default: fail
+      # before container start when deployment secret injection is missing.
+      - TEST_JOURNEY_BRIDGE_SECRET=${TEST_JOURNEY_BRIDGE_SECRET:?TEST_JOURNEY_BRIDGE_SECRET must be set}
       # Route untrusted shell exec to the runner sidecar (SYSTEM isolation).
       # When this is set, the main app NEVER runs untrusted code in its own
       # process — see deeptutor/services/sandbox/config.py:build_backend().

@@ -9,10 +9,10 @@ All consumers (CLI, WebSocket, SDK) call the orchestrator.
 from __future__ import annotations
 
 import asyncio
-import logging
-import uuid
 from contextlib import suppress
+import logging
 from typing import Any, AsyncIterator
+import uuid
 
 from deeptutor.core.context import UnifiedContext
 from deeptutor.core.stream import StreamEvent, StreamEventType

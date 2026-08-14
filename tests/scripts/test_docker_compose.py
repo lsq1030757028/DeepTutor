@@ -73,6 +73,28 @@ def test_compose_files_do_not_consume_legacy_env_names() -> None:
         assert "DEEPTUTOR_DOCKER_BACKEND_PORT" in content
 
 
+def test_journey_bridge_secret_has_fail_closed_runtime_contract() -> None:
+    """The release template and both Compose paths must require one host secret.
+
+    The value stays outside the repository.  Compose must reject an unset or
+    empty value instead of starting a container whose Journey calls all fail at
+    first use.
+    """
+    root = Path(__file__).resolve().parents[2]
+    missing: list[str] = []
+    env_template = (root / ".env.example").read_text(encoding="utf-8")
+    if "\nTEST_JOURNEY_BRIDGE_SECRET=\n" not in f"\n{env_template}":
+        missing.append(".env.example declaration")
+
+    required_interpolation = "TEST_JOURNEY_BRIDGE_SECRET=${TEST_JOURNEY_BRIDGE_SECRET:?"
+    for name in ("compose.yaml", "docker-compose.yml"):
+        content = (root / name).read_text(encoding="utf-8")
+        if required_interpolation not in content:
+            missing.append(f"{name} required runtime injection")
+
+    assert not missing, f"Journey bridge secret contract missing: {', '.join(missing)}"
+
+
 def test_dockerfile_is_json_driven_without_bundle_sed() -> None:
     """The image no longer rewrites the built bundle at startup (the runtime
     ``sed -i`` broke under a read-only rootfs). URL/auth knowledge is JSON-driven:
