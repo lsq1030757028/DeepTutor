@@ -41,16 +41,30 @@ from deeptutor.capabilities.protocol import PromptBlock
 from deeptutor.core.context import UnifiedContext
 from deeptutor.core.stream_bus import StreamBus
 from deeptutor.services.prompt.manager import PromptManager
+from deeptutor.services.tapd_business import (
+    SUPPORTED_BUSINESS_QUESTION,
+    TapdStory,
+    baseline_is_ready,
+    is_supported_business_question,
+    journey_ingest_arguments,
+    parse_business_query,
+    render_baseline_block,
+    render_business_outcome,
+    render_semantic_block,
+    semantic_is_ready,
+    story_from_answer,
+)
 from deeptutor.services.tapd_context import (
-    TapdProfile,
     TapdProject,
+    TapdSessionContext,
+    accessible_project_names,
     answer_map,
-    load_profile,
-    parse_projects_payload,
+    parse_public_payload,
     project_from_answer,
+    project_from_resolve_payload,
+    project_hint_from_message,
     render_context_briefing,
-    resolve_context,
-    save_profile,
+    resolve_shared_context,
     wants_default,
 )
 
@@ -87,8 +101,12 @@ def journey_system_block(language: str = "zh") -> str:
 class TestJourneyPipeline(AgenticChatPipeline):
     """主聊 pipeline + 旅程纪律 + TAPD 的宿主级轻上下文。"""
 
-    _tapd_projects: tuple[TapdProject, ...] = ()
     _tapd_selected_project: TapdProject | None = None
+    _tapd_project_options: tuple[str, ...] = ()
+    _tapd_identity: str = ""
+    _tapd_role: str = ""
+    _tapd_story_candidates: tuple[TapdStory, ...] = ()
+    _tapd_selected_story: TapdStory | None = None
 
     def _capability_system_blocks(self, context: UnifiedContext) -> list[PromptBlock]:
         # 先拿父类的（用户另外开着的 loop capability 照常生效），再追加自己的。
@@ -106,17 +124,15 @@ class TestJourneyPipeline(AgenticChatPipeline):
     ) -> str:
         """Resolve TAPD project scope before the first Test-mode model call.
 
-        The credential stays inside the user's MCP connection.  This adapter
-        invokes only the read-only ``tapd_projects`` logical tool and combines
-        its live scope with non-secret owner/session preferences.
+        The credential stays inside the user's MCP connection. This adapter
+        consumes the shared context status/resolve contract and keeps only an
+        explicit current-session override inside DeepTutor.
         """
         inherited = await super()._capability_pre_loop_briefings(context, stream)
         tapd = await self._tapd_context_briefing(context)
         return "\n\n".join(part for part in (inherited.strip(), tapd.strip()) if part)
 
     async def _tapd_context_briefing(self, context: UnifiedContext) -> str:
-        from deeptutor.multi_user.paths import current_owner_id
-
         oracle_mode = self._test_oracle_mode(context)
         if oracle_mode == "local":
             context.metadata["tapd_context"] = {"status": "not_required", "missing": []}
@@ -128,33 +144,58 @@ class TestJourneyPipeline(AgenticChatPipeline):
                 "text or an attachment. Use the local oracle directly; do not ask for a TAPD project, "
                 "identity, role, workspace id, or token."
             )
-
-        owner_id = current_owner_id()
-        profile = load_profile(owner_id)
-        session_project = await self._load_session_project(context.session_id)
-        tool_name = self._logical_mcp_tool_name("tapd_projects")
-        if not tool_name:
-            resolution = resolve_context(
-                (),
-                profile=profile,
-                discovery_error="TAPD MCP is not connected or does not expose tapd_projects",
+        if oracle_mode == "unknown":
+            context.metadata["tapd_context"] = {"status": "not_selected", "missing": []}
+            return (
+                "[需求来源尚未确定]\n不要默认启用 TAPD，也不要询问项目、身份或角色。"
+                "只用一句业务问题确认：从 TAPD 取需求，还是使用当前提供的正文或附件？"
+                if context.language.lower().startswith("zh")
+                else "[Requirement source not selected]\nDo not enable TAPD by default or ask for project, "
+                "identity, or role. Ask one business question: fetch from TAPD, or use the supplied "
+                "text or attachment?"
             )
+
+        session = await self._load_session_context(context.session_id)
+        status_name = self._logical_mcp_tool_name("tapd_context_status")
+        resolve_name = self._logical_mcp_tool_name("tapd_context_resolve")
+        duplicate = any(
+            self._logical_mcp_tool_count(name) > 1
+            for name in ("tapd_context_status", "tapd_context_resolve")
+        )
+        if duplicate or not status_name or not resolve_name:
+            resolution = resolve_shared_context(None, None, session=session)
+            code = "DUPLICATE_PROVIDER" if duplicate else "MCP_TOOL_UNAVAILABLE"
+            message = (
+                "检测到重复的 TAPD MCP 提供方"
+                if duplicate
+                else "TAPD MCP is not connected or missing shared context operations"
+            )
+            resolution = resolution.__class__(status="unavailable", error_code=code, error=message)
         else:
             try:
-                result = await self.tool_lookup.execute(tool_name, user="")
-                projects, error = parse_projects_payload(result)
-            except Exception as exc:  # noqa: BLE001 - fail closed into the user-facing branch
-                projects, error = [], f"TAPD project discovery failed: {type(exc).__name__}"
-            resolution = resolve_context(
-                projects,
-                profile=profile,
-                user_message=context.user_message,
-                session_project=session_project,
-                discovery_error=error,
-            )
+                status_raw = await self.tool_lookup.execute(status_name)
+                status = parse_public_payload(status_raw)
+                names = accessible_project_names(status)
+                hint = project_hint_from_message(
+                    context.user_message,
+                    names,
+                    session.project,
+                )
+                resolve_raw = await self.tool_lookup.execute(resolve_name, project_hint=hint)
+                resolved = parse_public_payload(resolve_raw)
+                resolution = resolve_shared_context(status, resolved, session=session)
+            except Exception as exc:  # noqa: BLE001 - normalize provider failures
+                resolution = resolve_shared_context(None, None, session=session)
+                resolution = resolution.__class__(
+                    status="unavailable",
+                    error_code="MCP_CALL_FAILED",
+                    error=f"TAPD context call failed: {type(exc).__name__}",
+                )
 
-        self._tapd_projects = resolution.projects
+        self._tapd_project_options = resolution.project_options
         self._tapd_selected_project = resolution.selected_project
+        self._tapd_identity = resolution.tapd_identity
+        self._tapd_role = resolution.role
         context.metadata["tapd_context"] = {
             "status": resolution.status,
             "project_name": (
@@ -163,13 +204,74 @@ class TestJourneyPipeline(AgenticChatPipeline):
             "project_source": resolution.project_source,
             "missing": list(resolution.missing),
         }
-        if resolution.project_source == "request" and resolution.selected_project is not None:
-            await self._save_session_project(context.session_id, resolution.selected_project)
-        return render_context_briefing(
-            resolution,
-            language=context.language,
-            tapd_required=oracle_mode == "tapd",
+        if resolution.project_source == "explicit" and resolution.selected_project is not None:
+            await self._save_session_context(
+                context.session_id,
+                TapdSessionContext(
+                    project=resolution.selected_project,
+                    tapd_identity=resolution.tapd_identity,
+                    business_role=resolution.role,
+                ),
+            )
+        briefing = render_context_briefing(resolution, language=context.language)
+        if resolution.status == "ready" and is_supported_business_question(context.user_message):
+            business = await self._tapd_business_briefing(context, resolution.selected_project)
+            if business:
+                briefing = f"{briefing}\n\n{business}"
+        return briefing
+
+    async def _tapd_business_briefing(
+        self,
+        context: UnifiedContext,
+        project: TapdProject | None,
+    ) -> str:
+        """Run the fixed baseline -> semantic -> business-query trust chain."""
+        self._tapd_story_candidates = ()
+        self._tapd_selected_story = None
+        if project is None:
+            return render_business_outcome(parse_business_query(None), language=context.language)
+        logical_names = (
+            "tapd_baseline_status",
+            "tapd_semantic_status",
+            "tapd_business_query",
         )
+        if any(self._logical_mcp_tool_count(name) != 1 for name in logical_names):
+            return render_business_outcome(parse_business_query(None), language=context.language)
+        tool_names = {name: self._logical_mcp_tool_name(name) for name in logical_names}
+        try:
+            baseline_raw = await self.tool_lookup.execute(
+                tool_names["tapd_baseline_status"], workspace_id=project.id
+            )
+            baseline = parse_public_payload(baseline_raw)
+            if not baseline_is_ready(baseline):
+                return render_baseline_block(language=context.language)
+
+            semantic_raw = await self.tool_lookup.execute(
+                tool_names["tapd_semantic_status"], workspace_id=project.id
+            )
+            semantic = parse_public_payload(semantic_raw)
+            if not semantic_is_ready(semantic):
+                return render_semantic_block(language=context.language)
+
+            query_raw = await self.tool_lookup.execute(
+                tool_names["tapd_business_query"],
+                workspace_id=project.id,
+                question=SUPPORTED_BUSINESS_QUESTION,
+                limit=20,
+            )
+            outcome = parse_business_query(
+                parse_public_payload(query_raw),
+                expected_workspace_id=project.id,
+            )
+        except Exception:  # noqa: BLE001 - provider details must not enter the conversation
+            outcome = parse_business_query(None)
+        self._tapd_story_candidates = outcome.stories
+        context.metadata["tapd_business"] = {
+            "status": outcome.status,
+            "matched_count": outcome.matched_count,
+            "returned_count": len(outcome.stories),
+        }
+        return render_business_outcome(outcome, language=context.language)
 
     async def _await_user_reply_and_resolve(
         self,
@@ -206,12 +308,23 @@ class TestJourneyPipeline(AgenticChatPipeline):
         if selected is not None:
             for tool_message in dispatch.tool_messages:
                 if tool_message.get("tool_call_id") == dispatch.pause_tool_call_id:
-                    tool_message["content"] = (
-                        f"{tool_message.get('content', '')}\n\n"
-                        "[Host-resolved TAPD context] "
-                        f"project={selected.name}; internal workspace_id={selected.id}. "
-                        "Use the id only in tool arguments; do not show or ask it of the user."
-                    )
+                    if self._tapd_selected_story is not None:
+                        args = journey_ingest_arguments(selected, self._tapd_selected_story)
+                        tool_message["content"] = (
+                            f"{tool_message.get('content', '')}\n\n"
+                            "[Host-resolved TAPD requirement for internal tool arguments] "
+                            f"workspace_id={args['workspace_id']}; story_id={args['story_id']}; "
+                            f"title={args['title']}; source_kind=tapd. "
+                            "Call journey_ingest with these internal arguments after the depth gate; "
+                            "never repeat the ids in an ordinary answer."
+                        )
+                    else:
+                        tool_message["content"] = (
+                            f"{tool_message.get('content', '')}\n\n"
+                            "[Host-resolved TAPD context] "
+                            f"project={selected.name}; internal workspace_id={selected.id}. "
+                            "Use the id only in tool arguments; do not show or ask it of the user."
+                        )
                     break
         return resumed
 
@@ -219,42 +332,64 @@ class TestJourneyPipeline(AgenticChatPipeline):
         self, context: UnifiedContext, raw_reply: Any
     ) -> TapdProject | None:
         answers = answer_map(raw_reply)
+        story_answer = answers.get("tapd_story_selection", "")
+        selected_story = story_from_answer(story_answer, self._tapd_story_candidates)
+        if selected_story is not None:
+            self._tapd_selected_story = selected_story
         relevant = {key: value for key, value in answers.items() if key.startswith("tapd_context_")}
         if not relevant:
-            return None
+            return self._tapd_selected_project if selected_story is not None else None
 
         selected = project_from_answer(
-            relevant.get("tapd_context_project", ""), self._tapd_projects
+            relevant.get("tapd_context_project", ""),
+            (self._tapd_selected_project,) if self._tapd_selected_project else (),
+            self._tapd_project_options,
         )
         if selected is None:
             selected = self._tapd_selected_project
-        if selected is not None and "tapd_context_project" in relevant:
-            await self._save_session_project(context.session_id, selected)
-            self._tapd_selected_project = selected
-
-        from deeptutor.multi_user.paths import current_owner_id
-
-        owner_id = current_owner_id()
-        previous = load_profile(owner_id)
+        if selected is not None and not selected.id:
+            resolve_name = self._logical_mcp_tool_name("tapd_context_resolve")
+            if not resolve_name:
+                return None
+            try:
+                resolved = await self.tool_lookup.execute(resolve_name, project_hint=selected.name)
+            except Exception:  # noqa: BLE001 - an unverified project cannot enter the session
+                return None
+            selected = project_from_resolve_payload(parse_public_payload(resolved))
+            if selected is None:
+                return None
+        previous = await self._load_session_context(context.session_id)
         identity = relevant.get("tapd_context_identity", "").strip() or previous.tapd_identity
-        role = relevant.get("tapd_context_role", "").strip() or previous.role
-        default_project = previous.default_project
+        role = relevant.get("tapd_context_role", "").strip() or previous.business_role
+        session_context = TapdSessionContext(
+            project=selected or previous.project,
+            tapd_identity=identity or self._tapd_identity,
+            business_role=role or self._tapd_role,
+        )
+        await self._save_session_context(context.session_id, session_context)
+        self._tapd_selected_project = session_context.project
+        self._tapd_identity = session_context.tapd_identity
+        self._tapd_role = session_context.business_role
+
         remember = relevant.get("tapd_context_remember_project", "")
         if selected is not None and wants_default(remember):
-            default_project = selected
-        if (
-            identity != previous.tapd_identity
-            or role != previous.role
-            or default_project != previous.default_project
-        ):
-            save_profile(
-                owner_id,
-                TapdProfile(
-                    tapd_identity=identity,
-                    role=role,
-                    default_project=default_project,
-                ),
-            )
+            save_name = self._logical_mcp_tool_name("tapd_context_save")
+            if save_name:
+                try:
+                    saved = await self.tool_lookup.execute(
+                        save_name,
+                        default_project=selected.name,
+                        tapd_identity=session_context.tapd_identity,
+                        business_role=session_context.business_role,
+                    )
+                    saved_payload = parse_public_payload(saved)
+                    if (
+                        not saved_payload
+                        or str(saved_payload.get("status") or "").casefold() != "ok"
+                    ):
+                        return None
+                except Exception:  # noqa: BLE001 - session remains valid; default was not proven saved
+                    return None
         return selected
 
     def _logical_mcp_tool_name(self, logical_name: str) -> str:
@@ -270,10 +405,18 @@ class TestJourneyPipeline(AgenticChatPipeline):
                 or name.endswith(f"_{logical_name}")
             ):
                 matches.append(name)
-        unique = sorted(set(matches))
         # Two configured servers exposing the same logical capability are not
         # interchangeable: picking one by sort order could use the wrong token.
-        return unique[0] if len(unique) == 1 else ""
+        return matches[0] if len(matches) == 1 else ""
+
+    def _logical_mcp_tool_count(self, logical_name: str) -> int:
+        return sum(
+            1
+            for tool in getattr(self, "_deferred_pool", ())
+            if str(getattr(tool, "original_name", "") or "") == logical_name
+            or str(tool.get_definition().name or "") == logical_name
+            or str(tool.get_definition().name or "").endswith(f"_{logical_name}")
+        )
 
     @staticmethod
     def _test_oracle_mode(context: UnifiedContext) -> str:
@@ -283,6 +426,8 @@ class TestJourneyPipeline(AgenticChatPipeline):
             return declared
         text = str(context.user_message or "")
         folded = text.casefold()
+        if is_supported_business_question(text):
+            return "tapd"
         local_markers = (
             "需求正文",
             "验收标准",
@@ -305,26 +450,36 @@ class TestJourneyPipeline(AgenticChatPipeline):
         return "unknown"
 
     @staticmethod
-    async def _load_session_project(session_id: str) -> TapdProject | None:
+    async def _load_session_context(session_id: str) -> TapdSessionContext:
         if not session_id:
-            return None
+            return TapdSessionContext()
         try:
             from deeptutor.services.session import get_session_store
 
             session = await get_session_store().get_session(session_id)
         except Exception:  # noqa: BLE001 - absence means no session override
-            return None
+            return TapdSessionContext()
         preferences = session.get("preferences") if isinstance(session, dict) else None
         tapd = preferences.get("tapd_context") if isinstance(preferences, dict) else None
         raw = tapd.get("project") if isinstance(tapd, dict) else None
-        if not isinstance(raw, dict):
-            return None
-        project_id = str(raw.get("id") or "").strip()
-        name = str(raw.get("name") or "").strip()
-        return TapdProject(id=project_id, name=name) if project_id and name else None
+        project = None
+        if isinstance(raw, dict):
+            project_id = str(raw.get("id") or "").strip()
+            name = str(raw.get("name") or "").strip()
+            if name:
+                project = TapdProject(id=project_id, name=name)
+        return TapdSessionContext(
+            project=project,
+            tapd_identity=(
+                str(tapd.get("tapd_identity") or "").strip() if isinstance(tapd, dict) else ""
+            ),
+            business_role=(
+                str(tapd.get("business_role") or "").strip() if isinstance(tapd, dict) else ""
+            ),
+        )
 
     @staticmethod
-    async def _save_session_project(session_id: str, project: TapdProject) -> None:
+    async def _save_session_context(session_id: str, value: TapdSessionContext) -> None:
         if not session_id:
             return
         try:
@@ -332,7 +487,13 @@ class TestJourneyPipeline(AgenticChatPipeline):
 
             await get_session_store().update_session_preferences(
                 session_id,
-                {"tapd_context": {"project": project.to_dict()}},
+                {
+                    "tapd_context": {
+                        "project": value.project.to_dict() if value.project else None,
+                        "tapd_identity": value.tapd_identity,
+                        "business_role": value.business_role,
+                    }
+                },
             )
         except Exception:  # noqa: BLE001 - one turn may continue without sticky override
             return
