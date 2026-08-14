@@ -75,7 +75,12 @@ ALLOWED_SECRETS = (
     "TAPD_ACCESS_TOKEN",   # TAPD 个人访问令牌
     "BOT_URL",             # 可选：企业微信机器人 webhook（不带 TAPD 凭据）
     "DEEPTUTOR_TOKEN",     # 可选：DeepTutor 开了登录时的 admin 令牌
+    "TEST_JOURNEY_BRIDGE_SECRET",  # DeepTutor ↔ Test Partner 调用签名
 )
+
+#: This shared signing key has no human-recognition use case.  Its public state
+#: is presence-only: unlike user-pasted tokens, never expose a suffix or length.
+PRESENCE_ONLY_SECRETS = frozenset({"TEST_JOURNEY_BRIDGE_SECRET"})
 
 #: gateway.json 的默认值。读的时候按键补齐（用户的文件缺字段不算坏），
 #: 写的时候只写全量，避免"改了一个键把别的键写没了"。
@@ -503,8 +508,9 @@ class GatewayConfig:
     def public_state(self) -> dict[str, Any]:
         """页面能拿到的全部配置视图。**这里出去的东西不含任何凭据原值。**
 
-        凭据只以 `{configured, masked, length}` 三元组出现：`masked` 至多露末 4 位，
-        `length` 用来让用户确认"我贴的是完整的那串"。
+        一般凭据只以 `{configured, masked, length}` 三元组出现：`masked` 至多露末 4 位，
+        `length` 用来让用户确认"我贴的是完整的那串"。Journey bridge 共享签名密钥
+        只出 `{configured}`，不出掩码、长度或摘要。
         测试环境的变量走 `environments_public()`，同样只出键名与掩码。
         """
         secrets = self.read_secrets()
@@ -514,8 +520,14 @@ class GatewayConfig:
             "secrets": {
                 name: {
                     "configured": bool(secrets.get(name)),
-                    "masked": mask_secret(secrets.get(name, "")),
-                    "length": len(secrets.get(name, "")),
+                    **(
+                        {}
+                        if name in PRESENCE_ONLY_SECRETS
+                        else {
+                            "masked": mask_secret(secrets.get(name, "")),
+                            "length": len(secrets.get(name, "")),
+                        }
+                    ),
                 }
                 for name in ALLOWED_SECRETS
             },

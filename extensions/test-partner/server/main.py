@@ -30,6 +30,7 @@ from mcp.server import MCPServer
 from pydantic import Field
 
 from server import case_validate, delivery, execute, har_parse
+from server.journey.bridge_runtime import prepare_test_partner_bridge_secret
 
 SERVER_NAME = "test-partner"
 SERVER_VERSION = "0.8.0"
@@ -592,6 +593,7 @@ def main() -> None:
     绑 0.0.0.0 时 SDK 不会自动开 DNS-rebinding 保护，因此容器侧用
     host.docker.internal 作 Host 头访问不会被拦。
     """
+    prepare_test_partner_bridge_secret()
     config_url = start_gateway()
     if config_url:
         print(f"[test-partner] 配置页：{config_url}   ← 浏览器打开这个地址填凭据")

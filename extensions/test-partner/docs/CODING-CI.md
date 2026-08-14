@@ -10,6 +10,15 @@ python -m pytest -q extensions/test-partner
 
 ## CODING（U2 配好钥匙之后）
 
+Job 侧必须提供仓库专用环境变量 `DEEPTUTOR_GITHUB_SSH_CREDENTIALS_ID`，值是
+DeepTutor 自己的只读 GitHub SSH 凭据 ID。它不是构建参数，也不在 Jenkinsfile 里给默认值；
+只允许 3-128 位字母、数字、点、下划线和连字符。空值、占位词或非法格式都会在 checkout
+前失败，流水线不会打印该值，checkout 也只消费校验后的局部变量。
+
+`github.com` 的 strict host-key 信任仍是 CODING agent / job 的外部配置前置，目前 pending。
+Jenkinsfile 不写 `StrictHostKeyChecking=no`、不自动接受未知 host key，也不把这项外部前置伪装成
+源码已关闭。
+
 原生 PUSH 触发（默认日常路径）：
 
 - `CCI_TRIGGER_METHOD=PUSH`

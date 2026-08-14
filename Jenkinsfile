@@ -1,3 +1,13 @@
+def requireRepositoryCredentialsId(String raw) {
+    def credentialsId = (raw ?: '').trim()
+    if (!credentialsId ||
+        credentialsId ==~ /(?i).*(REPLACE|PLACEHOLDER|CHANGE_ME|CHANGEME|TODO).*/ ||
+        !(credentialsId ==~ /^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$/)) {
+        error('Repository SSH credentials are not configured correctly')
+    }
+    return credentialsId
+}
+
 pipeline {
     agent any
 
@@ -14,7 +24,6 @@ pipeline {
 
     environment {
         GIT_REPO_URL = 'git@github.com:lsq1030757028/DeepTutor.git'
-        CREDENTIALS_ID = 'REPLACE_WITH_CODING_SSH_CREDENTIAL_ID'
         PIPELINE_CONTRACT = 'deeptutor-coding-v3-native-push-uat-gate-no-deploy'
     }
 
@@ -23,6 +32,7 @@ pipeline {
             steps {
                 deleteDir()
                 script {
+                    def credentialsId = requireRepositoryCredentialsId(env.DEEPTUTOR_GITHUB_SSH_CREDENTIALS_ID)
                     def triggerMethod = (env.CCI_TRIGGER_METHOD ?: '').trim().toUpperCase()
                     def sourceRef
                     def sourceCommit
@@ -55,20 +65,20 @@ pipeline {
                     env.SOURCE_REF = sourceRef
                     env.SOURCE_COMMIT = sourceCommit
                     env.SOURCE_MODE = sourceMode
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: env.SOURCE_COMMIT]],
+                        userRemoteConfigs: [[
+                            url: env.GIT_REPO_URL,
+                            credentialsId: credentialsId,
+                            refspec: "+${env.SOURCE_REF}:refs/remotes/origin/reviewed"
+                        ]],
+                        extensions: [
+                            [$class: 'CloneOption', noTags: true, shallow: false, honorRefspec: true],
+                            [$class: 'CleanBeforeCheckout']
+                        ]
+                    ])
                 }
-                checkout([
-                    $class: 'GitSCM',
-                    branches: [[name: env.SOURCE_COMMIT]],
-                    userRemoteConfigs: [[
-                        url: env.GIT_REPO_URL,
-                        credentialsId: env.CREDENTIALS_ID,
-                        refspec: "+${env.SOURCE_REF}:refs/remotes/origin/reviewed"
-                    ]],
-                    extensions: [
-                        [$class: 'CloneOption', noTags: true, shallow: false, honorRefspec: true],
-                        [$class: 'CleanBeforeCheckout']
-                    ]
-                ])
                 sh '''
                     set -eu
                     echo "pipeline_contract=$PIPELINE_CONTRACT"
