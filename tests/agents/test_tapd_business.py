@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from deeptutor.agents.test.pipeline import TestJourneyPipeline
-from deeptutor.core.context import UnifiedContext
+from deeptutor.core.context import Attachment, UnifiedContext
 from deeptutor.core.tool_protocol import ToolDefinition, ToolResult
 from deeptutor.services.tapd_business import (
     TapdStory,
@@ -157,9 +157,13 @@ def _pipeline(extra: dict[str, object], *, providers: tuple[str, ...] = ("person
 @pytest.mark.parametrize(
     "message",
     (
+        QUESTION,
+        "我最近还有哪些需求没开始测？",
+        "最近分给我的需求，哪些还没测？",
         "最近有哪些分给我的需求还没开始测？",
         "看看分给我的待测需求",
-        "查一下我最近还没测的需求",
+        "我这边近期还有哪些故事未开始测试？",
+        "最新指派给我的故事里还有哪些未测？",
     ),
 )
 def test_user_level_business_short_phrases_are_recognized(message: str) -> None:
@@ -172,15 +176,30 @@ def test_user_level_business_short_phrases_are_recognized(message: str) -> None:
     (
         "帮我验收登录功能",
         "最近有哪些需求",
-        "需求正文：看看分给我的待测需求应如何展示。",
+        "我听说最近有些需求还没测",
+        "我想讨论最近还没测的需求",
+        "我只是想了解近期还没开始测的故事",
+        "我们讨论一下最新待测需求",
     ),
 )
 def test_business_intent_keeps_ambiguous_and_local_text_negative_controls(message: str) -> None:
-    if message.startswith("需求正文"):
-        context = UnifiedContext(user_message=message)
-        assert TestJourneyPipeline._test_oracle_mode(context) == "local"
-    else:
-        assert is_supported_business_question(message) is False
+    assert is_supported_business_question(message) is False
+    assert TestJourneyPipeline._test_oracle_mode(UnifiedContext(user_message=message)) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "context",
+    (
+        UnifiedContext(user_message="需求正文：我最近还有哪些需求没开始测？"),
+        UnifiedContext(user_message="验收标准：最近分给我的需求不得漏展示。"),
+        UnifiedContext(
+            user_message="我最近还有哪些需求没开始测？",
+            attachments=[Attachment(type="file", filename="requirement.txt")],
+        ),
+    ),
+)
+def test_local_requirement_evidence_wins_over_business_intent(context: UnifiedContext) -> None:
+    assert TestJourneyPipeline._test_oracle_mode(context) == "local"
 
 
 @pytest.mark.asyncio

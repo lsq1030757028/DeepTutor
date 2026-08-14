@@ -42,13 +42,30 @@ def is_supported_business_question(message: str) -> bool:
     if SUPPORTED_BUSINESS_QUESTION in folded:
         return True
     entity = any(cue in folded for cue in ("需求", "故事"))
-    personal = any(cue in folded for cue in ("分配给我", "分给我", "指派给我", "我的", "我"))
+    assignment_cues = ("分配给我", "分给我", "分派给我", "指派给我", "派给我")
+    explicit_assignment = any(cue in folded for cue in assignment_cues)
+    owned_collection = bool(
+        re.search(
+            r"(?:我的|我负责的|我名下的|我手上的)(?:需求|故事)"
+            r"|我(?:这边|这里|手上|名下)?(?:最近|近期|现在|目前)?"
+            r"还?(?:有|剩)(?:哪些|哪几|多少)?(?:个|条)?(?:需求|故事)",
+            folded,
+        )
+    )
+    personal = explicit_assignment or owned_collection
     pending = any(
         cue in folded
-        for cue in ("未开始测试", "还没开始测", "没开始测试", "还没测", "待测", "未测")
+        for cue in (
+            "未开始测试",
+            "还没开始测",
+            "没开始测试",
+            "没开始测",
+            "还没测",
+            "待测",
+            "未测",
+        )
     )
     recency = any(cue in folded for cue in ("最近", "近期", "最新"))
-    explicit_assignment = any(cue in folded for cue in ("分配给我", "分给我", "指派给我"))
     return entity and personal and pending and (recency or explicit_assignment)
 
 
