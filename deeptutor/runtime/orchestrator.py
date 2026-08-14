@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, AsyncIterator
 import uuid
+from contextlib import suppress
+from typing import Any, AsyncIterator
 
 from deeptutor.core.context import UnifiedContext
 from deeptutor.core.stream import StreamEvent, StreamEventType
@@ -101,10 +102,19 @@ class ChatOrchestrator:
         stream = bus.subscribe()
         task = asyncio.create_task(_run())
 
-        async for event in stream:
-            yield event
-
-        await task
+        try:
+            async for event in stream:
+                yield event
+            await task
+        finally:
+            # Consumers can close this async generator before the capability
+            # finishes (for example, when a WebSocket turn is interrupted).
+            # Without structured cleanup the child task survives its owning
+            # stream and its ContextVars may later be finalized elsewhere.
+            if not task.done():
+                task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
         await self._publish_completion(context, cap_name)
 
     async def _publish_completion(self, context: UnifiedContext, cap_name: str) -> None:
