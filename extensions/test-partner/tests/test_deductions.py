@@ -380,22 +380,45 @@ def test_gate_blocks_high_or_critical_npm_vulnerabilities():
 
 
 def test_ci_paths_cover_overlay_and_trusted_journey_bridge():
-    """手动备用工作流不得恢复自动触发，且仍须覆盖完整回归。"""
+    """公共 GitHub CI 必须安全自动触发，并保持完整回归面。"""
     workflow_path = os.path.abspath(os.path.join(
         HERE, "..", "..", ".github", "workflows", "test-partner.yml"
     ))
     with open(workflow_path, encoding="utf-8") as fh:
         workflow = fh.read()
-    assert re.search(r"(?m)^on:\s*\n\s+workflow_dispatch:\s*$", workflow)
-    assert not re.search(r"(?m)^\s{2}(push|pull_request):\s*$", workflow)
-    assert "run: pytest -q --junitxml=" in workflow
+    trigger = workflow.split("permissions:", maxsplit=1)[0]
+    assert "pull_request:" in trigger
+    assert "push:" in trigger
+    assert "branches:\n      - main" in trigger
+    assert "workflow_dispatch:" in trigger
+    assert "pull_request_target:" not in trigger
+    assert "permissions:\n  contents: read" in workflow
+    assert "runs-on: ubuntu-latest" in workflow
+    assert "self-hosted" not in workflow.lower()
+    assert "secrets." not in workflow
+    assert '-k "not test_ui_track_real_browser"' in workflow
+    assert "tests/test_journey_exec.py::test_ui_track_real_browser" in workflow
 
     host_workflow_path = os.path.abspath(os.path.join(
         HERE, "..", "..", ".github", "workflows", "tests.yml"
     ))
     with open(host_workflow_path, encoding="utf-8") as fh:
         host_workflow = fh.read()
-    assert re.search(r"(?m)^on:\s*\n\s+workflow_dispatch:\s*$", host_workflow)
-    assert not re.search(r"(?m)^\s{2}(push|pull_request):\s*$", host_workflow)
-    assert "npm run test:node" in host_workflow
-    assert "pytest -q tests deeptutor/learning/tests" in host_workflow
+    host_trigger = host_workflow.split("permissions:", maxsplit=1)[0]
+    assert "pull_request:" in host_trigger
+    assert "push:" in host_trigger
+    assert "branches:\n      - main" in host_trigger
+    assert "workflow_dispatch:" in host_trigger
+    assert "pull_request_target:" not in host_trigger
+    assert "permissions:\n  contents: read" in host_workflow
+    assert "runs-on: ubuntu-latest" in host_workflow
+    assert "self-hosted" not in host_workflow.lower()
+    assert "secrets." not in host_workflow
+    for command in (
+        "python -m pytest -q tests deeptutor/learning/tests",
+        "npm run test:node",
+        "npm run i18n:parity",
+        "npm run build",
+        "npm run perf:check",
+    ):
+        assert command in host_workflow
