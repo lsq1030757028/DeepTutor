@@ -1,119 +1,101 @@
-name: test-partner
+name: DeepTutor Test Partner CI
 
-# 我们这条线的回归基线闸（决策 0008 六）。
-#
-# 为什么必须单独有一个：上游 `tests.yml` 带路径过滤
-# （`deeptutor/**` `web/**` `tests/**` `requirements/**` …），`extensions/**` 不在其中。
-# 实证：本仓 PR#1 只动 `.github/` 与 `extensions/`，显示 `no checks reported`。
-# 不补这一个，0008 六的「不绿不合」对我们自己的代码就是一句空话。
-#
-# 硬约束：本工作流**不引用任何 secret**——CI 必须在零凭据条件下跑通。
-
-# 额度纪律（2026-08-07 立，起因见下）：私有仓的 Actions 分钟数是有限的公共资源，
-# 用完了整个「不绿不合」就地失效——2026-08-07 实际发生过一次：两个仓所有 run
-# 秒失败、零步骤、分配不到 runner，CI 闸整个哑掉。三条省法都在这个文件里：
-#   ① 文档改动不触发（docs/** 排除）——测试跑了也证明不了文档对不对
-#   ② PR 只跑 ubuntu；windows 留到 push main 才跑（windows runner 按 2 倍分钟计费）
-#   ③ 同分支新推送取消旧 run（concurrency）
-# 平台耦合的信号没丢：它仍然在合入 main 时被 windows 验一遍，只是不再每个 PR 验。
-
-# 2026-08-13：自动 push/PR 已关，避免再烧私有仓 Actions 额度。
-# 必过在 CODING 固定 SHA；本工作流只留手动备用。
 on:
+  pull_request:
+  push:
+    branches:
+      - main
   workflow_dispatch:
-
-# 同一分支上新推送即取消上一次未跑完的 run；main 不取消（要留完整基线证据）
-concurrency:
-  group: test-partner-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
 
-defaults:
-  run:
-    working-directory: extensions/test-partner
+concurrency:
+  group: deeptutor-test-partner-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
 jobs:
-  pytest:
-    # 双平台的理由不变：网关目前常驻用户的 Windows 本机，真二开后要跑进 Linux 容器，
-    # 两边都绿才说明没有平台耦合。变的只是**何时**验 windows——
-    # PR 阶段只跑 ubuntu，合入 main 时补跑 windows。windows runner 按 2 倍分钟计费，
-    # 而平台耦合这种问题在 PR 里发现和在 main 上发现，返工成本差别不大。
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","windows-latest"]') }}
-    runs-on: ${{ matrix.os }}
-    name: test-partner (${{ matrix.os }})
+  regression:
+    name: Test Partner main regression + real browser
+    runs-on: [self-hosted, linux, x64, deeptutor-ci]
 
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: extensions/test-partner/requirements-dev.txt
-
-      - name: 装依赖
-        run: python -m pip install --upgrade pip && pip install -r requirements-dev.txt
-
-      - name: 零凭据自证——凭据文件绝不入库
+      - name: Validate event-bound source SHA
         shell: bash
-        working-directory: .
         run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::SOURCE_SHA must be a full lowercase 40-character SHA"
+            exit 64
+          }
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            test "$SOURCE_SHA" = "${{ github.event.pull_request.head.sha }}"
+          else
+            test "$SOURCE_SHA" = "$GITHUB_SHA"
+          fi
+
+      - name: Checkout exact event source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+
+      - name: Zero-credential tracked-file check
+        shell: bash
+        run: |
+          set -euo pipefail
           tracked=$(git ls-files 'extensions/test-partner/**' \
             | grep -iE '(^|/)(secrets\.env|environments\.json|gateway\.json)$' \
             | grep -v '[.]example$' || true)
-          if [ -n "$tracked" ]; then
-            echo "::error::疑似凭据文件入库：$tracked"; exit 1
+          if [[ -n "$tracked" ]]; then
+            echo "::error::credential-like Test Partner files are tracked: $tracked"
+            exit 1
           fi
-          # HAR 原件含未脱敏凭证，只允许测试夹具那一份（内容是哨兵值，非真凭据）
-          hars=$(git ls-files 'extensions/test-partner/**' | grep -i '[.]har$' \
+          hars=$(git ls-files 'extensions/test-partner/**' \
+            | grep -i '[.]har$' \
             | grep -v '^extensions/test-partner/tests/fixtures/' || true)
-          if [ -n "$hars" ]; then
-            echo "::error::HAR 原件入库：$hars"; exit 1
+          if [[ -n "$hars" ]]; then
+            echo "::error::HAR originals outside tests/fixtures are tracked: $hars"
+            exit 1
           fi
-          echo "OK：无凭据文件，HAR 仅测试夹具"
 
-      - name: 跑全量用例
-        run: pytest -q --junitxml=junit-${{ matrix.os }}.xml
-
-      - name: 执行层四条安全红线自证
-        if: always()
+      - name: Test Partner main regression
         shell: bash
         run: |
-          # 这四条是 execute_cases 的安全契约（server/execute.py 模块 docstring 是权威）。
-          # 光跑全量绿不够——要能指出每条红线各自有用例守着，否则日后被悄悄删掉也看不出来。
-          {
-            echo "### 执行层安全红线 (${{ matrix.os }})"
-            # 关键词对着实际用例名核过，不是照红线文案编的
-            for kw in "① 跨 host 拒发:cross_host or foreign_host or same_host" \
-                      "② 变量残留标 skipped:missing_variable or unresolved or leftover" \
-                      "③ 凭据零回显:scrub or credential or never_appear or not_leaked" \
-                      "④ 无断言不算过:without_assertions or without_request_block or invalid_method"; do
-              label="${kw%%:*}"; expr="${kw#*:}"
-              n=$(pytest --collect-only -q -k "$expr" 2>/dev/null | tail -1)
-              echo "- ${label}: ${n}"
-            done
-          } >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          mkdir -p ci-artifacts
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            python:3.11-bookworm \
+            sh -c 'owner="$(stat -c "%u:%g" /workspace)"; trap "chown -R $owner /workspace" EXIT; git --version; python -m pip install -q -r extensions/test-partner/requirements-dev.txt; cd extensions/test-partner; python -m pytest -q --no-header -k "not test_ui_track_real_browser" --junitxml=/workspace/ci-artifacts/test-partner.xml'
 
-      - name: 分层清点（单元 / 集成）
-        if: always()
+      - name: Test Partner real Chromium regression
         shell: bash
         run: |
-          {
-            echo "### pytest (${{ matrix.os }})"
-            echo "- 全量：$(pytest --collect-only -q 2>/dev/null | tail -1)"
-            echo "- 端到端集成（HAR 到 Postman 全链路）：$(pytest --collect-only -q tests/test_integration_har_to_postman.py 2>/dev/null | tail -1)"
-            echo "- 其余为模块级单元用例"
-          } >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            -e PLAYWRIGHT_BROWSERS_PATH=/tmp/ms-playwright \
+            python:3.11-bookworm \
+            sh -c 'owner="$(stat -c "%u:%g" /workspace)"; trap "chown -R $owner /workspace" EXIT; printf "Acquire::Retries \"5\";\nAcquire::https::Timeout \"30\";\n" > /etc/apt/apt.conf.d/80-ci-retries; sed -i "s|http://deb.debian.org|https://deb.debian.org|g" /etc/apt/sources.list.d/debian.sources; python -m pip install -q -r extensions/test-partner/requirements-dev.txt; n=0; until python -m playwright install --with-deps chromium; do n=$((n+1)); test "$n" -lt 3; done; cd extensions/test-partner; python -m pytest -q --no-header tests/test_journey_exec.py::test_ui_track_real_browser --junitxml=/workspace/ci-artifacts/test-partner-browser.xml'
 
-      - name: 存 junit 报告
+      - name: Upload Test Partner evidence
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: junit-test-partner-${{ matrix.os }}
-          path: extensions/test-partner/junit-${{ matrix.os }}.xml
+          name: deeptutor-test-partner-${{ env.SOURCE_SHA }}
+          path: ci-artifacts/test-partner*.xml
           if-no-files-found: warn
