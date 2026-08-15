@@ -20,7 +20,7 @@ env:
 jobs:
   regression:
     name: root pytest + web UAT gate
-    runs-on: [self-hosted, linux, x64, deeptutor-ci]
+    runs-on: ubuntu-latest
 
     steps:
       - name: Validate event-bound source SHA
