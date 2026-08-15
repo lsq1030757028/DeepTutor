@@ -1,4 +1,4 @@
-"""Static contract for the required self-hosted GitHub Actions gates."""
+"""Static safety contract for DeepTutor public GitHub-hosted CI."""
 
 from pathlib import Path
 
@@ -8,14 +8,14 @@ ROOT_WEB = ROOT / ".github" / "workflows" / "tests.yml"
 TEST_PARTNER = ROOT / ".github" / "workflows" / "test-partner.yml"
 CHECKOUT_SHA = "11d5960a326750d5838078e36cf38b85af677262"
 UPLOAD_ARTIFACT_SHA = "ea165f8d65b6e75b540449e92b4886f43607fa02"
-RUNNER = "runs-on: [self-hosted, linux, x64, deeptutor-ci]"
+PUBLIC_RUNNER = "runs-on: ubuntu-latest"
 
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_both_required_workflows_use_safe_automatic_triggers_and_read_only_permissions():
+def test_both_required_workflows_use_public_runner_safe_automatic_triggers():
     for path in (ROOT_WEB, TEST_PARTNER):
         text = _read(path)
         trigger = text.split("permissions:", maxsplit=1)[0]
@@ -25,12 +25,26 @@ def test_both_required_workflows_use_safe_automatic_triggers_and_read_only_permi
         assert "workflow_dispatch:" in trigger
         assert "pull_request_target:" not in trigger
         assert "permissions:\n  contents: read" in text
-        assert RUNNER in text
+        assert PUBLIC_RUNNER in text
+        assert "self-hosted" not in text.lower()
         assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
-        assert "secrets." not in text
 
 
-def test_checkout_is_bound_to_the_event_full_sha_and_third_party_actions_are_pinned():
+def test_public_ci_does_not_read_business_credentials():
+    text = (_read(ROOT_WEB) + "\n" + _read(TEST_PARTNER)).lower()
+    forbidden = (
+        "secrets.",
+        "tapd_token",
+        "tapd_access_token",
+        "openai_api_key",
+        "anthropic_api_key",
+        "coding_token",
+    )
+    for marker in forbidden:
+        assert marker not in text
+
+
+def test_checkout_is_bound_to_the_event_full_sha_and_actions_are_pinned():
     for path in (ROOT_WEB, TEST_PARTNER):
         text = _read(path)
         assert "github.event.pull_request.head.sha" in text
@@ -71,6 +85,9 @@ def test_required_workflows_have_no_release_or_deployment_side_effects():
         "helm ",
         "rsync ",
         "scp ",
+        "gh release",
+        "npm publish",
+        "twine upload",
     )
     for marker in forbidden:
         assert marker not in text
