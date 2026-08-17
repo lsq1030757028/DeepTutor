@@ -58,7 +58,11 @@ def test_checkout_is_bound_to_the_event_full_sha_and_actions_are_pinned():
         assert "persist-credentials: false" in text
 
 
-def test_deeptutor_gate_keeps_the_historical_regression_surface():
+def test_deeptutor_gate_keeps_the_agreed_regression_surface():
+    # Asserted surface: root pytest, the four web npm scripts, and the two
+    # Test Partner pytest commands. The historical ruff / multi-Python matrix /
+    # windows-latest checks are intentionally NOT asserted here; whether they
+    # rejoin the required gate is a separate pending decision.
     root_web = _read(ROOT_WEB)
     partner = _read(TEST_PARTNER)
 

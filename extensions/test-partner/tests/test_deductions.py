@@ -380,7 +380,8 @@ def test_gate_blocks_high_or_critical_npm_vulnerabilities():
 
 
 def test_ci_paths_cover_overlay_and_trusted_journey_bridge():
-    """公共 GitHub CI 必须安全自动触发，并保持完整回归面。"""
+    """公共 GitHub CI 必须安全自动触发，并保持约定回归面（root pytest + web
+    npm scripts + Test Partner 两条命令；ruff/多 Python 矩阵/windows 不在断言内）。"""
     workflow_path = os.path.abspath(os.path.join(
         HERE, "..", "..", ".github", "workflows", "test-partner.yml"
     ))
