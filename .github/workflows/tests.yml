@@ -21,6 +21,9 @@ jobs:
   regression:
     name: root pytest + web UAT gate
     runs-on: ubuntu-latest
+    # Historical duration ~4 min; 5x margin so a wedged run cannot hold the
+    # required check open until GitHub's 6h default.
+    timeout-minutes: 20
 
     steps:
       - name: Validate event-bound source SHA
