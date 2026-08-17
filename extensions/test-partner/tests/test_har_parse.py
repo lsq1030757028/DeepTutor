@@ -665,3 +665,98 @@ def test_reserved_variable_names_are_advertised_once():
     assert refresh["reserved_variables"] == ["login_username", "login_password",
                                              "auth_token_path"]
     assert refresh["token_variable_default"] == "token"
+
+
+# ── 样例体的 PII 脱敏（BB-424：词表只认凭证，个人信息原样回吐）────────────────
+# 全部是合成数据：号段/证号/邮箱均为构造值，不对应任何真人。
+
+#: 这些原值一个都不许出现在报告任何角落（凭证之外的个人信息口径）
+_PII_RAW = {
+    "身份证": "440305199001011234",
+    "手机号": "13900008888",
+    "邮箱": "zhangsan@example.com",
+    "会话id": "sess-9f8a7b6c5d4e3f2a1b0c",
+    "姓名": "张三丰",
+}
+
+
+def _pii_har(body: dict, mime: str = "application/json") -> dict:
+    text = (json.dumps(body, ensure_ascii=False) if mime == "application/json"
+            else body)
+    return {"log": {"entries": [{
+        "request": {
+            "method": "POST",
+            "url": "https://api.example.com/api/v1/user/save",
+            "headers": [{"name": "Content-Type", "value": mime}],
+            "queryString": [],
+            "postData": {"mimeType": mime, "text": text},
+        },
+        "response": {"status": 200,
+                     "headers": [{"name": "Content-Type",
+                                  "value": "application/json"}],
+                     "content": {"mimeType": "application/json",
+                                 "text": "{\"code\": 0}"}},
+    }]}}
+
+
+def test_json_sample_body_pii_never_reaches_the_report():
+    """BB-424 复现配方：含 idCard/mobile/email/sessionId/realName 的 HAR 走
+    parse_har，整份报告序列化后不得含任何一项原值——不只查 sample.body，
+    查全文，报告落到哪儿（聊天/产物/日志）都不许带。"""
+    har = _pii_har({"realName": _PII_RAW["姓名"],
+                    "idCard": _PII_RAW["身份证"],
+                    "mobile": _PII_RAW["手机号"],
+                    "email": _PII_RAW["邮箱"],
+                    "sessionId": _PII_RAW["会话id"],
+                    "password": "p@ssw0rd123",
+                    "page": 1})
+    rep = har_parse.parse_har_report(har_content=json.dumps(har, ensure_ascii=False))
+    assert rep["ok"] is True
+    text = json.dumps(rep, ensure_ascii=False)
+    for label, raw in _PII_RAW.items():
+        assert raw not in text, f"{label} 原值漏进报告"
+    assert "p@ssw0rd123" not in text        # 凭证掩码不因新增 PII 闸而回退
+
+
+def test_json_sample_body_keeps_shape_placeholders():
+    """脱敏是保形的：字段还在、换成带类型的占位符——模型要看得懂这里是什么。"""
+    har = _pii_har({"idCard": _PII_RAW["身份证"],
+                    "mobile": _PII_RAW["手机号"],
+                    "realName": _PII_RAW["姓名"]})
+    rep = har_parse.parse_har_report(har_content=json.dumps(har, ensure_ascii=False))
+    sample = rep["endpoints"][0]["sample"]
+    raw = sample["body"]["raw"]
+    assert "<身份证>" in raw
+    assert "<手机号>" in raw
+    assert "<姓名>" in raw
+    assert "idCard" in raw and "mobile" in raw      # 键名保留
+
+
+def test_form_urlencoded_sample_body_pii_is_scrubbed_too():
+    """表单体那条分支同样不许回吐 PII 原值（BB-424 的词表缺口不分体型）。"""
+    body = (f"mobile={_PII_RAW['手机号']}&email={_PII_RAW['邮箱']}"
+            f"&idCard={_PII_RAW['身份证']}&page=1")
+    har = _pii_har(body, mime="application/x-www-form-urlencoded")
+    rep = har_parse.parse_har_report(har_content=json.dumps(har, ensure_ascii=False))
+    assert rep["ok"] is True
+    text = json.dumps(rep, ensure_ascii=False)
+    assert _PII_RAW["手机号"] not in text
+    assert _PII_RAW["邮箱"] not in text
+    assert _PII_RAW["身份证"] not in text
+    raw = rep["endpoints"][0]["sample"]["body"]["raw"]
+    assert "page=1" in raw                  # 非敏感值不动
+
+
+def test_report_redaction_section_records_pii_hits():
+    """留痕：脱了多少、什么类型要说得出——静默替换会让读者以为原值还在。"""
+    har = _pii_har({"mobile": _PII_RAW["手机号"], "email": _PII_RAW["邮箱"]})
+    rep = har_parse.parse_har_report(har_content=json.dumps(har, ensure_ascii=False))
+    hits = rep["redaction"]["pii_hits"]
+    assert hits.get("手机号", 0) >= 1
+    assert hits.get("邮箱", 0) >= 1
+
+
+def test_redaction_declaration_mentions_pii_scope():
+    """申明文案与实现覆盖面对齐（BB-424：界面不得宣称超出实现的安全承诺）。"""
+    assert "个人信息" in har_parse.REDACTION_DECLARATION
+    assert "占位" in har_parse.REDACTION_DECLARATION

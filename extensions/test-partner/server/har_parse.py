@@ -37,6 +37,11 @@ from collections import Counter
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+# 样例体的 PII 脱敏复用出境闸那一套词表与占位符（BB-424 收口）。方向安全：
+# `server/generate/` 零反向 import，不成环。刻意不另造第三套规则——BB-424 的
+# 成因就是「第二套脱敏词表漏了一整类」，词表只此一份（server/generate/scrub.py）。
+from server.generate.scrub import scrub_payload
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INBOX_DIR = os.path.join(REPO_ROOT, "inbox")
 
@@ -134,6 +139,11 @@ REDACTION_DECLARATION = (
     "收尾另跑一遍凭证哨兵扫描：凭证键之下整棵子树的字符串、凭证头拆出的单值、"
     "全部 query 值、响应体 token 形值、登录请求体里的账号与口令值——"
     "任一出现在报告文本里即被替换成 <redacted> 并计数。"
+    "样例请求体另过一道个人信息闸（BB-424）：按值形态识别的身份证、手机号、邮箱、"
+    "银行卡、IP、长标识，以及键名像姓名的字段里的中文姓名，替换成 <类型> 保形占位符"
+    "（占位保留字段语义，真值不出报告），命中数记在 redaction.pii_hits。"
+    "该闸按形态识别，抓不到自由文本里的姓名、住址、生日、护照号、车牌等——"
+    "不等于报告已无个人信息，对外分享前仍请自行过目。"
 )
 
 
@@ -560,34 +570,70 @@ def _sample_headers(req: dict) -> list:
     return out
 
 
-def _sample_body(req: dict) -> dict:
-    """样例请求体：JSON 与表单按结构掩码后回吐，其它类型只报类型不报内容。"""
+def _merge_pii_hits(sink: dict | None, hits: dict) -> None:
+    if sink is None:
+        return
+    for label, n in hits.items():
+        sink[label] = sink.get(label, 0) + n
+
+
+def _sample_body(req: dict, pii_hits: dict | None = None,
+                 sensitive: set | None = None,
+                 cred_counter: list | None = None) -> dict:
+    """样例请求体：JSON 与表单按结构掩码后回吐，其它类型只报类型不报内容。
+
+    三道叠加，**顺序有意义**（BB-424）：
+    1. `_mask_credentials` 按凭证键名掩成 <redacted>；
+    2. 凭证哨兵按**精确真值**替换成 <redacted>（`sensitive` 来自
+       `collect_sensitive_values`）——必须跑在形态闸之前，否则手机号/邮箱形的
+       凭证值会先被形态闸改掉一段，哨兵的精确匹配就落空，凭证残段漏出；
+    3. `scrub_payload` 按值形态把个人信息（身份证/手机号/邮箱/长标识/键名像
+       姓名的中文姓名等）换成保形占位符。凭证词表只认凭证是 BB-424 的成因，
+       个人信息这一半交给出境闸的同一套规则，不另造词表。
+    命中数分别汇进 `cred_counter`（凭证）与 `pii_hits`（个人信息）留痕。
+    """
     post = req.get("postData") or {}
     text = post.get("text")
     if not text or not str(text).strip():
         return {"mode": "none"}
+
+    def sentinel(node):
+        if sensitive and cred_counter is not None:
+            return _enforce_redaction(node, sensitive, cred_counter)
+        return node
+
     mime = str(post.get("mimeType") or "").split(";")[0].strip().lower()
     obj = _parse_json(text)
     if isinstance(obj, (dict, list)):
+        cleaned, hits = scrub_payload(sentinel(_mask_credentials(obj)))
+        _merge_pii_hits(pii_hits, hits)
         return _truncate_raw({
             "mode": "raw", "language": "json",
-            "raw": json.dumps(_mask_credentials(obj), ensure_ascii=False),
+            "raw": json.dumps(cleaned, ensure_ascii=False),
         })
     if "x-www-form-urlencoded" in mime:
         pairs = []
         for key, values in parse_qs(str(text), keep_blank_values=True).items():
             for value in values:
-                pairs.append(f"{key}={REDACTED if _key_is_cred(key) else value}")
+                if _key_is_cred(key):
+                    pairs.append(f"{key}={REDACTED}")
+                    continue
+                cleaned, hits = scrub_payload(sentinel(value), str(key))
+                _merge_pii_hits(pii_hits, hits)
+                pairs.append(f"{key}={cleaned}")
         return _truncate_raw({"mode": "raw", "language": "text", "raw": "&".join(pairs)})
     return {"mode": "none",
             "note": f"非 JSON/表单请求体（{mime or '未声明类型'}），不取样"}
 
 
-def build_sample(entry: dict, endpoint: dict, body_budget: list | None = None) -> dict:
+def build_sample(entry: dict, endpoint: dict, body_budget: list | None = None,
+                 pii_hits: dict | None = None, sensitive: set | None = None,
+                 cred_counter: list | None = None) -> dict:
     """从一条 HAR entry 抽请求样例。URL 用**归一化 path**，不带 query 值。
 
     `body_budget` 是全报告共享的请求体字符预算（`[剩余量]` 的可变单元素列表）：
     见底就只留 method/url/头，不再带体——单条截断挡不住「一百条各 600 字符」。
+    `pii_hits` / `sensitive` / `cred_counter` 见 `_sample_body`（三道闸的顺序）。
     """
     req = entry.get("request") or {}
     parts = urlsplit(str(req.get("url", "")))
@@ -598,7 +644,7 @@ def build_sample(entry: dict, endpoint: dict, body_budget: list | None = None) -
     if body_budget is not None and body_budget[0] <= 0:
         body = {"mode": "none", "note": "样例请求体总量已达体积闸，本条不取样"}
     else:
-        body = _sample_body(req)
+        body = _sample_body(req, pii_hits, sensitive, cred_counter)
         if body_budget is not None:
             body_budget[0] -= len(body.get("raw") or "")
     return {
@@ -1104,12 +1150,18 @@ def build_report(har, source: dict, max_endpoints: int = DEFAULT_MAX_ENDPOINTS,
             "summary.domain_count 仍是全部域数。")
     sample_cap = max(0, int(max_samples if max_samples is not None else DEFAULT_MAX_SAMPLES))
     body_budget = [MAX_SAMPLE_BODY_BUDGET]
+    pii_hits: dict = {}
+    # 凭证哨兵集要在取样**之前**算好：样例体内先跑精确值哨兵、再跑 PII 形态闸
+    # （顺序理由见 _sample_body）；收尾对整份报告再跑一遍哨兵兜底，同一个计数器。
+    sensitive = collect_sensitive_values(har) | login_credential_values(har)
+    cred_counter = [0]
     sampled = 0
     for ep in shown:
         ep.pop("business", None)
         entry = ep.pop("_entry", None)
         if include_samples and isinstance(entry, dict) and sampled < sample_cap:
-            ep["sample"] = build_sample(entry, ep, body_budget)
+            ep["sample"] = build_sample(entry, ep, body_budget, pii_hits,
+                                        sensitive, cred_counter)
             sampled += 1
     for ep in endpoints:                # 未展示的端点也把原始 entry 摘干净
         ep.pop("_entry", None)
@@ -1152,15 +1204,17 @@ def build_report(har, source: dict, max_endpoints: int = DEFAULT_MAX_ENDPOINTS,
             "policy": REDACTION_DECLARATION,
             "sensitive_values_detected": 0,
             "enforced_substitutions": 0,
+            # 样例体里按形态识别的个人信息命中数（BB-424 留痕：脱了多少、什么
+            # 类型要说得出，静默替换会让读者以为原值还在）。空 dict = 没命中。
+            "pii_hits": pii_hits,
         },
     }
 
-    # 账号也算凭据（0.8 起它是保留变量 login_username）——凭证词表收不到它，单独补
-    sensitive = collect_sensitive_values(har) | login_credential_values(har)
-    counter = [0]
-    report = _enforce_redaction(report, sensitive, counter)
+    # 账号也算凭据（0.8 起它是保留变量 login_username）——凭证词表收不到它。
+    # 哨兵集与计数器在取样前已建好（样例体内先跑过一遍），这里对整份报告兜底再扫。
+    report = _enforce_redaction(report, sensitive, cred_counter)
     report["redaction"]["sensitive_values_detected"] = len(sensitive)
-    report["redaction"]["enforced_substitutions"] = counter[0]
+    report["redaction"]["enforced_substitutions"] = cred_counter[0]
     return report
 
 
