@@ -103,12 +103,13 @@ def test_non_string_leaves_survive_unchanged():
 # ── 端到端：拿真 HAR 走 build_report，再过闸 ──────────────────────────────
 
 def test_real_report_pii_does_not_survive_the_egress_gate():
-    """这条是本文件的主张：**同一份报告，过闸前 PII 在、过闸后不在。**
+    """这条是本文件的主张：**同一份报告，过闸前后都不许有 PII 出境。**
 
-    过闸前那半是有意断言的——它记录了 2026-08-07 实测的事实
-    （har_parse 的凭证词表不含 PII，BB-424），也让这条闸的必要性不靠口头解释。
-    若哪天 BB-424 修好、上游自己就不吐 PII 了，这一半会转红，
-    那时应当改的是断言而不是删掉这条闸。
+    2026-08-07 首版曾有意断言「过闸前 PII 在」——记录当时的实测事实
+    （har_parse 的凭证词表不含 PII，BB-424），让这条闸的必要性不靠口头解释。
+    2026-08-17 BB-424 收口：har_parse 的样例体自己接了同一套 scrub 词表，
+    上游报告已不吐 PII，按当时预案改断言、闸保留——两道防线是纵深不是冗余：
+    本闸还罩着报告之外直接进 prompt 的素材（用户消息、意图等）。
     """
     from server.har_parse import build_report
 
@@ -128,15 +129,19 @@ def test_real_report_pii_does_not_survive_the_egress_gate():
 
     report = build_report(har, {"kind": "inline"})
     before = json.dumps(report, ensure_ascii=False)
-    # 过闸前：凭证已被 har_parse 掩掉，PII 没有
+    # 过闸前：凭证由 har_parse 既有契约掩掉；PII 自 BB-424 收口起在上游就已换成
+    # 保形占位符（同一套 scrub 词表），报告落到哪儿都不带原值。
     assert "hunter2" not in before, "凭证脱敏是 har_parse 的既有契约，不该退化"
-    assert "440305199001011234" in before, "PII 仍在——这正是本闸存在的理由（BB-424）"
+    assert "440305199001011234" not in before, \
+        "上游样例体的 PII 闸退化了（BB-424 的修复被回退？）"
+    assert report["redaction"]["pii_hits"], "上游脱敏要留痕，不能静默处理"
 
     cleaned, hits = scrub_for_prompt(report)
     after = json.dumps(cleaned, ensure_ascii=False)
     for real in ("440305199001011234", "13800138000", "real.person@corp.com"):
         assert real not in after, f"{real} 出境了"
-    assert hits, "命中数要能说得出，不能静默处理"
+    # 上游已脱过，本闸对这份报告无事可做是正常的；hits 不再强制非空——
+    # 本闸自身的行为由本文件其余用例（直接喂含 PII 素材）单独背书。
 
 
 # ── 序列化 JSON body（BB-465）────────────────────────────────────────────────
