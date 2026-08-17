@@ -61,6 +61,10 @@ import {
   extractAskUserPayload,
   extractMessageSegments,
 } from "./AskUserOptions";
+import {
+  TEST_CAPABILITY,
+  createJourneyAccumulator,
+} from "@/components/test-journey/chat/extract";
 import ContextReferenceTree, {
   type ContextTreeItem,
 } from "./ContextReferenceTree";
@@ -81,6 +85,12 @@ const ResearchOutlineEditor = dynamic(
 );
 const VisualizationViewer = dynamic(
   () => import("@/components/visualize/VisualizationViewer"),
+  { ssr: false },
+);
+// [fork] 「测试」模式的四张富结果卡（交互稿 §6f）。dynamic + ssr:false 与上面
+// 四个同型先例一致：卡片只在选了模式的轮次里出现，不该进普通聊天的首屏包。
+const TestJourneyCards = dynamic(
+  () => import("@/components/test-journey/chat/TestJourneyCards"),
   { ssr: false },
 );
 
@@ -113,6 +123,9 @@ export function getModeBadgeLabel(capability?: string | null): string {
   if (capability === "math_animator") return "Math Animator";
   if (capability === "visualize") return "Visualize";
   if (capability === "mastery_path") return "Mastery Path";
+  // [fork] 第八个分支。徽章形态照抄不加设计（§6b）——10px 浅灰一行，
+  // 用来回溯"这一轮是什么模式"，不是状态指示灯。
+  if (capability === TEST_CAPABILITY) return "测试";
   return capability;
 }
 
@@ -369,6 +382,25 @@ const AssistantMessage = memo(function AssistantMessage({
     return extractVisualizeResult(resultEvent.metadata);
   }, [msg.capability, resultEvent]);
 
+  // [fork] 「测试」模式的四张富卡（§6f）。照 quiz 那条流式路径的路子走
+  // （不依赖 ``resultEvent``，边生成边渲染），但取数是**累加器**不是全量重解析：
+  // ``msg.events`` 每 tick 换新数组，全量重解析是 O(事件数²)。累加器存游标 +
+  // 上次尾事件引用，只解析新增的；对不上就整体重来（重放 / 翻历史）。
+  // 性能上界由 ``web/tests/test-journey-cards.test.ts`` 相对 quiz 基准守着。
+  // 硬红线（§6c）「没选模式时零测试元素」的判断**在累加器里**，不在这行 JSX 上：
+  // 放在那儿它才能被机械断言（``web/tests/test-journey-cards.test.ts`` 单列一条
+  // "普通聊天不出现"），写在组件分支里就只能靠人看。
+  //
+  // 累加器用 ``useState`` 的惰性初始化持有而不是 ``useRef``：ref 在 render 里
+  // 读会被 ``react-hooks/refs`` 判 error，而这里就是要在 render 阶段拿到取数
+  // 结果。同一实例跟着这条消息的组件实例活，语义与 ref 相同。
+  // 重复调用是安全的（StrictMode 会双渲染）：游标已到末尾就直接返回上次的状态。
+  const [journeyAccumulator] = useState(createJourneyAccumulator);
+  const testJourney = useMemo(
+    () => journeyAccumulator.push(msg.capability, msg.events),
+    [journeyAccumulator, msg.capability, msg.events],
+  );
+
   // Detect the ``ask_user`` terminator payload: when the assistant turn
   // ended via the ``ask_user`` tool, this is the question the user is
   // expected to answer next. Render option chips below the message.
@@ -387,6 +419,10 @@ const AssistantMessage = memo(function AssistantMessage({
     !outlinePreview &&
     !mathAnimatorResult &&
     !visualizeResult &&
+    // [fork] 测试轮走自己的分支：正文在上、富卡在下、人闸卡由下面那个
+    // fallback 收尾（§6f 说明研究模式那套「问答卡 + 产物卡 + 说明」是本节的
+    // 结构参照）。不排除掉就会两条路各渲染一次 ask_user 卡。
+    !testJourney &&
     !(quizQuestions && quizQuestions.length > 0);
   const messageSegments = useMemo(
     () => (useInlineAskUserSegments ? extractMessageSegments(msg.events) : []),
@@ -481,6 +517,15 @@ const AssistantMessage = memo(function AssistantMessage({
             turnId={quizTurnId}
             language={language}
           />
+        </>
+      ) : testJourney ? (
+        // [fork] 测试轮（§6f）：正文 → 四张富卡。人闸卡由本 return 末尾那个
+        // fallback 渲染在卡下方——四类人闸卡走的是 ``ask_user``，零新组件。
+        <>
+          {msg.content ? (
+            <AssistantResponse content={msg.content} isStreaming={isStreaming} />
+          ) : null}
+          <TestJourneyCards state={testJourney} />
         </>
       ) : hasInlineAskUser ? (
         // Default chat surface with one or more ask_user calls: render

@@ -377,13 +377,14 @@ class TapdSupervisor:
         if os.name != "nt":
             return
         try:
-            output = subprocess.run(  # noqa: S603,S607 - 固定命令，无用户输入
+            raw_output = subprocess.run(  # noqa: S603,S607 - 固定命令，无用户输入
                 ["netstat", "-ano", "-p", "tcp"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=False, timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             ).stdout
         except (OSError, subprocess.SubprocessError):
             return
+        output = (raw_output or b"").decode("ascii", errors="ignore")
         needle = f":{self.port}"
         for line in output.splitlines():
             parts = line.split()

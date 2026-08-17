@@ -426,6 +426,34 @@ def test_delivery_dir_outside_deliveries_falls_back(tmp_path):
     assert any("不是 deliveries/ 下的既有目录" in n for n in result["normalized"])
 
 
+def test_custom_deliveries_root_admits_user_scoped_delivery_dir(tmp_path):
+    """工作台传每用户批次根时，该根下的批次目录必须被接受。
+
+    没有这个参数之前的实际缺陷：宿主部署里批次在用户 scope 下，
+    落盘闸按 MCP 线的模块常量判定，把合法目录当"任意路径"拒掉，
+    报告 fallback 到镜像内只读路径直接 PermissionError。
+    """
+    user_root = tmp_path / "user-scope" / "deliveries"
+    batch = user_root / "20260808-010000-批次"
+    batch.mkdir(parents=True)
+    result, _ = run([case(request=req())], delivery_dir=str(batch),
+                    deliveries_root=str(user_root))
+    assert result["report_dir"] == str(batch)
+    assert (batch / "execution_report.json").exists()
+
+
+def test_custom_deliveries_root_still_rejects_outside_dirs(tmp_path):
+    """给了自定义根，闸还在：根之外的目录照样拒，fallback 落在该根下。"""
+    user_root = tmp_path / "user-scope" / "deliveries"
+    user_root.mkdir(parents=True)
+    outside = tmp_path / "somewhere-else"
+    outside.mkdir()
+    result, _ = run([case(request=req())], delivery_dir=str(outside),
+                    deliveries_root=str(user_root))
+    assert not (outside / "execution_report.json").exists()
+    assert result["report_dir"].startswith(str(user_root))
+
+
 # ── 入参宽容与入参错误 ──────────────────────────────────────────────────────
 
 def test_base_url_required():

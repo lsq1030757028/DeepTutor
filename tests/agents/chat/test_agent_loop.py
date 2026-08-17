@@ -777,6 +777,74 @@ async def test_ask_user_pause_resumes_and_streams_interleaved(
 
 
 @pytest.mark.asyncio
+async def test_real_ask_user_resume_records_a_journey_write_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from deeptutor.services.test_journey.trust import (
+        TrustedJourneyContext,
+        bind_trusted_journey_context,
+        current_resolved_user_decision,
+    )
+
+    question_id = "journey_write_confirm:b-20260813-abcdef:acs-1"
+    question = {
+        "id": question_id,
+        "prompt": "Authorize selected writes?",
+        "multi_select": True,
+        "allow_free_text": False,
+        "options": [{"label": "case/R1-C001", "description": "sha256:x | write"}],
+    }
+
+    class _PausingRegistry(_Registry):
+        async def execute(self, name: str, **kwargs):
+            if name == "ask_user":
+                return ToolResult(
+                    content="Asked.", success=True, pause_for_user={"questions": [question]}
+                )
+            return await super().execute(name, **kwargs)
+
+    client = _ScriptedChatClient(
+        [
+            [
+                _llm_chunk(
+                    tool_calls=[
+                        {
+                            "id": "ask-call",
+                            "name": "ask_user",
+                            "arguments": json.dumps({"questions": [question]}),
+                        }
+                    ]
+                )
+            ],
+            [_llm_chunk(content="Done")],
+        ]
+    )
+    pipeline = AgenticChatPipeline(language="en")
+    pipeline.registry = _PausingRegistry()
+    monkeypatch.setattr(pipeline, "_compose_enabled_tools", lambda _context: ["ask_user"])
+    monkeypatch.setattr(pipeline, "_build_openai_client", lambda: client)
+
+    async def _waiter():
+        return {"answers": [{"questionId": question_id, "text": "case/R1-C001"}]}
+
+    trusted = TrustedJourneyContext("owner-a", "s1", "t1", "test", "capability")
+    with bind_trusted_journey_context(trusted):
+        await _run(
+            pipeline,
+            UnifiedContext(
+                session_id="s1",
+                user_message="run tests",
+                enabled_tools=["ask_user"],
+                metadata={"wait_for_user_reply": _waiter},
+            ),
+        )
+        decision = current_resolved_user_decision()
+        assert decision is not None
+        assert decision.ask_user_tool_call_id == "ask-call"
+        assert decision.answers[0]["text"] == "case/R1-C001"
+
+
+@pytest.mark.asyncio
 async def test_unresolved_ask_user_halts_turn(monkeypatch: pytest.MonkeyPatch) -> None:
     class _PausingRegistry(_Registry):
         async def execute(self, name: str, **kwargs):

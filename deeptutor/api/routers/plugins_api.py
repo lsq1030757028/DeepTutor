@@ -35,6 +35,15 @@ router = APIRouter()
 ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
 
+def _is_protected_journey_tool(tool: Any) -> bool:
+    try:
+        from deeptutor.services.test_journey.trust import is_test_journey_tool
+
+        return is_test_journey_tool(tool)
+    except Exception:
+        return False
+
+
 def _discover_plugins() -> list[Any]:
     try:
         from deeptutor.plugins.loader import discover_plugins
@@ -88,9 +97,17 @@ async def list_plugins():
             ],
         }
         for definition in tool_registry.get_definitions()
+        if not _is_protected_journey_tool(tool_registry.get(definition.name))
     ]
 
-    capabilities = capability_registry.get_manifests()
+    # Test mode depends on TurnRuntime's interactive ask_user waiter and the
+    # trusted Journey context. The generic Playground owns neither product
+    # contract, so advertising it here would create a second, unsafe entry.
+    capabilities = [
+        manifest
+        for manifest in capability_registry.get_manifests()
+        if manifest.get("name") != "test"
+    ]
 
     plugins = [
         {
@@ -118,6 +135,8 @@ async def execute_tool(tool_name: str, body: ToolExecuteRequest):
     tool = registry.get(tool_name)
     if not tool:
         raise HTTPException(status_code=404, detail=t("api.tool_not_found", name=tool_name))
+    if _is_protected_journey_tool(tool):
+        raise HTTPException(status_code=403, detail="Journey tools require Test mode")
 
     try:
         result = await tool.execute(**body.params)
@@ -211,6 +230,9 @@ async def _execute_stream(tool_name: str, params: dict[str, Any]) -> AsyncGenera
     if not tool:
         yield _sse("error", {"detail": t("api.tool_not_found", name=tool_name)})
         return
+    if _is_protected_journey_tool(tool):
+        yield _sse("error", {"detail": "Journey tools require Test mode", "status_code": 403})
+        return
 
     event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     loop = asyncio.get_running_loop()
@@ -293,6 +315,15 @@ async def _execute_capability_stream(
     body: CapabilityExecuteRequest,
 ) -> AsyncGenerator[str, None]:
     """Run a capability while streaming process logs, trace events, and the result."""
+    if capability_name == "test":
+        yield _sse(
+            "error",
+            {
+                "detail": "Test mode is only available from the authenticated chat workflow",
+                "status_code": 403,
+            },
+        )
+        return
     partner_id = (body.partner_id or "").strip()
     if capability_name == "chat" and partner_id:
         from deeptutor.api.routers.partners import (

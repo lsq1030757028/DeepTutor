@@ -9,6 +9,7 @@ All consumers (CLI, WebSocket, SDK) call the orchestrator.
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import logging
 from typing import Any, AsyncIterator
 import uuid
@@ -74,7 +75,21 @@ class ChatOrchestrator:
 
         async def _run() -> None:
             try:
-                await capability.run(context, bus)
+                from deeptutor.multi_user.paths import current_owner_id
+                from deeptutor.services.test_journey.trust import (
+                    TrustedJourneyContext,
+                    bind_trusted_journey_context,
+                )
+
+                trusted = TrustedJourneyContext(
+                    owner_id=current_owner_id(),
+                    session_id=context.session_id,
+                    turn_id=_turn_id or context.session_id,
+                    capability=cap_name,
+                    surface="capability",
+                )
+                with bind_trusted_journey_context(trusted):
+                    await capability.run(context, bus)
             except Exception as exc:
                 logger.error("Capability %s failed: %s", cap_name, exc, exc_info=True)
                 await bus.error(str(exc), source=cap_name)
@@ -87,10 +102,19 @@ class ChatOrchestrator:
         stream = bus.subscribe()
         task = asyncio.create_task(_run())
 
-        async for event in stream:
-            yield event
-
-        await task
+        try:
+            async for event in stream:
+                yield event
+            await task
+        finally:
+            # Consumers can close this async generator before the capability
+            # finishes (for example, when a WebSocket turn is interrupted).
+            # Without structured cleanup the child task survives its owning
+            # stream and its ContextVars may later be finalized elsewhere.
+            if not task.done():
+                task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
         await self._publish_completion(context, cap_name)
 
     async def _publish_completion(self, context: UnifiedContext, cap_name: str) -> None:
