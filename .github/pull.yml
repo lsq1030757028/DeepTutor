@@ -1,12 +1,15 @@
 version: "1"
+# [fork] 上游此处为 mergeMethod: hardreset。hardreset 需要 force push：
+# 与本仓 main 的分支保护（禁 force push）冲突，且一旦执行会用上游 main
+# 硬覆盖本仓 main 上的私有二开提交。改为 none：Pull app 只开同步 PR，
+# 由人审阅后经受保护的正常合并流程进 main，不做任何破坏性写入。
+# 同步上游时：保留本注释与 mergeMethod: none，其余取上游。
 rules:
   - base: main
     upstream: HKUDS:main
-    mergeMethod: hardreset
-    mergeUnstable: true
+    mergeMethod: none
   - base: dev
     upstream: HKUDS:dev
-    mergeMethod: hardreset
-    mergeUnstable: true
+    mergeMethod: none
 label: ":arrow_heading_down: pull"
 conflictLabel: "merge-conflict"
