@@ -1,0 +1,14 @@
+{
+  "_schema": "tapd-field-baseline/v1",
+  "_note": "过渡基线。正式基线由 tapd-capability 的基线机制提供（其草稿态任务落地前不可用）；接上之后本文件即可退役。status=draft-unconfirmed 的条目必须向用户披露未经核对。",
+  "_supersedes": "agent-lab-runs/deeptutor-p3-uat-3c4b9056/baseline-draft-67600006.json",
+  "workspaces": {
+    "67600006": {
+      "project": "AI陪伴类创新产品线",
+      "status": "draft-unconfirmed",
+      "tester_field": "custom_field_10",
+      "evidence": "Opus 实测 custom_field_10=李森权 命中 64 条；同项目 owner 口径仅 3 条（analysis-chatmode-story-pull-20260818.md §五）",
+      "note": "字段号仅在本 workspace 成立，跨项目不通用。"
+    }
+  }
+}

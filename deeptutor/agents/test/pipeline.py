@@ -41,6 +41,10 @@ from deeptutor.capabilities.protocol import PromptBlock
 from deeptutor.core.context import UnifiedContext
 from deeptutor.core.stream_bus import StreamBus
 from deeptutor.services.prompt.manager import PromptManager
+from deeptutor.services.tapd_field_baseline import (
+    candidate_query_template,
+    render_candidate_shape_block,
+)
 from deeptutor.services.tapd_business import (
     SUPPORTED_BUSINESS_QUESTION,
     TapdStory,
@@ -235,7 +239,22 @@ class TestJourneyPipeline(AgenticChatPipeline):
                 ),
             )
         briefing = render_context_briefing(resolution, language=context.language)
+        if resolution.status == "ready":
+            # 候选清单口径无条件带上（AC1）：探索段的开口五花八门（"拉一下需求"
+            # "有什么要测的"），用一条问句正则去 gate 它，正是 F-3 那场审讯的
+            # 上游成因——匹配不上就当没有这个能力，模型只好回头追问 ID。
+            # 口径块本身只读、无副作用，带上的代价是几行文字。
+            shape = render_candidate_shape_block(
+                candidate_query_template(
+                    resolution.selected_project.id if resolution.selected_project else ""
+                ),
+                language=context.language,
+            )
+            if shape:
+                briefing = f"{briefing}\n\n{shape}"
         if resolution.status == "ready" and is_supported_business_question(context.user_message):
+            # 宿主级可信查询这条更强的通道保持原样：它对那一个固定问题
+            # 已经按「字段基线 → 语义 → 可信查询」失败关闭过一遍。
             business = await self._tapd_business_briefing(context, resolution.selected_project)
             if business:
                 briefing = f"{briefing}\n\n{business}"

@@ -107,3 +107,42 @@ def test_ingest_rejects_high_entropy_requirement_before_creating_batch(
     assert result["ok"] is False
     assert sentinel not in str(result)
     assert not list(tmp_path.rglob("*"))
+
+
+def test_probe_failure_tells_the_user_why_and_which_address(tmp_path, monkeypatch):
+    """探活失败必须带出**地址**与**原因**（AC3）。
+
+    「接入终点不可达」这五个字对用户没有任何行动价值：域名解析不了、被重定向
+    到别的站、协议不对——三种原因三条不同的下一步。糊成一句等于让用户自己猜，
+    F-3 那场会话里「静默卡住」的体感就是这么来的。
+    """
+    from server.journey import ingest as ingest_mod
+    from server.journey import tools as tools_mod
+    from tests.journey_decision_helper import SECRET, trusted_claims
+
+    monkeypatch.setattr(artifacts, "WORKBENCH_ROOT", str(tmp_path))
+    monkeypatch.setattr(artifacts, "BATCHES_ROOT", str(tmp_path / "batches"))
+    monkeypatch.setattr(artifacts, "RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setenv("TEST_JOURNEY_BRIDGE_SECRET", SECRET)
+
+    monkeypatch.setattr(
+        ingest_mod, "probe_target",
+        lambda url, timeout_s=10: {
+            "reachable": False,
+            "error": "GET / 重定向落点越出等价类: http://evil.example.com/",
+        },
+    )
+    with artifacts.trusted_owner("unit-test-owner"):
+        out = tools_mod.ingest(
+            title="探活失败自测", base_url="http://127.0.0.1:9",
+            source_kind="requirement_doc", source_ref="local",
+            requirement_text="需求正文", tier="standard",
+            tier_confirmed_via="test", prepare_requirement_entity=True,
+            owner="unit-test-owner", caller_surface="capability",
+            _bridge_claims=trusted_claims("journey_ingest", owner="unit-test-owner"),
+        )
+    assert not out["ok"]
+    assert out["code"] == "E_INGEST_REJECTED"
+    assert "127.0.0.1:9" in out["message"], f"没说清是哪个地址：{out['message']}"
+    assert "重定向落点越出等价类" in out["message"], f"没说清失败原因：{out['message']}"
+    assert out["detail"]["probe_error"]

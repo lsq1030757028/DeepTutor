@@ -318,7 +318,15 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
                 )
         probe = _ingest.probe_target(validated_target["url"])
         if not probe.get("reachable"):
-            return _err("E_INGEST_REJECTED", "接入终点不可达，未生成用户确认卡。")
+            # 失败原因必须带出去（AC3）。「接入终点不可达」这五个字对用户没有
+            # 任何行动价值：域名解析不了、被重定向到别的站、协议不对——
+            # 三种原因三条不同的下一步，糊成一句等于让用户自己猜。
+            reason = str(probe.get("error") or "").strip() or "未知原因"
+            return _err("E_INGEST_REJECTED",
+                        f"接入终点不可达，未生成用户确认卡。地址={validated_target['url']}；"
+                        f"探活失败原因：{reason}",
+                        detail={"base_url": validated_target["url"],
+                                "probe_error": reason})
         try:
             prepared = decision_auth.issue_intake_context(
                 bridge=_bridge_claims,

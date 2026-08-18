@@ -592,11 +592,18 @@ async def test_explicit_project_can_override_a_revoked_default_for_this_session(
 
 
 def test_test_mode_prompt_has_qa_identity_and_forbids_internal_journey_exposure() -> None:
+    """身份是 QA 不是学习教练；内部实现不外泄。
+
+    ADR-1 之后这个身份的措辞由「测试执行 / QA 助手」改为「测试搭档」——
+    改的是定位（表单收集器 → 边聊边做的搭档），断言跟着改。
+    **两条不变量没动**：不是学习教练、不外泄内部实现，它们才是这条测试守的东西。
+    """
     prompt = journey_system_block("zh")
-    assert "测试执行 / QA 助手" in prompt
+    assert "测试搭档" in prompt
     assert "不是学习教练" in prompt
+    assert "不是表单收集器" in prompt
     assert "不得暴露 `journey_*`" in prompt
-    assert "普通答复" in prompt
+    assert "workspace_id" in prompt
 
 
 @pytest.mark.asyncio
