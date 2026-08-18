@@ -146,3 +146,35 @@ def test_probe_failure_tells_the_user_why_and_which_address(tmp_path, monkeypatc
     assert "127.0.0.1:9" in out["message"], f"没说清是哪个地址：{out['message']}"
     assert "重定向落点越出等价类" in out["message"], f"没说清失败原因：{out['message']}"
     assert out["detail"]["probe_error"]
+
+
+def test_normal_intake_probe_failure_also_says_why(tmp_path, monkeypatch):
+    """常规接入路径（非 prepare）也要说出原因（独立复核阻断项 B1）。
+
+    第一版只修了写需求走的 `prepare_requirement_entity=True` 那条路径，
+    自证件却把 AC3 整条标成「闭合」。常规接入是绝大多数会话实际走的路，
+    它当时仍然只回「接入终点不可达，不建批次」，原因只在 `probe` 里——
+    调用方拿到的是 error 串，会照着它对用户说话。
+
+    只修了两条路径里的一条就宣布闭合，正是「文件存在不等于能力生效」的形态。
+    """
+    monkeypatch.setattr(
+        ingest, "probe_target",
+        lambda url, timeout_s=10: {
+            "reachable": False,
+            "error": "<urlopen error [Errno 11001] getaddrinfo failed>",
+        },
+    )
+    monkeypatch.setattr(artifacts, "WORKBENCH_ROOT", str(tmp_path))
+    monkeypatch.setattr(artifacts, "BATCHES_ROOT", str(tmp_path / "batches"))
+    monkeypatch.setattr(artifacts, "RUNS_ROOT", str(tmp_path / "runs"))
+    with artifacts.trusted_owner("unit-test-owner"):
+        out = ingest.ingest(
+            "常规接入探活失败", "http://no-such-host.invalid",
+            source_kind="requirement_doc", source_ref="local",
+            requirement_text="需求正文", tier="standard",
+            tier_confirmed_via="test", owner="unit-test-owner",
+        )
+    assert not out["ok"]
+    assert "getaddrinfo failed" in out["error"], f"没说清失败原因：{out['error']}"
+    assert "no-such-host.invalid" in out["error"], f"没说清是哪个地址：{out['error']}"

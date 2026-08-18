@@ -165,7 +165,15 @@ def ingest(title: str, base_url: str, *, source_kind: str, source_ref: str,
         }
     if not probe.get("reachable"):
         # 溯源/能力锁：终点不可达 = 不建批次（fail-closed，不能对空气接单）
-        return {"ok": False, "error": "接入终点不可达，不建批次", "probe": probe}
+        #
+        # 原因必须进 error 本身，不能只留在 probe 里（AC3）：调用方拿到的是这个
+        # 串，会照着它对用户说话。域名解析不了 / 被重定向到别的站 / 协议不对——
+        # 三种原因三条不同的下一步，糊成「不可达」三个字等于让用户自己猜。
+        reason = str(probe.get("error") or "").strip() or "未知原因"
+        return {"ok": False,
+                "error": f"接入终点不可达，不建批次。地址={safe_base_url}；"
+                         f"探活失败原因：{reason}",
+                "probe": probe}
     if requirement_text:
         from server.journey.gates import credential_scan
         requirement_scan = credential_scan.scan_text_content(

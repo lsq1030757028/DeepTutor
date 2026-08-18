@@ -302,3 +302,57 @@ def test_missing_prompt_module_degrades_to_empty_not_to_a_fallback_blurb(
 
     monkeypatch.setattr(PromptManager, "load_prompts", _boom)
     assert cap.journey_system_block("zh") == ""
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_prompt_does_not_promise_a_tier_change_tool_that_does_not_exist(language: str) -> None:
+    """提示词不许承诺不存在的能力（独立复核阻断项 B2）。
+
+    批次 1 的重写一度写着「采纳之前用户随时可以改档」——这个提交上**没有任何
+    改档工具**，tier 在 ingest 时就冻进 `intake_profile`。承诺出去的后果不是
+    「工具拒绝」，是模型换条路走：重新 ingest 新建一个批次，留下两份重复产物，
+    正是 AC17 要防的形态。旧版本原本写着的真话（「事后没有改档的工具」）被删掉
+    换成了这句假话，这是最坏的一种改动。
+
+    **改档能力在批次 3 落地。** 那时这条断言要连同提示词一起翻面——
+    翻面是有意的动作，不是顺手把红测改绿。
+    """
+    from deeptutor.agents.test.pipeline import PROMPT_AGENT, PROMPT_MODULE
+
+    prompts = PromptManager().load_prompts(PROMPT_MODULE, PROMPT_AGENT, language=language)
+    body = "\n".join(str(v or "") for v in prompts.values() if isinstance(v, str))
+    truth = "没有改档工具" if language == "zh" else "no change-tier tool"
+    assert truth in body, f"{language} 没有如实说明改档能力还不存在"
+    for lie in (
+        "随时可以改档",
+        "采纳之前改档都来得及",
+        "changing tier is fine any time",
+        "may change tier any time",
+    ):
+        assert lie not in body, f"{language} 承诺了不存在的改档能力：{lie}"
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_prompt_keeps_the_host_trusted_query_guardrails(language: str) -> None:
+    """宿主可信查询那条通道的提示词护栏必须在（独立复核阻断项 B3）。
+
+    服务端那一半（字段基线 → 语义确认 → 可信查询，逐层失败关闭）本次没动，
+    但保护它的提示词那一半一度被整段删掉，同时新纪律又在鼓励模型自己查、
+    自己交叉验证。**闸的两半只剩一半，等于没有闸**：模型会绕过宿主的结果
+    自己拉原始列表，再靠状态名字猜「未开始测试」——而状态名到业务语义的对应
+    是 per-project 的，猜错了它不会知道。
+    """
+    from deeptutor.agents.test.pipeline import PROMPT_AGENT, PROMPT_MODULE
+
+    prompts = PromptManager().load_prompts(PROMPT_MODULE, PROMPT_AGENT, language=language)
+    body = "\n".join(str(v or "") for v in prompts.values() if isinstance(v, str))
+    anchors = (
+        ("宿主已核验", "Trusted TAPD query result"),
+        ("不要转述原始列表", "do not relay a raw list"),
+        ("不要靠状态名字去猜", "never infer"),
+        ("tapd_story_selection", "tapd_story_selection"),
+        ("不在普通答复里复述", "never repeat them in an ordinary reply"),
+    )
+    for zh_anchor, en_anchor in anchors:
+        anchor = zh_anchor if language == "zh" else en_anchor
+        assert anchor in body, f"{language} 丢了宿主可信查询护栏：{anchor}"

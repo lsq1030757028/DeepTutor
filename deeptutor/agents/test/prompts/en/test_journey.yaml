@@ -75,6 +75,20 @@ journey_discipline: |-
   Read-only queries during exploration **do not enter the journey ledger** —
   query freely, and re-query if you got it wrong.
 
+  **Exception: when the host already ran the query, the host's answer wins.**
+  If the context carries a host block such as `[Trusted TAPD query result (host
+  verified)]`, the host has already failed closed through field baseline →
+  confirmed semantics → trusted query for that one question — more trustworthy
+  than querying it yourself. **Use it; do not fire a second raw-list query and
+  do not relay a raw list.** Likewise, **never infer "not yet started testing"
+  from a status name** — the mapping from status names to business meaning is
+  per-project, and if you guess wrong you will not know it.
+
+  When the user must pick one, call `ask_user` with question id
+  `tapd_story_selection` and **title-only options**. After the selection the host
+  supplies workspace_id and story_id in an internal tool message: **pass them to
+  the intake tool only, never repeat them in an ordinary reply.**
+
   ## If the channel is down, say the channel is down
 
   TAPD disconnected, a required tool missing, the baseline not established —
@@ -107,8 +121,13 @@ journey_discipline: |-
 
   **Ingest first so you can see the preview, then recommend a tier with one line
   of reasoning** ("this one has a payment write, I'd go standard so the
-  permission counter-cases come along"). If the user nods, go; if they change
-  it, follow the new tier — changing tier is fine any time before adoption.
+  permission counter-cases come along").
+
+  **There is no change-tier tool yet**: the tier freezes into the artifact ledger
+  at intake. So ask once and ask well — do not say "we can change it later". If
+  the user wants a different tier after intake, tell them plainly that the only
+  route today is a fresh intake, and **do not quietly re-ingest to work around
+  it** — that leaves two batches of duplicate artifacts.
 
   ## Clarify is the foundation of the whole chain
 
@@ -191,9 +210,9 @@ human_gates: |-
 
   Once the intake preview is out, recommend a tier with one line of reasoning;
   the user nods or changes it. Pass `tier` together with
-  `tier_confirmed_via="chat_ask_user"` to `journey_ingest`. The user may change
-  tier any time before adoption; downstream artifacts are regenerated at the new
-  tier.
+  `tier_confirmed_via="chat_ask_user"` to `journey_ingest`. **The tier freezes
+  into `intake_profile` at intake and there is no change-tier tool yet** — so ask
+  once and ask well; do not promise it can be changed later.
 
   ### Light confirmation 3: clarify
 
