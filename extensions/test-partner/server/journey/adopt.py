@@ -29,13 +29,12 @@ def _slugify(text: str) -> str:
 
 
 def _draft_digest(case: dict[str, Any]) -> str:
-    """Digest the business content while excluding draft-only identity fields."""
-    payload = dict(case)
-    payload.pop("draft_id", None)
-    payload.pop("kind", None)
-    for key in ("case_id", "case_version", "source_case_digest", "oracle_digest"):
-        payload.pop(key, None)
-    return digest.sha256_digest(payload)
+    """Digest the business content while excluding draft-only identity fields.
+
+    采纳卡（decision_auth）绑的是同一个摘要，所以原语收在 digest 里共用：
+    两边各算一套的话，卡上披露的内容与冻结的内容会悄悄分家。
+    """
+    return digest.draft_case_digest(case)
 
 
 def _identity_history(batch_id: str) -> tuple[dict[str, dict[str, Any]], set[str]]:

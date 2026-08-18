@@ -17,6 +17,7 @@ import re
 import time
 from typing import Any
 
+from server.journey import digest as _digest
 from server.journey import pw_runtime
 from server.journey.bridge_auth import (
     BRIDGE_SECRET_ENV, MIN_SECRET_BYTES, BridgeClaims, arguments_sha256,
@@ -383,8 +384,143 @@ def verify_requirement_entity_context(
     }
 
 
+# ── 采纳卡（ADR-2：采纳是唯一硬闸，授权强度不低于它替代的写确认）──────────────
+
+
+def adopt_draft_digest(case: dict[str, Any]) -> str:
+    """草稿用例的业务内容摘要（排除草稿身份字段）。
+
+    与 ``adopt._draft_digest`` 同源：采纳时 ``case_id`` / ``source_case_digest``
+    才分配，所以采纳卡只能绑草稿态的内容摘要。内容不变则摘要不变，
+    内容一改摘要就变——这是「改用例后旧采纳授权自动失效」的锚。
+    """
+    return _digest.draft_case_digest(case)
+
+
+def adopt_set_digest(cases: list[dict[str, Any]]) -> str:
+    """整个采纳集（含只读用例）的内容摘要，按 draft_id 排序后取。
+
+    只绑写用例不够：非写用例改了同样会让「用户看到的采纳集」与实际冻结的不是
+    同一份。卡 id 绑这个摘要，任一条草稿内容变动都会让旧令牌对不上。
+    """
+    rows = sorted(
+        (str(case.get("draft_id") or ""), adopt_draft_digest(case))
+        for case in cases
+    )
+    return _digest.sha256_digest([{"draft_id": d, "digest": g} for d, g in rows])
+
+
+def adopt_selection(case_draft: dict[str, Any],
+                    selected_draft_ids: list[str]) -> list[dict[str, Any]]:
+    """按 draft_id 取出被采纳的草稿，保持调用方给的顺序、去重。"""
+    by_id = {str(case.get("draft_id") or ""): case
+             for case in case_draft.get("cases") or []}
+    picked: list[dict[str, Any]] = []
+    for draft_id in dict.fromkeys(str(d or "") for d in selected_draft_ids or []):
+        case = by_id.get(draft_id)
+        if case is None:
+            raise DecisionAuthError(
+                f"采纳集里的 draft_id 不在当前草稿中：{draft_id}")
+        picked.append(case)
+    if not picked:
+        raise DecisionAuthError("采纳集为空，没有可确认的内容")
+    return picked
+
+
+def expected_adopt_question(batch_id: str, case_draft: dict[str, Any],
+                            selected_draft_ids: list[str]) -> dict[str, Any]:
+    """采纳卡的可信契约：id 绑整个采纳集，选项绑逐条写用例的内容摘要。
+
+    与 ``expected_question``（写确认卡）结构同形，故沿用同一套信封校验：
+    模型没法自己编一张卡出来——它编的任何一个字段都会与这里重算的不一致。
+    """
+    selection = adopt_selection(case_draft, selected_draft_ids)
+    write_cases = [case for case in selection if _effective_write(case)]
+    if len(write_cases) > MAX_WRITE_CHOICES:
+        raise DecisionAuthError(
+            f"adoption card supports at most {MAX_WRITE_CHOICES} write cases")
+
+    def description(case: dict[str, Any]) -> str:
+        value = f"{adopt_draft_digest(case)} | {case.get('title', '')}"
+        return value if len(value) <= 200 else value[:200].rstrip() + "…"
+
+    set_digest = adopt_set_digest(selection)
+    return {
+        "id": f"journey_adopt:{batch_id}:{set_digest.removeprefix('sha256:')[:24]}",
+        "multi_select": True,
+        "allow_free_text": False,
+        "options": [
+            {
+                "label": str(case.get("draft_id") or ""),
+                "description": description(case),
+            }
+            for case in write_cases
+        ],
+    }
+
+
+def verify_adopt_context(
+    token: Any,
+    *,
+    bridge: BridgeClaims,
+    batch_id: str,
+    case_draft: dict[str, Any],
+    selected_draft_ids: list[str],
+    authorized_write_draft_ids: list[str],
+    arguments: dict[str, Any],
+    now: int | None = None,
+) -> dict[str, Any]:
+    """校验采纳决定。返回值带 ``write_digests``，供派生写授权事件落账。"""
+    payload = _verify_envelope(
+        token, bridge=bridge, tool="journey_adopt",
+        arguments=arguments, now=now)
+
+    ask_user = payload.get("ask_user")
+    questions = ask_user.get("questions") if isinstance(ask_user, dict) else None
+    if not isinstance(questions, list) or len(questions) != 1             or not isinstance(questions[0], dict):
+        raise DecisionAuthError("adoption decision must come from one structured question")
+    actual = questions[0]
+    expected = expected_adopt_question(batch_id, case_draft, selected_draft_ids)
+    for field in ("id", "multi_select", "allow_free_text", "options"):
+        if actual.get(field) != expected[field]:
+            raise DecisionAuthError(
+                f"adoption card {field} does not match the current draft set")
+    answers = payload.get("answers")
+    if not isinstance(answers, list) or len(answers) != 1 or not isinstance(answers[0], dict):
+        raise DecisionAuthError("adoption decision answer is missing")
+    if str(answers[0].get("questionId") or "") != expected["id"]:
+        raise DecisionAuthError("adoption decision answer belongs to another question")
+    selected = [part.strip() for part in str(answers[0].get("text") or "").split(",")
+                if part.strip()]
+    allowed = {option["label"] for option in expected["options"]}
+    if len(selected) != len(set(selected)) or any(d not in allowed for d in selected):
+        raise DecisionAuthError("adoption decision contains an invalid or duplicate choice")
+    requested = list(dict.fromkeys(str(d or "") for d in authorized_write_draft_ids or []))
+    if set(selected) != set(requested):
+        raise DecisionAuthError(
+            "tool authorized_write_draft_ids do not match the user's selected choices")
+    by_id = {str(case.get("draft_id") or ""): case
+             for case in adopt_selection(case_draft, selected_draft_ids)}
+    return {
+        "jti": payload["_verified_jti"],
+        "ask_user_tool_call_id": payload["_verified_tool_call_id"],
+        "selected": selected,
+        "declined": sorted(allowed - set(selected)),
+        "write_digests": {d: adopt_draft_digest(by_id[d]) for d in selected},
+        "adopt_set_digest": adopt_set_digest(adopt_selection(
+            case_draft, selected_draft_ids)),
+        "question_id": expected["id"],
+        "owner": bridge.owner,
+        "session": bridge.session,
+        "turn": bridge.turn,
+    }
+
+
 __all__ = [
-    "DecisionAuthError", "expected_question", "expected_requirement_entity_question",
-    "intake_base_arguments", "issue_intake_context", "verify_decision_context",
-    "verify_intake_context", "verify_requirement_entity_context",
+    "DecisionAuthError", "adopt_draft_digest", "adopt_selection", "adopt_set_digest",
+    "expected_adopt_question", "expected_question",
+    "expected_requirement_entity_question",
+    "intake_base_arguments", "issue_intake_context", "verify_adopt_context",
+    "verify_decision_context", "verify_intake_context",
+    "verify_requirement_entity_context",
 ]

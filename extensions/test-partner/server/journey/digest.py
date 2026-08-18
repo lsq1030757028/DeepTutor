@@ -146,6 +146,12 @@ def text_digest(text: str) -> str:
 
 ORACLE_FIELDS = ("expected", "failure_criteria", "assertion_layers")
 DIGEST_FIELDS = ("source_case_digest", "oracle_digest")
+# 草稿态的身份字段：case_id/source_case_digest 在采纳时刻才分配，
+# 所以草稿内容摘要必须把它们连同 draft-only 字段一起排除。
+DRAFT_IDENTITY_FIELDS = (
+    "draft_id", "kind", "case_id", "case_version",
+    "source_case_digest", "oracle_digest",
+)
 
 
 def oracle_digest(case: dict[str, Any]) -> str:
@@ -157,6 +163,13 @@ def oracle_digest(case: dict[str, Any]) -> str:
 def source_case_digest(case: dict[str, Any]) -> str:
     """source_case_digest：case 全部字段，排除两个 digest 字段本身。"""
     payload = {k: v for k, v in case.items() if k not in DIGEST_FIELDS}
+    return sha256_digest(payload)
+
+
+def draft_case_digest(case: dict[str, Any]) -> str:
+    """草稿用例的业务内容摘要：全部字段，排除草稿身份字段。"""
+    payload = {k: v for k, v in dict(case).items()
+               if k not in DRAFT_IDENTITY_FIELDS}
     return sha256_digest(payload)
 
 
