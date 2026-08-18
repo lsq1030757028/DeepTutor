@@ -15,6 +15,7 @@ import json
 import os
 import re
 import time
+from collections.abc import Collection
 from typing import Any
 
 from server.journey import digest as _digest
@@ -468,12 +469,26 @@ def verify_adopt_context(
     selected_draft_ids: list[str],
     authorized_write_draft_ids: list[str],
     arguments: dict[str, Any],
+    consumed_jtis: Collection[str],
     now: int | None = None,
 ) -> dict[str, Any]:
-    """校验采纳决定。返回值带 ``write_digests``，供派生写授权事件落账。"""
+    """校验采纳决定。返回值带 ``write_digests``，供派生写授权事件落账。
+
+    ``consumed_jtis`` **是必填的**：调用方要把账本里已消费过的决定 jti 全给进来。
+
+    做成必填而不是可选，是因为第一版把防重放留在了调用方——`tools.write_confirm`
+    那段查账本的代码得由采纳工具自己照抄一遍。「照抄一遍」这种约定不是闸：
+    忘了抄，校验照样返回成功，重放照样通过，而且没有任何东西会变红。
+    独立复核实测确认过这一点（同一令牌原文连验两次都被接受）。
+    参数必填以后，忘了传是 TypeError，在接线那一刻就炸。
+    """
     payload = _verify_envelope(
         token, bridge=bridge, tool="journey_adopt",
         arguments=arguments, now=now)
+    # 顺序有意：先验签再查重放。反过来的话，一份签名都不对的垃圾令牌会因为
+    # jti 撞车而报「已消费过」，把「伪造」说成「重放」——成对错误态混说。
+    if str(payload["_verified_jti"]) in {str(j or "") for j in consumed_jtis or ()}:
+        raise DecisionAuthError("这份用户决定已经消费过，不能重复授权。")
 
     ask_user = payload.get("ask_user")
     questions = ask_user.get("questions") if isinstance(ask_user, dict) else None

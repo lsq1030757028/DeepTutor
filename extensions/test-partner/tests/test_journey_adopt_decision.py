@@ -79,7 +79,7 @@ def _adopt_arguments(bid, selected, authorized):
 
 def adopt_decision(bid, case_draft, selected, authorized, *, question=None,
                    owner=TRUSTED_OWNER, session="session-test", turn="turn-test",
-                   jti=None, now=None):
+                   jti=None, now=None, answer_ids=None):
     """测试专用签发方：模拟 DT 侧真实完成的 ask_user 采纳卡。"""
     issued = int(time.time()) if now is None else int(now)
     card = question or decision_auth.expected_adopt_question(
@@ -93,7 +93,8 @@ def adopt_decision(bid, case_draft, selected, authorized, *, question=None,
             _adopt_arguments(bid, selected, authorized)),
         "ask_user_tool_call_id": "ask-adopt-test-1",
         "ask_user": {"intro": None, "questions": [card]},
-        "answers": [{"questionId": card["id"], "text": ",".join(authorized)}],
+        "answers": [{"questionId": card["id"],
+                     "text": ",".join(authorized if answer_ids is None else answer_ids)}],
         "resolved_at": issued, "iat": issued, "exp": issued + 300,
         "jti": jti or secrets.token_urlsafe(16),
     }
@@ -105,11 +106,12 @@ def adopt_decision(bid, case_draft, selected, authorized, *, question=None,
     return token, claims
 
 
-def _verify(bid, case_draft, selected, authorized, token, claims):
+def _verify(bid, case_draft, selected, authorized, token, claims, *, consumed=()):
     return decision_auth.verify_adopt_context(
         token, bridge=claims, batch_id=bid, case_draft=case_draft,
         selected_draft_ids=selected, authorized_write_draft_ids=authorized,
-        arguments=_adopt_arguments(bid, selected, authorized))
+        arguments=_adopt_arguments(bid, selected, authorized),
+        consumed_jtis=consumed)
 
 
 # ── 承载：令牌真的绑住了写用例摘要集 ────────────────────────────────────────
@@ -206,11 +208,18 @@ def test_tool_arguments_must_match_the_signed_decision(store, target):
 # ── 注入 2：重放 ────────────────────────────────────────────────────────────
 
 
-def test_injection_replayed_jti_is_detectable_from_the_ledger(store, target):
-    """同一份决定消费两次：jti 在账本里查得到，第二次必须判红。
+def test_injection_replayed_jti_is_rejected_not_merely_detectable(store, target):
+    """同一份决定消费两次：第二次必须**判红**。
 
-    这里复现的是 `tools.write_confirm` 那段 jti 台账检查（tools.py:596 同形）：
-    采纳工具在批次 4 接线时照抄同一段——本测试证明它拿得到 jti 且可判重。
+    ## 这条测试的第一版是错的，值得留个记号
+
+    第一版只断言「jti 能在账本里查得到」，然后把校验的**成功返回值**拿去断言——
+    它证明的是「可检出」，不是「被拒绝」。独立复核用探针实测：那时同一令牌原文
+    连验两次都被接受。判据写着「三种注入均被拒」，实际只落了两种。
+
+    「可检出」与「被拒绝」之间隔着一段调用方必须自己写的代码。把那段代码留给
+    调用方，就等于把闸留给约定——忘了写，校验照样返回成功，没有任何东西会变红。
+    所以 `consumed_jtis` 现在是必填参数，忘了传是 TypeError。
     """
     bid = _draft_batch(store, target, [api_case("dw1", writes=True)])
     draft = _load_draft(bid)
@@ -222,13 +231,60 @@ def test_injection_replayed_jti_is_detectable_from_the_ledger(store, target):
     with artifacts.trusted_owner(TRUSTED_OWNER):
         artifacts.append_event(bid, {"type": "adopt_confirm",
                                      "decision_jti": first["jti"]})
-
-    token2, claims2 = adopt_decision(bid, draft, selected, ["dw1"], jti=fixed_jti)
-    second = _verify(bid, draft, selected, ["dw1"], token2, claims2)
     prior = {str(e.get("decision_jti") or "")
              for e in artifacts.read_events(bid)
              if e.get("type") == "adopt_confirm"}
-    assert second["jti"] in prior, "重放的决定必须能在账本里被认出来"
+    assert first["jti"] in prior
+
+    # 重新签一份同 jti 的令牌（模型换个签发时刻重放同一个决定）
+    token2, claims2 = adopt_decision(bid, draft, selected, ["dw1"], jti=fixed_jti)
+    with pytest.raises(decision_auth.DecisionAuthError, match="已经消费过"):
+        _verify(bid, draft, selected, ["dw1"], token2, claims2, consumed=prior)
+
+    # 原样重放同一份令牌，同样判红
+    with pytest.raises(decision_auth.DecisionAuthError, match="已经消费过"):
+        _verify(bid, draft, selected, ["dw1"], token, claims, consumed=prior)
+
+
+def test_replay_check_cannot_be_forgotten_by_the_caller(store, target):
+    """`consumed_jtis` 必填：忘了传就炸在接线那一刻，而不是安静放行。"""
+    bid = _draft_batch(store, target, [api_case("dw1", writes=True)])
+    draft = _load_draft(bid)
+    token, claims = adopt_decision(bid, draft, ["dw1"], ["dw1"])
+    with pytest.raises(TypeError):
+        decision_auth.verify_adopt_context(
+            token, bridge=claims, batch_id=bid, case_draft=draft,
+            selected_draft_ids=["dw1"], authorized_write_draft_ids=["dw1"],
+            arguments=_adopt_arguments(bid, ["dw1"], ["dw1"]))
+
+
+def test_a_forged_token_reads_as_forged_not_as_replayed(store, target):
+    """成对错误态分开说：签名不对的令牌不许因为 jti 撞车被报成「重放」。"""
+    bid = _draft_batch(store, target, [api_case("dw1", writes=True)])
+    draft = _load_draft(bid)
+    token, claims = adopt_decision(bid, draft, ["dw1"], ["dw1"], jti="collide")
+    forged = token.rsplit(".", 1)[0] + "." + _b64(b"not-a-real-signature")
+    with pytest.raises(decision_auth.DecisionAuthError, match="signature does not match"):
+        _verify(bid, draft, ["dw1"], ["dw1"], forged, claims, consumed={"collide"})
+
+
+def test_answer_that_disagrees_with_the_tool_arguments_is_rejected(store, target):
+    """守卫 `set(selected) != set(requested)` 的直接覆盖。
+
+    复核指出这道守卫在第一版里零覆盖：`authorized_write_draft_ids` 本身在
+    `arguments` 里，所以「越权多授」总是先被 `args_sha256` 挡下，走不到这一行。
+    这里让**签名里的答案**与**工具参数**各说各话（参数说只授 dw1，卡上答的是
+    dw1+dw2），才真正打到它——将来这行被误删会有测试变红。
+    """
+    cases = [api_case("dw1", writes=True), api_case("dw2", writes=True)]
+    bid = _draft_batch(store, target, cases)
+    draft = _load_draft(bid)
+    selected = ["dw1", "dw2"]
+    token, claims = adopt_decision(bid, draft, selected, ["dw1"],
+                                   answer_ids=["dw1", "dw2"])
+    with pytest.raises(decision_auth.DecisionAuthError,
+                       match="do not match the user's selected choices"):
+        _verify(bid, draft, selected, ["dw1"], token, claims)
 
 
 def test_decision_from_another_session_is_rejected(store, target):
@@ -253,7 +309,8 @@ def test_expired_decision_is_rejected(store, target):
         decision_auth.verify_adopt_context(
             token, bridge=claims, batch_id=bid, case_draft=draft,
             selected_draft_ids=selected, authorized_write_draft_ids=["dw1"],
-            arguments=_adopt_arguments(bid, selected, ["dw1"]))
+            arguments=_adopt_arguments(bid, selected, ["dw1"]),
+            consumed_jtis=())
 
 
 # ── 注入 3：改用例后复用旧授权 ──────────────────────────────────────────────
