@@ -257,3 +257,54 @@ def test_superseding_a_ghost_batch_is_rejected(store, target):
                           tier="standard", tier_confirmed_via="test",
                           supersedes="no-such-batch", owner=OWNER)
     assert not r["ok"] and r.get("code") == "E_NO_BATCH"
+
+
+def test_change_tier_works_through_the_production_mcp_wrapper(store, target, monkeypatch):
+    """独立复核 B-1 的回归钉：MCP 包装必须把 owner 传下去。
+
+    main.py 其余 journey 包装都传了 `owner=trusted.owner`，唯独 change_tier
+    初版漏了——`@_requires_trusted_owner` 从 kwargs 取 owner，于是生产面
+    每一次调用都返回 E_OWNER_REQUIRED，而 call-surface 对拍与 15 条直调
+    tools 层的测试全是绿的。**工具面契约必须有一条真穿 main 包装的测试。**
+    """
+    import server.main as main_mod
+    from tests.journey_decision_helper import trusted_claims
+
+    bid = _clarified(store, target)
+    claims = trusted_claims("journey_change_tier", owner=OWNER)
+    monkeypatch.setattr(main_mod, "_journey_bridge",
+                        lambda tool, ctx, args: claims)
+    out = main_mod.journey_change_tier(batch_id=bid, new_tier="deep",
+                                       via="chat_ask_user")
+    assert out["ok"], out
+    assert out["tier"] == "deep"
+
+
+def test_partial_event_write_is_truncated_back_on_rollback(store, target, monkeypatch):
+    """独立复核 A-1：事件行写一半失败 → 回退把 events.jsonl 裁回原长。
+
+    不裁的话残行会让该批次此后所有 read_events 抛 JSONDecodeError——
+    一次失败的改档不该把整本账变成废纸。
+    """
+    bid = _clarified(store, target)
+    events_path = os.path.join(artifacts.batch_dir(bid), "events.jsonl")
+    with open(events_path, "rb") as fh:
+        before = fh.read()
+
+    real_append = artifacts.append_event
+
+    def partial_write_then_die(batch_id, event, **kwargs):
+        if event.get("type") == "tier_confirm":
+            with open(events_path, "ab") as fh:
+                fh.write(b'{"type": "tier_conf')   # OS 级部分写
+            raise OSError("disk full mid-line (injected)")
+        return real_append(batch_id, event, **kwargs)
+
+    import unittest.mock as mock
+    with mock.patch.object(artifacts, "append_event", partial_write_then_die):
+        out = _retier(bid)
+    assert not out["ok"] and out["code"] == "E_RETIER_ROLLED_BACK"
+    with open(events_path, "rb") as fh:
+        assert fh.read() == before, "残行没被裁掉"
+    # 账本仍可读
+    assert isinstance(artifacts.read_events(bid), list)

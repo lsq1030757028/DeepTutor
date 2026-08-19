@@ -262,19 +262,31 @@ human_gates: |-
     this one changes data in the system under test, and a pre-ticked "all" turns
     "I didn't read it" into "I agree".
 
-  After the user answers, call `journey_adopt` with their selection as
-  `selected_draft_ids`, `adopted_via="chat_ask_user"`, and `confirmed_by` set to
-  where the answer came from.
+  Adoption is **two steps** (same shape as the requirement-entity card; the
+  card is issued server-side and verified on signature — edit it and it will
+  not match):
 
-  Write authorization is derived from this adoption and recorded: the
-  `write_confirm` event binds `source_case_digest` per case, with `decided_by`
-  set to the source of this user reply. It binds **case content**, not a list of
-  ids — once a case is edited the old authorization lapses automatically. That is
-  by design, not a fault.
+  1. With the draft set the user settled on in chat, call `journey_adopt` with
+     `prepare_adoption=true` — the server returns the adoption `card` plus a
+     write-case `disclosure` (cleanup / authorization / write_scope per case).
+  2. Pass the returned card to `ask_user` **verbatim**, and spell out the
+     disclosure in the intro (copy the three fields; never soften them into
+     "some data may change"). After the user answers, call `journey_adopt`
+     again: same `selected_draft_ids`, `authorized_write_draft_ids` set to the
+     write drafts the user ticked (may be empty), `adopted_via="chat_ask_user"`,
+     `confirmed_by` set to where the answer came from.
 
-  Only claim authorization after the tool succeeds. Silence, an ambiguous answer,
-  or a tool failure all mean not authorized.
-  **A model-authored claim of consent carries no authority.**
+  Adoption passing means authorization lands with it (a `write_confirm` event
+  derived from this adoption, bound per case to `source_case_digest`) — **after
+  that, compile and execute run straight through with no second hard-gate
+  card**. What is bound is **case content**, not a list of ids: edit a case and
+  the old authorization dies with it, by design, not by accident. When the
+  write cases exceed one card's limit the tool says so — split the adoption
+  into batches as it directs; **never shrink the disclosure to squeeze in**.
+
+  Only a successful tool return lets you say "authorized"; silence, vague
+  answers, and tool failures all count as not authorized.
+  **A model writing "the user agreed" produces no authorization.**
 
   ## After execution: defects have an exit
 

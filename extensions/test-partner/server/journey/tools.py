@@ -474,13 +474,60 @@ def draft_cases(*, batch_id: str, cases: list[dict[str, Any]],
                warnings=r.get("warnings"))
 
 
+def _adopt_write_disclosure(case_draft: dict[str, Any],
+                            selected_draft_ids: list[str]) -> list[dict[str, Any]]:
+    """采纳卡的披露源（AC6）：写用例逐条给 cleanup/authorization/write_scope。
+
+    三个字段是 `schema.py` S29 强制的（写用例必填非空），这里只是原样取出——
+    披露的是 schema 已经保证存在的真话，不是现编的安抚文案。
+    """
+    rows: list[dict[str, Any]] = []
+    for case in decision_auth.adopt_selection(case_draft, selected_draft_ids):
+        side = case.get("side_effects") or {}
+        writes = _runtime.effective_write_risk({
+            "writes": bool(side.get("writes")),
+            "actions": list((((case.get("automation") or {}).get("recipe") or {}
+                              ).get("actions")) or []),
+        })
+        if not writes:
+            continue
+        rows.append({
+            "draft_id": str(case.get("draft_id") or ""),
+            "title": str(case.get("title") or ""),
+            "cleanup": str(side.get("cleanup") or ""),
+            "authorization": str(side.get("authorization") or ""),
+            "write_scope": str(side.get("write_scope") or ""),
+        })
+    return rows
+
+
 @_requires_trusted_owner
 @_serializes_batch_mutation
 def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "",
           adopted_via: str = "workbench_selection", confirmed_by: str = "",
           idempotency_key: str = "", skip_drift_check: bool = False,
+          prepare_adoption: bool = False,
+          authorized_write_draft_ids: list[str] | None = None,
+          decision_context: str = "", _bridge_claims: Any = None,
+          _decision_arguments: dict[str, Any] | None = None,
           caller_surface: str = "unknown", root: str | None = None) -> dict[str, Any]:
     """采纳冻结。**漂移闸在这里**（ADR-M2-02 第 6 条）。
+
+    ## 采纳是唯一硬闸（ADR-2，批次 4 接线）
+
+    经可信桥接（capability 面）调用时，采纳必须携带经 `decision_auth` 验签的
+    用户决定：卡 id 绑整个采纳集的内容摘要、选项逐条绑写用例摘要、jti 防重放。
+    两步走（与 `journey_ingest` 的实体卡同构）：
+
+    1. `prepare_adoption=true`：服务端算出可信采纳卡 + 写用例披露
+       （AC6 三字段），不落任何产物；
+    2. 模型把卡传给 `ask_user`，用户答复后带 `decision_context` +
+       `authorized_write_draft_ids` 再调一次——采纳与写授权一口气落账，
+       派生 `write_confirm` 事件（`via="adopt_card"`，2026-08-19 Delta 裁决
+       复用事件类型），`execute_run.write_authorization` 的取数口零改动。
+
+    工作台面（无桥接声明）保持既有语义：采纳照旧、写授权走独立
+    `journey_write_confirm` 卡——两面各自完整，互不留洞。
 
     `skip_drift_check` 只服务单测与离线回放，**不是给调用方的绕过开关**：
     MCP 工具面不暴露这个参数（见 `main.py` 的签名），所以从 DT 侧调不到它。
@@ -488,6 +535,77 @@ def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "
     blocked = _guarded(batch_id, "adopt", caller_surface, root)
     if blocked:
         return blocked
+
+    requested_writes = list(dict.fromkeys(
+        str(d or "") for d in authorized_write_draft_ids or []))
+    capability_call = _bridge_claims is not None
+    owner = _batch_partition(batch_id, root)
+    if capability_call and str(getattr(_bridge_claims, "owner", "") or "") != owner:
+        return _err("E_USER_DECISION_INVALID", "用户决定不属于当前批次 owner。")
+
+    if prepare_adoption:
+        if not capability_call:
+            return _err("E_USER_DECISION_REQUIRED",
+                        "采纳卡准备只在可信 Test 会话内进行。")
+        if not artifacts.has_artifact(batch_id, "case_draft", root=root):
+            return _err("E_NO_CASE_DRAFT",
+                        "还没有用例草稿，采纳无从谈起——先起草再采纳。")
+        case_draft = artifacts.load_artifact(batch_id, "case_draft", root=root)
+        try:
+            card = decision_auth.expected_adopt_question(
+                batch_id, case_draft, selected_draft_ids)
+        except decision_auth.DecisionAuthError as exc:
+            if "at most" in str(exc):
+                return _err("E_TOO_MANY_WRITE_CASES",
+                            f"{exc}。一张采纳卡最多披露 "
+                            f"{decision_auth.MAX_WRITE_CHOICES} 条写用例——"
+                            "把采纳集拆成多个批次分别采纳，不要减少披露。")
+            return _err("E_USER_DECISION_INVALID", str(exc))
+        return _ok("NEEDS_GATE", needs_gate="adoption", card=card,
+                   disclosure=_adopt_write_disclosure(
+                       case_draft, selected_draft_ids))
+
+    decision: dict[str, Any] = {}
+    if capability_call:
+        if not artifacts.has_artifact(batch_id, "case_draft", root=root):
+            return _err("E_NO_CASE_DRAFT",
+                        "还没有用例草稿，采纳无从谈起——先起草再采纳。")
+        case_draft = artifacts.load_artifact(batch_id, "case_draft", root=root)
+        consumed = {
+            str(event.get("decision_jti") or "")
+            for event in artifacts.read_events(batch_id, root=root)
+            if str(event.get("decision_jti") or "")
+        }
+        try:
+            decision = decision_auth.verify_adopt_context(
+                decision_context,
+                bridge=_bridge_claims,
+                batch_id=batch_id,
+                case_draft=case_draft,
+                selected_draft_ids=list(selected_draft_ids or []),
+                authorized_write_draft_ids=requested_writes,
+                arguments=_decision_arguments or {
+                    "batch_id": batch_id,
+                    "selected_draft_ids": list(selected_draft_ids or []),
+                    "caseset_slug": caseset_slug,
+                    "adopted_via": adopted_via,
+                    "confirmed_by": confirmed_by,
+                    "idempotency_key": idempotency_key,
+                    "prepare_adoption": False,
+                    "authorized_write_draft_ids": list(
+                        authorized_write_draft_ids or []),
+                },
+                consumed_jtis=consumed,
+            )
+        except decision_auth.DecisionAuthError as exc:
+            code = "E_USER_DECISION_REPLAYED" if "已经消费过" in str(exc) \
+                else "E_USER_DECISION_INVALID"
+            return _err(code, str(exc))
+    elif requested_writes or decision_context:
+        return _err("E_USER_DECISION_REQUIRED",
+                    "写授权派生只在可信 Test 会话的采纳卡上进行；"
+                    "工作台面的写授权走独立写确认卡。")
+
     if not skip_drift_check:
         drift = oracle.check_drift(batch_id, root=root)
         if not drift["ok"]:
@@ -499,11 +617,18 @@ def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "
                   batch_id, "case_draft", root),
               "intake_profile_sha256": _artifact_state_digest(
                   batch_id, "intake_profile", root)}
-    owner = _batch_partition(batch_id, root)
     with idempotency.reservation(batch_id, "adopt", params, idempotency_key,
                                  owner=owner, root=root) as (key, replay):
         if replay is not None:
             return replay
+        if decision:
+            # 原子重放闸（owner 级台账，与 ingest 实体决定同一机制）：
+            # 事件扫描是软层，这里才是硬层——两层都在，忘一层另一层兜底。
+            if not artifacts.consume_owner_decision_receipt(
+                    owner=owner, decision_jti=decision["jti"],
+                    gate="adopt", root=root):
+                return _err("E_USER_DECISION_REPLAYED",
+                            "这份采纳决定已经消费过，不能重复采纳。")
         r = _adopt.adopt(batch_id, selected_draft_ids=selected_draft_ids,
                          caseset_slug=caseset_slug, adopted_via=adopted_via,
                          confirmed_by=confirmed_by)
@@ -513,10 +638,53 @@ def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "
         # older bundle after re-adoption would let execute run the previous
         # cases while the UI shows the new frozen set.
         artifacts.invalidate_bundle(batch_id, owner=owner, root=root)
+        derived_event: dict[str, Any] | None = None
+        if decision:
+            # 派生写授权：草稿摘要 → 冻结摘要的换算靠 adopt_confirm 事件里的
+            # identities（draft_id → case_id），digests 取冻结态
+            # source_case_digest——write_authorization 逐条比对的就是它。
+            caseset = artifacts.load_artifact(
+                batch_id, "approved_caseset", owner=owner, root=root)
+            by_case_id = {c.get("case_id"): c for c in caseset.get("cases") or []}
+            draft_to_case: dict[str, str] = {}
+            for event in reversed(artifacts.read_events(
+                    batch_id, owner=owner, root=root)):
+                if event.get("type") == "adopt_confirm" and \
+                        event.get("caseset_id") == caseset.get("caseset_id"):
+                    for identity in event.get("identities") or []:
+                        draft_to_case[str(identity.get("draft_id") or "")] = \
+                            str(identity.get("case_id") or "")
+                    break
+            authorized_case_ids = [draft_to_case[d] for d in requested_writes
+                                   if d in draft_to_case]
+            write_case_ids = {
+                cid for cid, c in by_case_id.items()
+                if _runtime.effective_write_risk({
+                    "writes": bool((c.get("side_effects") or {}).get("writes")),
+                    "actions": list((((c.get("automation") or {}).get("recipe")
+                                      or {}).get("actions")) or []),
+                })}
+            derived_event = artifacts.append_event(batch_id, {
+                "type": "write_confirm",
+                "caseset_id": caseset.get("caseset_id", ""),
+                "case_ids": authorized_case_ids,
+                "digests": {cid: by_case_id[cid].get("source_case_digest", "")
+                            for cid in authorized_case_ids},
+                "decision": ("authorized_some" if authorized_case_ids
+                             else "authorized_none"),
+                "declined": sorted(write_case_ids - set(authorized_case_ids)),
+                "via": "adopt_card",
+                "decided_by": confirmed_by,
+                "decision_jti": decision["jti"],
+                "decision_session": decision["session"],
+                "decision_turn": decision["turn"],
+                "ask_user_tool_call_id": decision["ask_user_tool_call_id"],
+            }, root=root)
         out = _ok(approved_caseset=r.get("approved_caseset"),
-                  cases_gate=r.get("cases_gate"), idempotency_key=key)
+                  cases_gate=r.get("cases_gate"), idempotency_key=key,
+                  write_authorization=derived_event)
         idempotency.record(batch_id, key, "adopt", out, params=params,
-                           owner=owner, root=root)
+                          owner=owner, root=root)
         return out
 
 

@@ -187,6 +187,11 @@ class MCPToolAdapter(BaseTool):
                 needs_user_decision = self._original_name == "journey_write_confirm" or (
                     self._original_name == "journey_ingest"
                     and bool(str(effective.get("requirement_entity") or "").strip())
+                ) or (
+                    # 采纳是唯一硬闸（ADR-2）：非 prepare 的采纳调用必须携带
+                    # 本轮真实完成的 ask_user 决定，服务端照卡验签。
+                    self._original_name == "journey_adopt"
+                    and not bool(effective.get("prepare_adoption"))
                 )
                 if needs_user_decision:
                     decision = current_resolved_user_decision()

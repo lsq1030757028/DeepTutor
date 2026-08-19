@@ -148,28 +148,35 @@ def test_every_declared_prompt_section_reaches_the_rendered_prompt(language: str
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
-def test_all_four_human_gates_are_prompted(language: str) -> None:
-    """四道人闸（定档 / 澄清 / 采纳流转 / 写确认）都得在提示词里。
+def test_the_gate_topology_is_prompted(language: str) -> None:
+    """闸拓扑（三轻确认 + 唯一硬闸采纳）都得在提示词里。
 
-    锚全部选**接口身份**不选人话：四道闸各自对应的工具参数与事件类型。
-    文案怎么润色它们都在；真消失了说明闸接的东西变了，那时候就该红。
+    **批次 4 有意更新**：原名 test_all_four_human_gates_are_prompted，断旧的
+    「四道人闸」拓扑。ADR-2 之后写确认不再以独立卡存在（写授权由采纳派生，
+    `via="adopt_card"`），`decided_by` 不再是聊天旅程的参数——锚随闸的真实
+    拓扑走，不随历史命名走。更新的判据本身经 0036 号决定同步过 Queenie 线。
+
+    锚仍全部选**接口身份**不选人话：文案怎么润色它们都在；
+    真消失了说明闸接的东西变了，那时候就该红。
     """
     from deeptutor.agents.test.pipeline import PROMPT_AGENT, PROMPT_MODULE
 
     prompts = PromptManager().load_prompts(PROMPT_MODULE, PROMPT_AGENT, language=language)
     gates = str(prompts.get("human_gates") or "")
     for anchor in (
-        "ask_user",  # 四道闸统一的提问机制
-        "tier_confirmed_via",  # 闸 1 定档：ingest 的记录参数
+        "ask_user",  # 各闸统一的提问机制
+        "tier_confirmed_via",  # 轻确认 定档：ingest 的记录参数
         "requirement_entity_confirmed_via",  # 写实体也必须由用户落定
-        "journey_ingest",  # 闸 1 的时序：定档必须在接入之前
-        "clarifications",  # 闸 2 澄清：clarify 的记录参数
-        "confirmed_by",  # 闸 3 采纳：adopt 的记录参数
-        "decided_by",  # 闸 4 写确认：write_confirm 的记录参数
-        "write_confirm",  # 闸 4 写确认：events.jsonl 里的事件类型
-        "source_case_digest",  # 闸 4 决定收据绑定用例内容而非裸 id
+        "journey_ingest",  # 实体卡两步走的载体
+        "clarifications",  # 轻确认 澄清：clarify 的记录参数
+        "prepare_adoption",  # 硬闸 采纳：两步走的 prepare 参数
+        "disclosure",  # 硬闸 采纳：AC6 写用例披露
+        "authorized_write_draft_ids",  # 硬闸 采纳：用户勾选的写授权集
+        "confirmed_by",  # 硬闸 采纳：adopt 的记录参数
+        "write_confirm",  # 派生写授权：events.jsonl 里的事件类型（复用）
+        "source_case_digest",  # 决定收据绑定用例内容而非裸 id
     ):
-        assert anchor in gates, f"{language} 人闸段缺锚 {anchor}"
+        assert anchor in gates, f"{language} 闸拓扑段缺锚 {anchor}"
 
 
 def test_journey_prompt_loads_in_both_languages() -> None:

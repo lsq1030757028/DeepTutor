@@ -40,6 +40,9 @@ def _artifact_file_snapshot(bid: str, root: str | None) -> dict[str, bytes | Non
     for kind in INVALIDATED_KINDS:
         paths.append(artifacts.artifact_path(bid, kind, root=root))
         paths.extend(os.path.join(d, name) for name in _DERIVED_FILES[kind])
+    # events.jsonl 也进快照（独立复核 A-1）：事件行若被 OS 级部分写截断，
+    # 之后该批次所有 read_events 都会炸——回退必须把它裁回原长。
+    paths.append(os.path.join(d, "events.jsonl"))
     snapshot: dict[str, bytes | None] = {}
     for path in paths:
         if os.path.isfile(path):

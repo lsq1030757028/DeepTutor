@@ -202,12 +202,22 @@ human_gates: |-
   - **默认一条写用例都不勾。**其余环节拍错了最多重来一遍，这一类拍错了会改动
     被测系统的数据，默认全选等于把"我没细看"变成"我同意"。
 
-  用户答复后调 `journey_adopt`，`selected_draft_ids` 用用户选中的编号，
-  `adopted_via="chat_ask_user"`，`confirmed_by` 填用户答复来源。
+  采纳走**两步**（与需求实体卡同构，卡由服务端签发，改了就对不上）：
 
-  写授权由这次采纳派生落账：`write_confirm` 事件逐条绑 `source_case_digest`，
-  `decided_by` 记这次用户答复的来源。绑的是**用例内容**不是一串 id——
-  用例改过之后旧授权自动失效，这是设计如此，不是故障。
+  1. 先按用户在聊天里确定的草稿集合，调 `journey_adopt` 且
+     `prepare_adoption=true`——服务端返回一张采纳卡（`card`）和写用例披露
+     （`disclosure`，逐条含 cleanup / authorization / write_scope）。
+  2. 把返回的 card **原样**传给 `ask_user`，intro 里把披露逐条讲清楚
+     （照抄三字段，不要润色成"会有少量数据变更"）。用户答复后再调
+     `journey_adopt`：`selected_draft_ids` 不变、
+     `authorized_write_draft_ids` 用用户勾选的写用例草稿号（可为空）、
+     `adopted_via="chat_ask_user"`、`confirmed_by` 填用户答复来源。
+
+  采纳通过 = 授权一并落账（`write_confirm` 事件由采纳派生，逐条绑
+  `source_case_digest`）——**之后编译、执行一口气跑完，不再弹第二张硬闸卡**。
+  绑的是**用例内容**不是一串 id：用例改过之后旧授权自动失效，
+  这是设计如此，不是故障。写用例超过一张卡的上限时工具会明说，
+  按它说的拆批次采纳，**不要减少披露来硬塞**。
 
   只有工具返回成功才可以说"已授权"；用户沉默、回答含糊或工具失败都按未授权处理。
   **模型自己写"用户已同意"不产生授权。**

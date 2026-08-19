@@ -449,16 +449,25 @@ def journey_change_tier(batch_id: str, new_tier: str, via: str = "",
         return trusted
     from server.journey import tools as _jt
     return _jt.change_tier(batch_id=batch_id, new_tier=new_tier, via=via,
-                           caller_surface=trusted.surface)
+                           owner=trusted.owner, caller_surface=trusted.surface)
 
 
 @mcp.tool()
 def journey_adopt(batch_id: str, selected_draft_ids: Any, caseset_slug: str = "",
                   adopted_via: str = "workbench_selection", confirmed_by: str = "",
                   idempotency_key: str = "",
+                  prepare_adoption: bool = False,
+                  authorized_write_draft_ids: Any = None,
                   owner: str = "", caller_surface: str = "unknown",
+                  decision_context: str = "",
                   bridge_context: str = "") -> dict[str, Any]:
-    """采纳冻结：落 ApprovedCaseSet（双 digest）。
+    """采纳冻结：落 ApprovedCaseSet（双 digest）。**唯一硬闸（ADR-2）。**
+
+    两步走：先 `prepare_adoption=true` 拿服务端算好的采纳卡与写用例披露
+    （原样传给 ask_user，卡内容由服务端验签，改了就对不上）；用户答复后带
+    `authorized_write_draft_ids`（用户勾选的写用例草稿号）再调一次——
+    采纳落账 + 写授权由本次采纳派生（write_confirm 事件，via="adopt_card"），
+    之后编译执行一口气跑完，不再有第二张硬闸卡。
 
     采纳前会**重取一次 TAPD 原文比对 digest**：需求变了就阻断采纳并要求重新澄清。
     这条没有绕过开关。
@@ -467,6 +476,8 @@ def journey_adopt(batch_id: str, selected_draft_ids: Any, caseset_slug: str = ""
         "batch_id": batch_id, "selected_draft_ids": selected_draft_ids,
         "caseset_slug": caseset_slug, "adopted_via": adopted_via,
         "confirmed_by": confirmed_by, "idempotency_key": idempotency_key,
+        "prepare_adoption": prepare_adoption,
+        "authorized_write_draft_ids": authorized_write_draft_ids,
     }
     trusted = _journey_bridge("journey_adopt", bridge_context, effective)
     if isinstance(trusted, dict):
@@ -475,6 +486,12 @@ def journey_adopt(batch_id: str, selected_draft_ids: Any, caseset_slug: str = ""
     return _jt.adopt(batch_id=batch_id, selected_draft_ids=selected_draft_ids or [],
                      caseset_slug=caseset_slug, adopted_via=adopted_via,
                      confirmed_by=confirmed_by, idempotency_key=idempotency_key,
+                     prepare_adoption=prepare_adoption,
+                     authorized_write_draft_ids=list(
+                         authorized_write_draft_ids or []),
+                     decision_context=decision_context,
+                     _decision_arguments=effective,
+                     _bridge_claims=trusted,
                      owner=trusted.owner, caller_surface=trusted.surface)
 
 
