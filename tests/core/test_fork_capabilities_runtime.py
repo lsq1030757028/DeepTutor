@@ -356,3 +356,27 @@ def test_prompt_keeps_the_host_trusted_query_guardrails(language: str) -> None:
     for zh_anchor, en_anchor in anchors:
         anchor = zh_anchor if language == "zh" else en_anchor
         assert anchor in body, f"{language} 丢了宿主可信查询护栏：{anchor}"
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_prompt_carries_the_clarify_convergence_discipline(language: str) -> None:
+    """澄清收敛纪律的提示词锚（批次 2 / AC10-AC14 提示词半边）。
+
+    判断在模型 ⇒ 收敛纪律必须真的进 system prompt。锚各钉一句不同的话：
+    攒批一轮（AC14）、查疑点账本（AC11）、skip 语义（AC13）、
+    clarifications 结构（AC10 的落账形状）、非法答案不原样重问（AC12）。
+    """
+    from deeptutor.agents.test.pipeline import PROMPT_AGENT, PROMPT_MODULE
+
+    prompts = PromptManager().load_prompts(PROMPT_MODULE, PROMPT_AGENT, language=language)
+    body = "\n".join(str(v or "") for v in prompts.values() if isinstance(v, str))
+    anchors = (
+        ("整个澄清段用户最多作答一轮", "answering round"),
+        ("question_ledger", "question_ledger"),
+        ("skipped=true", "skipped=true"),
+        ("question_id", "question_id"),
+        ("不要把同一个问题原样再问一遍", "Do not re-ask the same question verbatim"),
+    )
+    for zh_anchor, en_anchor in anchors:
+        anchor = zh_anchor if language == "zh" else en_anchor
+        assert anchor in body, f"{language} 丢了澄清收敛锚：{anchor}"

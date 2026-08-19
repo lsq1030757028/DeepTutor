@@ -38,8 +38,19 @@ def analyze(batch_id: str, *, example_map: list[dict[str, Any]],
         problems.extend("downstream_gate: " + p for p in gate["problems"])
     if problems:
         return {"ok": False, "problems": problems, "downstream_gate": gate}
+    # AC10 的「分析产物含 assumed 标记且可数」：从 business_frame 的疑点账本
+    # 机械投影，不吃模型自报——模型说"我标了 assumed"不算数，账本里有才算。
+    ledger = frame.get("question_ledger") or {}
+    assumed_clarifications = sorted(
+        qid for qid, row in ledger.items()
+        if isinstance(row, dict) and row.get("status") == "assumed")
+    skipped_clarifications = sorted(
+        qid for qid, row in ledger.items()
+        if isinstance(row, dict) and row.get("skipped"))
     analysis = artifacts.save_artifact(batch_id, "test_analysis", {
         "example_map": example_map,
+        "assumed_clarifications": assumed_clarifications,
+        "skipped_clarifications": skipped_clarifications,
         "analysis_md": analysis_md,
         "downstream_gate": {"verdict": gate["verdict"], "stats": gate["stats"],
                             "warns": gate["warns"]},

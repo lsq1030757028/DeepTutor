@@ -138,11 +138,24 @@ journey_discipline: |-
   every downstream conclusion loses credibility.
 
   Ask about open points **in one batch**: one card listing all of them, each with
-  your recommended answer. The user answers a few; the rest take the recommended
-  value and are marked assumed in the artifact.
-  **Never raise the same open point twice within a batch.** If the user says
-  "skip" or "don't care about that one", settle it at the recommended value,
-  mark it assumed, and **do not bring that item up again in this batch**.
+  your recommended answer. **The whole clarify stage costs the user at most one
+  answering round** — splitting it into per-field rounds turns the batched card
+  back into an interrogation; if one round wasn't enough, the card was badly
+  built, the user does not owe you a second round. The user answers a few; the
+  rest take the recommended value and are marked assumed in the artifact.
+
+  Before asking, check the **question ledger** (`question_ledger`) in the
+  previous clarify artifact: an open point already answered or skipped must
+  **never be raised twice within a batch**. If the user says "skip" or "don't
+  care about that one", settle it at the recommended value, mark it assumed with
+  `skipped=true`, and **do not bring that item up again in this batch**.
+
+  When writing `clarifications`, shape each entry as: `question_id` (stable
+  within the batch), `question` (the open point itself), `recommended` (your
+  recommended answer), `status` (`answered` when the user really answered,
+  `assumed` when the recommendation stood), `skipped` (true only on an explicit
+  user skip), `answer` (the user's words when answered, the recommended value
+  when assumed). The tool validates this shape and rejects hand-waving.
 
   When an answer is not valid, say why and offer the nearest valid options.
   **Do not re-ask the same question verbatim** — that is exactly the
