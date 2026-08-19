@@ -67,9 +67,21 @@ _CURRENT_CONTEXT: ContextVar[TrustedJourneyContext | None] = ContextVar(
 _CURRENT_DECISION: ContextVar[ResolvedUserDecision | None] = ContextVar(
     "deeptutor_resolved_user_decision", default=None
 )
+#: Card ids whose ``ask_user`` answer is a Journey gate decision worth keeping.
+#: One entry per gate that verifies a signed decision on the test-partner side —
+#: adding a gate there without adding it here deadlocks that gate in production
+#: (the reply is discarded, so the tool call can never present a decision).
 _TRUSTED_DECISION_QUESTION_PREFIXES = (
     "journey_write_confirm:",
     "journey_requirement_entity",
+    # ADR-2: adoption is the single hard gate; its card is the decision.
+    "journey_adopt:",
+)
+
+#: Tools allowed to carry a signed user decision. Kept in lockstep with the
+#: prefixes above and with ``manager.py``'s ``needs_user_decision`` branches.
+_USER_DECISION_TOOLS = frozenset(
+    {"journey_ingest", "journey_write_confirm", "journey_adopt"}
 )
 
 
@@ -241,7 +253,7 @@ def sign_user_decision_context(
     if not decision.ask_user_tool_call_id or not decision.jti:
         raise JourneyTrustError("resolved user decision is incomplete")
     tool_name = str(tool or "").strip()
-    if tool_name not in {"journey_ingest", "journey_write_confirm"}:
+    if tool_name not in _USER_DECISION_TOOLS:
         raise JourneyTrustError("unsupported Journey user-decision tool")
     payload: dict[str, Any] = {
         "v": 1,

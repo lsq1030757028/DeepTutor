@@ -276,3 +276,109 @@ def test_workbench_cannot_smuggle_write_authorization_without_a_decision(store, 
                           caller_surface="workbench")
     assert not out["ok"] and out["code"] == "E_USER_DECISION_REQUIRED"
     assert not artifacts.has_artifact(bid, "approved_caseset")
+
+
+# ── 穿 main 包装的两步链（B-2 回归钉）────────────────────────────────────
+
+
+def _main_effective(bid, selected, authorized, *, slug, prepare):
+    """main.journey_adopt 自己组的签名绑定对象，逐键照抄（顺序无关，值必须同）。"""
+    return {
+        "batch_id": bid, "selected_draft_ids": list(selected),
+        "caseset_slug": slug, "adopted_via": "chat_ask_user",
+        "confirmed_by": "chat", "idempotency_key": "",
+        "prepare_adoption": prepare,
+        "authorized_write_draft_ids": list(authorized),
+    }
+
+
+def _sign_card(card, effective, authorized):
+    """按 DT 侧 `sign_user_decision_context` 的形状签这张卡（同一信封同一算法）。"""
+    issued = int(time.time())
+    payload = {
+        "v": 1, "iss": "deeptutor", "aud": decision_auth.AUDIENCE,
+        "owner_id": OWNER, "session_id": "session-test", "turn_id": "turn-test",
+        "capability": "test", "surface": "capability",
+        "tool": "journey_adopt",
+        "args_sha256": bridge_auth.arguments_sha256(effective),
+        "ask_user_tool_call_id": "ask-adopt-main-1",
+        "ask_user": {"intro": None, "questions": [card]},
+        "answers": [{"questionId": card["id"], "text": ",".join(authorized)}],
+        "resolved_at": issued, "iat": issued, "exp": issued + 300,
+        "jti": secrets.token_urlsafe(16),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                     separators=(",", ":")).encode("utf-8")
+    return f"{_b64(raw)}.{_b64(hmac.new(SECRET.encode(), raw, hashlib.sha256).digest())}"
+
+
+def test_the_two_step_adoption_runs_through_the_production_mcp_wrapper(
+        store, target, monkeypatch):
+    """B-2 的回归钉：整条采纳链必须穿 `main.journey_adopt` 走通一次。
+
+    B-2 的形态：工具层 13 条接线测试全绿、DT 侧闸分支也写对了，中间
+    `trust.py` 两张白名单没扩容——采纳卡答复记不下、记下也签不出，生产聊天面
+    的确认步 100% 失败，而两侧绿测一条都不红。这是同形复发第三次（批次 1
+    提示词承诺了不存在的工具 → 批次 3 main 包装漏传 owner → 本次 DT 侧白名单
+    没扩容），共同点是「链条上有一环没接，两端各自的绿抓不到」。
+
+    这条测试守的是 test-partner 这一端：prepare 拿卡 → 照 DT 的签发形状签这张
+    卡 → 确认步通过 → 派生写授权被运行时认账。**它不覆盖 DT 侧那一环**——
+    「答复能不能被记下、能不能签出」在 `tests/services/mcp/test_journey_trust.py`
+    钉（DT venv），两端各钉一半，中间那道缝就是 B-2 待过的地方。
+    """
+    import server.main as main_mod
+
+    bid = _draft_batch(store, target, [api_case("dw1", writes=True),
+                                       api_case("dr1")])
+    claims = trusted_claims("journey_adopt", owner=OWNER)
+    monkeypatch.setattr(main_mod, "_journey_bridge",
+                        lambda tool, ctx, args: claims)
+
+    # 第一步：prepare 拿服务端签发的卡（不带任何用户决定，闸自身不死锁）
+    prepared = main_mod.journey_adopt(
+        batch_id=bid, selected_draft_ids=["dw1", "dr1"],
+        caseset_slug="mainwire", adopted_via="chat_ask_user",
+        confirmed_by="chat", prepare_adoption=True,
+        authorized_write_draft_ids=[])
+    assert prepared["ok"] and prepared["needs_gate"] == "adoption", prepared
+    card = prepared["card"]
+    assert card["id"].startswith(f"journey_adopt:{bid}:")
+    assert not artifacts.has_artifact(bid, "approved_caseset")
+
+    # 第二步：带着这张卡的用户答复回来确认
+    effective = _main_effective(bid, ["dw1", "dr1"], ["dw1"],
+                                slug="mainwire", prepare=False)
+    out = main_mod.journey_adopt(
+        batch_id=bid, selected_draft_ids=["dw1", "dr1"],
+        caseset_slug="mainwire", adopted_via="chat_ask_user",
+        confirmed_by="chat", prepare_adoption=False,
+        authorized_write_draft_ids=["dw1"],
+        decision_context=_sign_card(card, effective, ["dw1"]))
+    assert out["ok"], out
+
+    # 写授权由这次采纳派生，运行时取数口零改动就认账
+    derived = out["write_authorization"]
+    assert derived["via"] == "adopt_card"
+    write_case_id = derived["case_ids"][0]
+    assert execute_run.write_authorization(bid)["authorized"] == {write_case_id}
+
+
+def test_the_confirm_step_through_main_still_refuses_a_missing_decision(
+        store, target, monkeypatch):
+    """收紧方向的对照：穿 main 不等于绕过闸——没有决定照样进不去。"""
+    import server.main as main_mod
+
+    bid = _draft_batch(store, target, [api_case("dw1", writes=True)])
+    claims = trusted_claims("journey_adopt", owner=OWNER)
+    monkeypatch.setattr(main_mod, "_journey_bridge",
+                        lambda tool, ctx, args: claims)
+    out = main_mod.journey_adopt(
+        batch_id=bid, selected_draft_ids=["dw1"], caseset_slug="mainwire",
+        adopted_via="chat_ask_user", confirmed_by="chat",
+        prepare_adoption=False, authorized_write_draft_ids=["dw1"])
+    # 可信面上「没带决定」与「带了张假决定」是同一个错误码：桥接声明在场就
+    # 已经进了决定校验那条路。工作台面（无桥接声明）才报 E_USER_DECISION_REQUIRED，
+    # 见 test_prepare_without_a_trusted_bridge_is_rejected。
+    assert not out["ok"] and out["code"] == "E_USER_DECISION_INVALID", out
+    assert not artifacts.has_artifact(bid, "approved_caseset")
