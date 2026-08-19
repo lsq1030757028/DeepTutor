@@ -142,3 +142,69 @@ def test_draft_does_not_become_a_tenth_ledger_cell(monkeypatch, tmp_path):
     """
     from server.journey import artifacts
     assert "defect_draft" not in artifacts.ARTIFACT_FILES
+
+
+# ── 批次 5：工具面接线（AC20）────────────────────────────────────────────────
+
+
+def _wired_batch(monkeypatch, tmp_path, *, with_receipt=True):
+    from server.journey import artifacts
+
+    monkeypatch.setattr(artifacts, "WORKBENCH_ROOT", str(tmp_path))
+    monkeypatch.setattr(artifacts, "BATCHES_ROOT", str(tmp_path / "batches"))
+    monkeypatch.setattr(artifacts, "RUNS_ROOT", str(tmp_path / "runs"))
+    owner = "unit-test-owner"
+    with artifacts.trusted_owner(owner):
+        batch = artifacts.create_batch("t", owner=owner, base_url="http://x")
+        bid = batch["batch_id"]
+        artifacts.save_artifact(bid, "approved_caseset", {"cases": [
+            {"case_id": "s/R1-C001", "title": "会红的", "steps": ["a"]},
+        ]})
+        run_id = artifacts.new_run_id()
+        rd = artifacts.run_dir(run_id, create=True, owner=owner)
+        import json as _json
+        if with_receipt:
+            with open(rd + "/receipt.json", "w", encoding="utf-8") as fh:
+                fh.write(_json.dumps({"artifact": "run_receipt"}))
+        with open(rd + "/results.jsonl", "w", encoding="utf-8") as fh:
+            fh.write(_json.dumps(
+                {"case_id": "s/R1-C001", "outcome": "failed",
+                 "assertions": [{"kind": "status", "expected": 200,
+                                 "actual": 500, "passed": False}]},
+                ensure_ascii=False) + "\n")
+    return owner, bid, run_id
+
+
+def test_collect_defects_tool_wires_build_drafts(monkeypatch, tmp_path):
+    """AC20 工具面：汇集经 MCP 面可达，产出结构化候选，零 TAPD 调用。
+
+    `build_drafts` 机制早就在，但没有工具面暴露 = 聊天 agent 够不到——
+    「文件存在不等于能力生效」在批次 3 的 B-1 刚验过一遍，这里直接
+    穿 main 包装测（不是只测 tools 层）。
+    """
+    import server.main as main_mod
+    from server.journey import tools
+    from tests.journey_decision_helper import trusted_claims
+
+    owner, bid, run_id = _wired_batch(monkeypatch, tmp_path)
+    claims = trusted_claims("journey_collect_defects", owner=owner)
+    monkeypatch.setattr(main_mod, "_journey_bridge",
+                        lambda tool, ctx, args: claims)
+    out = main_mod.journey_collect_defects(batch_id=bid, run_id=run_id)
+    assert out["ok"], out
+    assert out["count"] == 1
+    drafts = out["defect_draft"]["drafts"]
+    assert drafts[0]["root_cause_status"] == "pending_human"
+    assert drafts[0]["submission"]["state"] == "draft"
+    # 声明面同步：collect_defects 必须在 MCP 工具声明集里
+    assert "collect_defects" in tools.MCP_TOOL_NAMES
+
+
+def test_collect_defects_requires_a_run_receipt(monkeypatch, tmp_path):
+    """AC20 的时序：执行收据产出**之后**才汇集——没跑完就汇集是在猜。"""
+    from server.journey import artifacts, tools
+
+    owner, bid, run_id = _wired_batch(monkeypatch, tmp_path, with_receipt=False)
+    out = tools.collect_defects(owner=owner, batch_id=bid, run_id=run_id,
+                                caller_surface="capability")
+    assert not out["ok"] and out["code"] == "E_NO_RUN_RECEIPT"

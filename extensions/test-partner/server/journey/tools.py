@@ -34,6 +34,9 @@ from server.journey import (
     analyze as _analyze,
 )
 from server.journey import (
+    defect_exit as _defect_exit,
+)
+from server.journey import (
     retier as _retier,
 )
 from server.journey import (
@@ -84,7 +87,9 @@ TOOL_NAMES: tuple[str, ...] = JUDGEMENT_TOOLS + MECHANICAL_TOOLS + READ_TOOLS
 #: 但它们确实挂在 MCP 面上，所以要在对拍集合里明说——否则 G2 的断言会因为
 #: "多出一个没声明的工具"而红，或者被人顺手放宽成 `>=`。
 #: `change_tier` 同理：改档是轻确认（ADR-3），不是旅程业务工序。
-GATE_TOOLS: tuple[str, ...] = ("write_confirm", "change_tier")
+#: `collect_defects` 是执行后的缺陷汇集出口（ADR-4）：机械派生 + 一次性上浮，
+#: 不是第十道工序（没有失败用例的 run 根本不该有这一步）。
+GATE_TOOLS: tuple[str, ...] = ("write_confirm", "change_tier", "collect_defects")
 
 #: MCP 面上 `journey_*` 的**完整**集合。G2 断言的对象就是它。
 MCP_TOOL_NAMES: tuple[str, ...] = TOOL_NAMES + GATE_TOOLS
@@ -823,6 +828,34 @@ def change_tier(*, batch_id: str, new_tier: str, via: str = "",
                invalidated=r["invalidated"], event=r["event"],
                preserved_clarifications=r["preserved_clarifications"],
                preserved_question_ledger=r["preserved_question_ledger"])
+
+
+@_requires_trusted_owner
+def collect_defects(*, batch_id: str, run_id: str,
+                    caller_surface: str = "unknown",
+                    root: str | None = None) -> dict[str, Any]:
+    """缺陷汇集出口（ADR-4 / AC20）：run 收据之后，失败 → 结构化缺陷候选。
+
+    只汇集不提交：草稿落批次目录 `defect_draft.json`，root_cause 留空标
+    pending_human（自动生成的根因是"把没查包装成查过了"）。blocked/observed/
+    skipped 逐类计数留痕——"这轮为什么只有 N 条草稿"必须可被追问。
+    提交动作不在本工具（0027 §2：写工具与确认闸同批放行，未到批次）。
+    """
+    blocked = _guarded(batch_id, "collect_defects", caller_surface, root)
+    if blocked:
+        return blocked
+    import os as _os
+    rd = artifacts.run_dir(run_id, root=root)
+    if not _os.path.isfile(_os.path.join(rd, "receipt.json")):
+        # 与 stepper 同口径：run_receipt 的存在性 = run 目录下 receipt.json
+        return _err("E_NO_RUN_RECEIPT",
+                    "该 run 还没有执行收据，缺陷汇集无从谈起——先执行再汇集。")
+    try:
+        r = _defect_exit.build_drafts(batch_id, run_id, root=root)
+    except artifacts.ArtifactError as exc:
+        return _err("E_DEFECT_COLLECT_REJECTED", str(exc))
+    return _ok(defect_draft=r["defect_draft"], count=r["count"],
+               excluded_counts=r["excluded_counts"])
 
 
 # ── 6–9. 机械类 ─────────────────────────────────────────────────────────────

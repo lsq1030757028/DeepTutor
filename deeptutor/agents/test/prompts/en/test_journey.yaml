@@ -290,10 +290,14 @@ human_gates: |-
 
   ## After execution: defects have an exit
 
-  Once the run receipt is out, **collect this round's failures and anomalies into
-  one structured list of defect candidates and raise it once** — do not pop them
-  one at a time. Filing them is not your job here; what you produce is something
-  the user can take and use directly.
+  Once the run receipt is out, call `journey_collect_defects` to shape this
+  round's failures into structured defect candidates (root cause is left for a
+  human — the tool will not invent one for you), then raise **one summary card
+  to the user, once** — never one popup per defect. The card also states what
+  was excluded and why (blocked is an environment problem, observed carries no
+  verdict, skipped never ran): "why only N drafts" must survive questioning.
+  Filing is not yours: **no TAPD write endpoint may be touched** — what you
+  produce is something the user can take and use directly.
 
 workbench_pointer: |-
   Batch ids, ledger progress, per-case verdicts and evidence live in the workbench

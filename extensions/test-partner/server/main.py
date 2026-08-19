@@ -453,6 +453,26 @@ def journey_change_tier(batch_id: str, new_tier: str, via: str = "",
 
 
 @mcp.tool()
+def journey_collect_defects(batch_id: str, run_id: str,
+                            owner: str = "", caller_surface: str = "unknown",
+                            bridge_context: str = "") -> dict[str, Any]:
+    """缺陷汇集出口（ADR-4）：把本轮执行的失败整理成结构化缺陷候选。
+
+    只汇集不提交——草稿落批次目录，root_cause 留给人判；blocked/observed/
+    skipped 计数留痕。零 TAPD 写调用；提交按 0027 §2 与确认闸同批放行，
+    不在本工具。
+    """
+    effective = {"batch_id": batch_id, "run_id": run_id}
+    trusted = _journey_bridge("journey_collect_defects", bridge_context, effective)
+    if isinstance(trusted, dict):
+        return trusted
+    from server.journey import tools as _jt
+    return _jt.collect_defects(batch_id=batch_id, run_id=run_id,
+                               owner=trusted.owner,
+                               caller_surface=trusted.surface)
+
+
+@mcp.tool()
 def journey_adopt(batch_id: str, selected_draft_ids: Any, caseset_slug: str = "",
                   adopted_via: str = "workbench_selection", confirmed_by: str = "",
                   idempotency_key: str = "",
