@@ -601,9 +601,14 @@ def test_test_mode_prompt_keeps_its_identity_and_forbids_internal_exposure() -> 
     新锚与相邻那条断言命中同一句话，零新增覆盖，而它替下来的那条纪律
     （宿主给的 id 只交给接入工具、不在普通答复里复述）当时是真的被删了。
     该纪律已随宿主可信查询段一并恢复，锚也一并恢复——**锚要各自钉住一条不同的话**。
+
+    批次 7（spec Delta 2026-08-19）再改一次名词：「测试搭档」→「测试助手」。
+    改的还是定位而不是不变量——用户三次原话要的是"能随时解决测试问题的测试助手"，
+    而上一版把"搭档"落成了"旅程的搭档"。**守的两条不变量仍然没动**，
+    所以这里只换身份锚，下面四条一个字不改。
     """
     prompt = journey_system_block("zh")
-    assert "测试搭档" in prompt
+    assert "测试助手" in prompt
     assert "不是学习教练" in prompt
     assert "不是表单收集器" in prompt
     assert "不得暴露 `journey_*`" in prompt
