@@ -120,6 +120,42 @@ async def test_journey_tools_are_hidden_and_refused_outside_test_capability(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("original", ["journey_probe_http", "journey_db_query"])
+async def test_free_surface_tools_sit_inside_the_same_capability_boundary(
+    registry, monkeypatch, original
+) -> None:
+    """Batch 7's free capability surface keeps no ledger — but keeps the boundary.
+
+    Its tools are named ``journey_*`` precisely so that this branch catches them.
+    Renaming one to something "more honest" about not touching the ledger drops
+    it into the ordinary plugin pool, where plain chat and Playground would see
+    an outbound HTTP probe and a database reader.
+    """
+
+    class _FreeSurfaceTool(_McpTool):
+        original_name = original
+
+        def __init__(self) -> None:
+            super().__init__(f"mcp_test_partner_{original}", "test-partner")
+
+    free = _FreeSurfaceTool()
+    registry.register(free)
+    _grant(monkeypatch, None)
+    plain = await build_tool_view(
+        base_registry=registry,
+        scope=ToolScope(session_id="s", active_capability="chat"),
+    )
+    assert free not in plain.pool
+    assert not (await plain.registry.execute(free.name)).success
+
+    test_mode = await build_tool_view(
+        base_registry=registry,
+        scope=ToolScope(session_id="s", active_capability="test"),
+    )
+    assert free in test_mode.pool
+
+
+@pytest.mark.asyncio
 async def test_ungranted_user_gets_no_tools_but_keeps_the_gate(registry, monkeypatch) -> None:
     _grant(monkeypatch, set())
     view = await build_tool_view(base_registry=registry, scope=ToolScope(session_id="s"))

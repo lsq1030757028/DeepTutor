@@ -91,8 +91,18 @@ TOOL_NAMES: tuple[str, ...] = JUDGEMENT_TOOLS + MECHANICAL_TOOLS + READ_TOOLS
 #: 不是第十道工序（没有失败用例的 run 根本不该有这一步）。
 GATE_TOOLS: tuple[str, ...] = ("write_confirm", "change_tier", "collect_defects")
 
+#: 自由能力面（批次 7 / spec Delta AC25-AC29）：**不依附任何批次**的只读排查动作。
+#: 它们既不是九原子，也不是人闸——不建批次、不写 events.jsonl、不产九格产物，
+#: 逐次调用只进观测日志（`free_surface.observation_log_path()`）。
+#:
+#: 名字仍以 `journey_` 打头看着与"不入账本"矛盾，但在 DT 侧
+#: `trust.py:is_test_journey_tool` 里这个前缀是**能力边界令牌**：不带它，
+#: 工具就落进普通插件池，chat / Playground 模式也会看见 = 能力边界泄漏。
+#: 所以**不许为了"名副其实"改名**。
+FREE_SURFACE_TOOLS: tuple[str, ...] = ("probe_http", "db_query")
+
 #: MCP 面上 `journey_*` 的**完整**集合。G2 断言的对象就是它。
-MCP_TOOL_NAMES: tuple[str, ...] = TOOL_NAMES + GATE_TOOLS
+MCP_TOOL_NAMES: tuple[str, ...] = TOOL_NAMES + GATE_TOOLS + FREE_SURFACE_TOOLS
 
 #: 有副作用、必须过幂等闸的三个。
 SIDE_EFFECT_TOOLS = ("adopt", "compile", "execute")
