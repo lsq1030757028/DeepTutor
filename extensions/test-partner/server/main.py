@@ -304,6 +304,7 @@ def journey_ingest(title: str, base_url: str,
                    requirement_entity_confirmed_via: str = "",
                    prepare_requirement_entity: bool = False,
                    intake_context: str = "",
+                   supersedes: str = "",
                    owner: str = "", caller_surface: str = "unknown",
                    decision_context: str = "",
                    bridge_context: str = "") -> dict[str, Any]:
@@ -323,6 +324,7 @@ def journey_ingest(title: str, base_url: str,
         "requirement_entity_confirmed_via": requirement_entity_confirmed_via,
         "prepare_requirement_entity": prepare_requirement_entity,
         "intake_context": intake_context,
+        "supersedes": supersedes,
     }
     trusted = _journey_bridge("journey_ingest", bridge_context, effective)
     if isinstance(trusted, dict):
@@ -340,6 +342,7 @@ def journey_ingest(title: str, base_url: str,
                       ),
                       prepare_requirement_entity=prepare_requirement_entity,
                       intake_context=intake_context,
+                      supersedes=supersedes,
                       decision_context=decision_context,
                       _decision_arguments=effective,
                       _bridge_claims=trusted,
@@ -427,6 +430,26 @@ def journey_write_confirm(batch_id: str, case_ids: Any = None,
                              _decision_arguments=effective,
                              _bridge_claims=trusted,
                              owner=trusted.owner, caller_surface=trusted.surface)
+
+
+@mcp.tool()
+def journey_change_tier(batch_id: str, new_tier: str, via: str = "",
+                        owner: str = "", caller_surface: str = "unknown",
+                        bridge_context: str = "") -> dict[str, Any]:
+    """改档（ADR-3）：采纳集冻结前允许换档位。
+
+    作废 business_frame / test_analysis / case_draft 三格（intake_profile 保留），
+    落带来源的 tier_confirm 事件，并把已答澄清项与疑点账本随事件保存——
+    重新澄清时按新档位复用，不重问用户。采纳后调它会得到 E_TIER_LOCKED。
+    `via` 必填：账本完整性靠记录改档来源保证，不靠不可变。
+    """
+    effective = {"batch_id": batch_id, "new_tier": new_tier, "via": via}
+    trusted = _journey_bridge("journey_change_tier", bridge_context, effective)
+    if isinstance(trusted, dict):
+        return trusted
+    from server.journey import tools as _jt
+    return _jt.change_tier(batch_id=batch_id, new_tier=new_tier, via=via,
+                           caller_surface=trusted.surface)
 
 
 @mcp.tool()

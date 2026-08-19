@@ -115,6 +115,11 @@ def clarify(batch_id: str, *, rules: list[dict[str, Any]],
     if artifacts.has_artifact(batch_id, "business_frame"):
         prior = artifacts.load_artifact(batch_id, "business_frame")
         prior_ledger = dict(prior.get("question_ledger") or {})
+    else:
+        # business_frame 可能刚被改档作废（ADR-3）：从改档事件接续保存的账本，
+        # 「已答澄清项按新档位复用」靠这里闭环——改档不是让疑点账本失忆的后门。
+        from server.journey import retier
+        prior_ledger = retier.preserved_question_ledger(batch_id)
     c_problems, question_ledger = _check_clarifications(
         list(clarifications or []), prior_ledger)
     problems.extend(c_problems)

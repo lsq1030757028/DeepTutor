@@ -58,6 +58,7 @@ def _ingest_args(title: str) -> dict:
         "requirement_entity_confirmed_via": "",
         "prepare_requirement_entity": False,
         "intake_context": "",
+        "supersedes": "",
     }
 
 

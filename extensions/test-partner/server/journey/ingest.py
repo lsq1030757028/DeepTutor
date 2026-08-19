@@ -135,7 +135,7 @@ def ingest(title: str, base_url: str, *, source_kind: str, source_ref: str,
            requirement_entity_confirmed_via: str = "",
            requirement_entity_decision: dict[str, Any] | None = None,
            before_create: Callable[[], dict[str, Any] | None] | None = None,
-           owner: str = "") -> dict[str, Any]:
+           supersedes: str = "", owner: str = "") -> dict[str, Any]:
     """建批次 + 落 intake_profile。tier 未给时只回确认卡数据（不落产物——
     档位是 intake_profile 的必备字段，人闸没走完就没有这个产物）。"""
     validated = redlines.safe_target_url(base_url)
@@ -163,6 +163,14 @@ def ingest(title: str, base_url: str, *, source_kind: str, source_ref: str,
             "ok": False,
             "error": "需求实体必须来自服务端验真的交互式用户决定；确认来源字符串仅供审计。",
         }
+    supersedes = str(supersedes or "").strip()
+    if supersedes:
+        try:
+            artifacts.load_batch(supersedes)
+        except artifacts.ArtifactError:
+            return {"ok": False, "code": "E_NO_BATCH",
+                    "error": f"要替代的批次不存在：{supersedes}。"
+                             "替代关系必须指向真实批次，否则账本里会出现悬空指针。"}
     if not probe.get("reachable"):
         # 溯源/能力锁：终点不可达 = 不建批次（fail-closed，不能对空气接单）
         #
@@ -213,7 +221,17 @@ def ingest(title: str, base_url: str, *, source_kind: str, source_ref: str,
         "requirement_entity": requirement_entity,
         "requirement_entity_confirmed_via": requirement_entity_confirmed_via,
         "requirement_entity_decision": dict(requirement_entity_decision or {}),
+        "supersedes": supersedes,
     })
     artifacts.append_event(bid, {"type": "tier_confirm", "tier": tier,
-                                 "via": tier_confirmed_via or "unspecified"})
+                                 "via": tier_confirmed_via or "unspecified",
+                                 "source": "intake"})
+    if supersedes:
+        # AC17 改需求实体：旧批次标被替代、新批次记来源，两边都留可查的事件。
+        # 旧批次的产物一个不删——「被替代」是状态不是销毁，_PREREQ 链保持完整。
+        artifacts.append_event(supersedes, {
+            "type": "batch_superseded", "superseded_by": bid,
+            "reason": "requirement_entity_change"})
+        artifacts.append_event(bid, {
+            "type": "batch_supersedes", "supersedes": supersedes})
     return {"ok": True, "batch_id": bid, "intake_profile": profile}

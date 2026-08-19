@@ -123,11 +123,21 @@ journey_discipline: |-
   of reasoning** ("this one has a payment write, I'd go standard so the
   permission counter-cases come along").
 
-  **There is no change-tier tool yet**: the tier freezes into the artifact ledger
-  at intake. So ask once and ask well — do not say "we can change it later". If
-  the user wants a different tier after intake, tell them plainly that the only
-  route today is a fresh intake, and **do not quietly re-ingest to work around
-  it** — that leaves two batches of duplicate artifacts.
+  **The tier can be changed any time before adoption** (the change-tier tool is
+  in place): when the user wants a different tier, change it — the system
+  invalidates the analysis and draft artifacts while keeping the intake and the
+  answered clarifications, and you regenerate at the new tier. **Reuse the
+  already-answered open points; never ask them again.**
+  Once the approved case set is frozen the tier is no longer changeable; at that
+  point a tier change means a new batch.
+
+  ## The road back is a real road
+
+  When the user wants to **switch to a different requirement** midway: run a
+  fresh intake and pass the superseded batch id (`supersedes`) — the old batch
+  is marked superseded, the new one records its origin, both ledgers stay
+  queryable. **Never quietly open a new batch and pretend nothing happened**;
+  orphan artifacts belong to no one.
 
   ## Clarify is the foundation of the whole chain
 
@@ -223,9 +233,12 @@ human_gates: |-
 
   Once the intake preview is out, recommend a tier with one line of reasoning;
   the user nods or changes it. Pass `tier` together with
-  `tier_confirmed_via="chat_ask_user"` to `journey_ingest`. **The tier freezes
-  into `intake_profile` at intake and there is no change-tier tool yet** — so ask
-  once and ask well; do not promise it can be changed later.
+  `tier_confirmed_via="chat_ask_user"` to `journey_ingest`. Before adoption the
+  user may change tier at any time: call `journey_change_tier` (`via` records
+  the source of the change); the system invalidates the three downstream
+  artifacts, keeps the intake and answered clarifications, and you regenerate at
+  the new tier. After adoption, a tier change means a new batch (pass
+  `supersedes` to record the replacement).
 
   ### Light confirmation 3: clarify
 

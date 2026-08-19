@@ -34,6 +34,9 @@ from server.journey import (
     analyze as _analyze,
 )
 from server.journey import (
+    retier as _retier,
+)
+from server.journey import (
     artifacts,
     decision_auth,
     gate,
@@ -80,7 +83,8 @@ TOOL_NAMES: tuple[str, ...] = JUDGEMENT_TOOLS + MECHANICAL_TOOLS + READ_TOOLS
 #: 而后者随便加个工具就会红，红几次就没人看了。
 #: 但它们确实挂在 MCP 面上，所以要在对拍集合里明说——否则 G2 的断言会因为
 #: "多出一个没声明的工具"而红，或者被人顺手放宽成 `>=`。
-GATE_TOOLS: tuple[str, ...] = ("write_confirm",)
+#: `change_tier` 同理：改档是轻确认（ADR-3），不是旅程业务工序。
+GATE_TOOLS: tuple[str, ...] = ("write_confirm", "change_tier")
 
 #: MCP 面上 `journey_*` 的**完整**集合。G2 断言的对象就是它。
 MCP_TOOL_NAMES: tuple[str, ...] = TOOL_NAMES + GATE_TOOLS
@@ -245,6 +249,7 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
            requirement_entity_confirmed_via: str = "",
            prepare_requirement_entity: bool = False,
            intake_context: str = "",
+           supersedes: str = "",
            decision_context: str = "", _bridge_claims: Any = None,
            _decision_arguments: dict[str, Any] | None = None,
            caller_surface: str = "unknown",
@@ -268,6 +273,7 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
         "requirement_entity_confirmed_via": requirement_entity_confirmed_via,
         "prepare_requirement_entity": prepare_requirement_entity,
         "intake_context": intake_context,
+        "supersedes": supersedes,
     }
 
     oracle_source: dict[str, Any] = {}
@@ -394,6 +400,7 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
                                     "ask_user_tool_call_id", ""),
                             } if entity_decision else {},
                             before_create=consume_entity_decision,
+                            supersedes=supersedes,
                             owner=owner)
     if not result.get("ok"):
         if result.get("need") == "tier_confirmation":
@@ -624,6 +631,30 @@ def write_confirm(*, batch_id: str, case_ids: list[str] | None = None,
     return _ok(event=event, authorized=requested,
                declined=sorted(write_ids - set(requested)),
                write_case_total=len(write_ids))
+
+
+@_requires_trusted_owner
+@_serializes_batch_mutation
+def change_tier(*, batch_id: str, new_tier: str, via: str = "",
+                caller_surface: str = "unknown",
+                root: str | None = None) -> dict[str, Any]:
+    """改档（ADR-3 / AC5）。采纳前允许；三格作废、intake_profile 保留、事件带来源。
+
+    「重生成」是模型的活（clarify/analyze/draft 是判断产物）；这里只负责作废与
+    账本一致性。失败整体回退，不留半新半旧。
+    """
+    blocked = _guarded(batch_id, "change_tier", caller_surface, root)
+    if blocked:
+        return blocked
+    r = _retier.change_tier(batch_id, new_tier=new_tier, via=via, root=root)
+    if not r.get("ok"):
+        return _err(r.get("code", "E_RETIER_REJECTED"), r["error"],
+                    detail={k: v for k, v in r.items()
+                            if k not in ("ok", "code", "error")})
+    return _ok(prior_tier=r["prior_tier"], tier=r["tier"],
+               invalidated=r["invalidated"], event=r["event"],
+               preserved_clarifications=r["preserved_clarifications"],
+               preserved_question_ledger=r["preserved_question_ledger"])
 
 
 # ── 6–9. 机械类 ─────────────────────────────────────────────────────────────

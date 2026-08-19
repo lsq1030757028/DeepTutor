@@ -305,31 +305,34 @@ def test_missing_prompt_module_degrades_to_empty_not_to_a_fallback_blurb(
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
-def test_prompt_does_not_promise_a_tier_change_tool_that_does_not_exist(language: str) -> None:
-    """提示词不许承诺不存在的能力（独立复核阻断项 B2）。
+def test_prompt_tier_change_promise_matches_the_tool(language: str) -> None:
+    """提示词的改档承诺与能力状态一致（批次 3 有意翻面）。
 
-    批次 1 的重写一度写着「采纳之前用户随时可以改档」——这个提交上**没有任何
-    改档工具**，tier 在 ingest 时就冻进 `intake_profile`。承诺出去的后果不是
-    「工具拒绝」，是模型换条路走：重新 ingest 新建一个批次，留下两份重复产物，
-    正是 AC17 要防的形态。旧版本原本写着的真话（「事后没有改档的工具」）被删掉
-    换成了这句假话，这是最坏的一种改动。
+    批次 1 曾在没有改档工具时承诺「随时可以改档」，被独立复核判为阻断（B2），
+    当时本测试钉住「不许承诺」。批次 3 落地了 `journey_change_tier`
+    （extensions 侧 `server/journey/retier.py`，工具面契约由 test-partner 的
+    call-surface 测试守），承诺与能力同时翻面——**这是有意动作**：
+    翻的不是断言方向，是「提示词只许说真话」这条判据下真话本身变了。
 
-    **改档能力在批次 3 落地。** 那时这条断言要连同提示词一起翻面——
-    翻面是有意的动作，不是顺手把红测改绿。
+    仍然守住的：采纳后不可改档（那时 = 新批次）必须同时写明，
+    不许只报能力不报边界。
     """
     from deeptutor.agents.test.pipeline import PROMPT_AGENT, PROMPT_MODULE
 
     prompts = PromptManager().load_prompts(PROMPT_MODULE, PROMPT_AGENT, language=language)
     body = "\n".join(str(v or "") for v in prompts.values() if isinstance(v, str))
-    truth = "没有改档工具" if language == "zh" else "no change-tier tool"
-    assert truth in body, f"{language} 没有如实说明改档能力还不存在"
-    for lie in (
-        "随时可以改档",
-        "采纳之前改档都来得及",
-        "changing tier is fine any time",
-        "may change tier any time",
-    ):
-        assert lie not in body, f"{language} 承诺了不存在的改档能力：{lie}"
+    if language == "zh":
+        assert "采纳之前档位可以改" in body, "zh 没有如实说明改档能力已存在"
+        assert "journey_change_tier" in body
+        assert "采纳之后改档 = 开新批次" in body, "zh 只报能力没报边界"
+        assert "supersedes" in body, "zh 丢了换需求的替代关系纪律（AC17）"
+        assert "没有改档工具" not in body, "zh 还留着能力不存在时的旧话术"
+    else:
+        assert "changed any time before adoption" in body
+        assert "journey_change_tier" in body
+        assert "a tier change means a new batch" in body
+        assert "supersedes" in body
+        assert "no change-tier tool" not in body
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])

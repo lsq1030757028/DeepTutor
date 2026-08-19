@@ -37,6 +37,9 @@ def _args(entity: str = "custom_character") -> dict:
         "requirement_entity_confirmed_via": "chat_ask_user",
         "prepare_requirement_entity": False,
         "intake_context": "",
+        # 批次 3 起 supersedes 进签名参数集（AC17）：改需求实体的替代关系是
+        # 工具调用的实质参数，prepare 与 confirm 之间被换掉必须让令牌失配。
+        "supersedes": "",
     }
 
 
