@@ -59,6 +59,28 @@ METADATA_ADDRESSES = frozenset({
     "fd00:ec2::254",     # AWS IMDSv6
 })
 
+#: RFC 特殊/保留网段里，Python 3.12 `ipaddress` 的布尔属性**判不出**的那几条。
+#: 这些段既非 `is_private`（不是 RFC1918 那类），又不是正常的公网 API 目标——
+#: 正好落在"私网判定"与"公网可路由"两个定义的缝里，是 SSRF 里最容易被漏掉的一类。
+#: 标准库把这类补齐前，这里按 IANA IPv4 Special-Purpose 登记表**显式列举**，
+#: 判定用简单的网段包含（各段互不重叠，命中即拒）。列一遍还顺带给出可读的拒绝理由。
+#:
+#:   - 100.64.0.0/10  运营商级 NAT / 共享地址空间（RFC 6598）——`is_private` 返回
+#:     False，却在云 / k8s 常作内网 / Pod 地址（AWS EKS 及部分 CNI 用此段），
+#:     是本次批次 7c 补的**主缺口**：literal / DNS rebinding / 302 落点三路径均曾穿过。
+#:   - 192.88.99.0/24 6to4 relay anycast（RFC 7526，已废弃）——`is_private` False 且
+#:     `is_global` True，标准库两个口径都判不出。
+#:   - 192.31.196.0/24 AS112-v4（RFC 7535）/ 192.52.193.0/24 AMT（RFC 7450）/
+#:     192.175.48.0/24 AS112 直接委派（RFC 7534）——与 6to4 同构的 IANA 特殊用途
+#:     /24：都不是正常 API 目标，一并按同一判据补齐，堵住整类而非只堵一个洞。
+SPECIAL_USE_NETWORKS = (
+    (ipaddress.ip_network("100.64.0.0/10"), "运营商级 NAT / 共享地址空间（RFC 6598）"),
+    (ipaddress.ip_network("192.88.99.0/24"), "6to4 relay anycast（RFC 7526，已废弃）"),
+    (ipaddress.ip_network("192.31.196.0/24"), "AS112-v4（RFC 7535）"),
+    (ipaddress.ip_network("192.52.193.0/24"), "AMT（RFC 7450）"),
+    (ipaddress.ip_network("192.175.48.0/24"), "AS112 直接委派（RFC 7534）"),
+)
+
 #: 超时上限（秒）。调用方给的值在这里夹取，不许无限等——
 #: 一个挂住的出站请求会把 MCP 工具调用一起挂住。
 MAX_TIMEOUT_S = 20
@@ -120,6 +142,9 @@ def classify_address(text: Any) -> str:
         return f"组播地址不可访问：{addr}"
     if addr.is_reserved or addr.is_unspecified:
         return f"保留地址不可访问：{addr}"
+    for network, label in SPECIAL_USE_NETWORKS:
+        if addr in network:  # 跨版本 __contains__ 安全返回 False，无需版本守卫
+            return f"特殊用途网段不可访问（{label}）：{addr}"
     return ""
 
 
@@ -256,6 +281,7 @@ __all__ = [
     "DEFAULT_TIMEOUT_S",
     "MAX_TIMEOUT_S",
     "METADATA_ADDRESSES",
+    "SPECIAL_USE_NETWORKS",
     "check_redirect",
     "check_target",
     "check_url_shape",

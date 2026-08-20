@@ -64,6 +64,53 @@ def test_public_v4_passes(address):
     assert ep.classify_address(address) == ""
 
 
+# ── 策略 2：RFC 特殊 / 保留网段全表（治本：漏某个特殊段这里就红） ────────────
+# 这一族是「`is_private` 判 False 但非公网可路由」的整类缝——Python 的布尔属性
+# 各有盲区（CGNAT 连 is_reserved 都不占，6to4 relay 甚至 is_global=True）。
+# 逐段钉住，将来标准库或代码回退漏掉任意一段，对应用例立刻转红。
+@pytest.mark.parametrize("address,why", [
+    # —— 批次 7c 主缺口：CGNAT / 运营商级 NAT（RFC 6598），云 / k8s 内网段 ——
+    ("100.64.0.0", "CGNAT 段首"),
+    ("100.64.0.1", "CGNAT 典型 Pod 地址"),
+    ("100.100.100.100", "CGNAT 段内"),
+    ("100.127.255.255", "CGNAT 段尾"),
+    # —— 6to4 relay anycast（RFC 7526，已废弃）：is_private=False 且 is_global=True ——
+    ("192.88.99.0", "6to4 relay 段首"),
+    ("192.88.99.1", "6to4 relay 典型"),
+    ("192.88.99.255", "6to4 relay 段尾"),
+    # —— 同构 IANA 特殊用途 /24：一并堵住整类 ——
+    ("192.31.196.1", "AS112-v4（RFC 7535）"),
+    ("192.52.193.1", "AMT（RFC 7450）"),
+    ("192.175.48.1", "AS112 直接委派（RFC 7534）"),
+    # —— 以下几类 Python 布尔属性已覆盖，但同属「非私网 API 判定」大类，一并钉住防回退 ——
+    ("198.18.0.1", "benchmarking（RFC 2544）"),
+    ("198.19.255.255", "benchmarking 段尾"),
+    ("240.0.0.1", "保留段 240/4（RFC 1112）"),
+    ("255.255.255.255", "受限广播"),
+    ("0.0.0.0", "本网络 / 未指定"),
+    ("192.0.0.1", "IETF 协议分配（RFC 6890）"),
+    ("192.0.2.1", "TEST-NET-1（RFC 5737）"),
+    ("198.51.100.1", "TEST-NET-2（RFC 5737）"),
+    ("203.0.113.1", "TEST-NET-3（RFC 5737）"),
+    ("::", "IPv6 未指定"),
+    ("2001:db8::1", "IPv6 文档段（RFC 3849）"),
+    ("2001:2::1", "IPv6 benchmarking（RFC 5180）"),
+])
+def test_blocked_special_use_networks(address, why):
+    assert ep.classify_address(address), f"{address}（{why}）应被拒但放行了"
+
+
+@pytest.mark.parametrize("address", [
+    # CGNAT 段的紧邻公网边界——补齐后不许误伤真正的公网地址
+    "100.63.255.255",   # CGNAT 段前一个地址
+    "100.128.0.0",      # CGNAT 段后一个地址
+    "192.88.98.255",    # 6to4 relay 段前
+    "192.88.100.0",     # 6to4 relay 段后
+])
+def test_special_use_neighbours_still_public(address):
+    assert ep.classify_address(address) == "", f"{address} 是公网地址，不该被误拦"
+
+
 # ── 策略 2：网段（IPv6 等价段 + v4-mapped） ───────────────────────────────
 @pytest.mark.parametrize("address", [
     "::1",                     # 环回
@@ -151,6 +198,31 @@ def test_any_bad_address_in_the_answer_set_refuses_the_whole_target():
         resolver=_resolver({"mixed.example.com": ["93.184.216.34", "10.1.2.3"]}),
     )
     assert verdict["allowed"] is False and verdict["code"] == "E_EGRESS_BLOCKED_NET"
+
+
+@pytest.mark.parametrize("addr,seg", [
+    ("100.64.0.1", "CGNAT / RFC 6598"),
+    ("192.88.99.1", "6to4 relay / RFC 7526"),
+])
+def test_special_use_segment_blocked_on_all_three_paths(addr, seg):
+    """批次 7c 主缺口回归：CGNAT（及 6to4 relay）经 literal / DNS 解析 / 302 落点
+    三条路径都必须被拒——三路径都汇聚到 `classify_address` 这个解析后统一校验点。"""
+    # 路径 1：URL 字面就是该段 IP（DNS 都不该发）
+    def exploding(host, port):
+        raise AssertionError("IP 字面量不该走解析")
+    literal = ep.check_target(f"http://{addr}/x", resolver=exploding)
+    assert literal["allowed"] is False and literal["code"] == "E_EGRESS_BLOCKED_NET"
+
+    # 路径 2：无辜域名 DNS rebinding 解析到该段
+    rebind = ep.check_target(
+        "https://evil.example.com/x",
+        resolver=_resolver({"evil.example.com": [addr]}),
+    )
+    assert rebind["allowed"] is False and rebind["code"] == "E_EGRESS_BLOCKED_NET"
+
+    # 路径 3：302 落点是该段（调用方把 Location 重新丢进闸）
+    landing = ep.check_redirect(f"http://{addr}/x", resolver=exploding)
+    assert landing["allowed"] is False and landing["code"] == "E_EGRESS_BLOCKED_NET"
 
 
 def test_v6_answer_is_judged_too():
