@@ -26,6 +26,8 @@ from __future__ import annotations
 
 from contextlib import suppress
 from dataclasses import dataclass, field
+import hashlib
+import json
 import logging
 import re
 from typing import TYPE_CHECKING, Any
@@ -38,6 +40,7 @@ from deeptutor.core.agentic.tool_dispatch import DispatchOutcome
 from deeptutor.core.agentic.usage import message_content_chars, record_streamed_usage
 from deeptutor.core.context import UnifiedContext
 from deeptutor.core.observability.stop_reason import stop_completed
+from deeptutor.core.observability.trace_sidecar import record_header_async, unavailable_ref
 from deeptutor.core.stream_bus import StreamBus
 from deeptutor.core.trace import build_trace_metadata, merge_trace_metadata, new_call_id
 from deeptutor.services.llm import clean_thinking_tags
@@ -187,6 +190,11 @@ class AgentLoop:
         # tool-schema / image fallbacks). Reported on the turn's ``stop`` so a
         # failure that took three attempts does not read like a first-try one.
         self._provider_retries = 0
+        # Prompt-block breakdown, measured once. The system prompt is
+        # byte-stable for the whole turn by design (``prompt_blocks``), so
+        # re-tokenising it every round would burn CPU to produce the same
+        # numbers.
+        self._prompt_segments_cache: list[dict[str, Any]] | None = None
 
     async def run(self) -> None:
         state = AgentLoopState()
@@ -564,6 +572,24 @@ class AgentLoop:
             carried = self._last_request.tool_schemas
         self._last_request = LLMRequestSnapshot(messages=list(messages), tool_schemas=carried)
 
+        # What this call was given, recorded before it is made. The bodies go
+        # to the session sidecar (off the business database, out of the
+        # model's reach); the event carries only the reference.
+        header_ref = await self._record_header(
+            kwargs=kwargs,
+            messages=messages,
+            tool_schemas=tool_schemas,
+            step_index=step_index,
+        )
+        await self._emit_model_input(
+            trace_meta=trace_meta,
+            stage=stage,
+            step_index=step_index,
+            messages=messages,
+            tool_schemas=tool_schemas,
+            header_ref=header_ref,
+        )
+
         # Providers (esp. Gemini OpenAI-compat) may attach ``usage`` to more
         # than one stream chunk. Keep the latest frame; it is recorded once
         # after the stream via ``record_streamed_usage``.
@@ -718,10 +744,112 @@ class AgentLoop:
                     "step_outcome": step_outcome,
                     "tool_calls_requested": [call["name"] for call in tool_calls],
                     "tools_offered": len(tool_schemas or []),
+                    "header_ref": header_ref,
                 },
             ),
         )
         return LLMCallResult(text=text, tool_calls=tool_calls, finish_reason=finish_reason)
+
+    # ---- what the model was given -----------------------------------------
+
+    async def _record_header(
+        self,
+        *,
+        kwargs: dict[str, Any],
+        messages: list[dict[str, Any]],
+        tool_schemas: list[dict[str, Any]] | None,
+        step_index: int,
+    ) -> dict[str, Any]:
+        """Write this call's three header parts to the session sidecar."""
+        try:
+            return await record_header_async(
+                session_id=self.context.session_id,
+                parts=_header_parts(self.pipeline.binding, kwargs, messages, tool_schemas),
+                turn_index=self._turn_index,
+                step_index=step_index,
+            )
+        except Exception:  # pragma: no cover - recording must never sink a turn
+            logger.debug("header capture skipped", exc_info=True)
+            return unavailable_ref()
+
+    async def _emit_model_input(
+        self,
+        *,
+        trace_meta: dict[str, Any],
+        stage: str,
+        step_index: int,
+        messages: list[dict[str, Any]],
+        tool_schemas: list[dict[str, Any]] | None,
+        header_ref: dict[str, Any],
+    ) -> None:
+        """One ``model_input`` event per LLM call: the shape of the request.
+
+        Shape only. The prompt text and the tool schemas are in the sidecar,
+        reachable through ``header_ref`` — putting them here would double them
+        into ``turn_events`` and the assistant message both.
+
+        ``content`` is empty for the same reason ``channel_health``'s is: a
+        ``progress`` event with content and a non-``call_status`` trace_kind is
+        rendered as conversation. The readable line rides ``status_key``.
+        """
+        try:
+            loader = getattr(self.pipeline, "_deferred_loader", None)
+            loaded = sorted(getattr(loader, "loaded_names", set()) or set())
+            pool_size = len(getattr(self.pipeline, "_deferred_pool", []) or [])
+            await self.stream.progress(
+                "",
+                source="chat",
+                stage=stage,
+                metadata=merge_trace_metadata(
+                    trace_meta,
+                    {
+                        "trace_kind": "model_input",
+                        "status_key": "model_input",
+                        "turn_index": self._turn_index,
+                        "step_index": step_index,
+                        "prompt_segments": self._prompt_segments(),
+                        # The direct answer to "what did it have in hand" —
+                        # the whole list, not a count, because the question is
+                        # always about one specific tool.
+                        "tools_in_window": [_schema_name(item) for item in tool_schemas or []],
+                        "tools_loaded": loaded,
+                        "tools_deferred_count": max(0, pool_size - len(loaded)),
+                        "messages_skeleton": [_message_skeleton(item) for item in messages],
+                        "header_ref": header_ref,
+                    },
+                ),
+            )
+        except Exception:  # pragma: no cover - informational extra
+            logger.debug("model_input event not emitted", exc_info=True)
+
+    def _prompt_segments(self) -> list[dict[str, Any]]:
+        """``[{name, tokens, sha12}]`` for the blocks the prompt was built from.
+
+        ``name`` is the block's own name, not the context-budget segment it
+        rolls up into: the budget deliberately merges several blocks into one
+        line for the composer, and merging them here would hide which block
+        moved.
+        """
+        if self._prompt_segments_cache is not None:
+            return self._prompt_segments_cache
+        segments: list[dict[str, Any]] = []
+        try:
+            counter = _token_counter()
+            for block in getattr(self.pipeline, "_last_prompt_blocks", []) or []:
+                content = (block.content or "").strip()
+                if not content:
+                    continue
+                segments.append(
+                    {
+                        "name": block.name,
+                        "tokens": counter(content),
+                        "sha12": hashlib.sha256(content.encode("utf-8")).hexdigest()[:12],
+                    }
+                )
+        except Exception:  # pragma: no cover - informational extra
+            logger.debug("prompt segment breakdown unavailable", exc_info=True)
+        self._prompt_segments_cache = segments
+        return segments
 
     def _step_outcome(
         self,
@@ -811,6 +939,99 @@ class AgentLoop:
                 )
                 return await self.client.chat.completions.create(**kwargs)
             raise
+
+
+def _header_parts(
+    binding: str,
+    kwargs: dict[str, Any],
+    messages: list[dict[str, Any]],
+    tool_schemas: list[dict[str, Any]] | None,
+) -> dict[str, str]:
+    """The three independently-hashed parts of one request header.
+
+    Split this way because they change at completely different rates: the
+    system prompt is usually constant for a whole session while the tool
+    schemas move a few times, so hashing them together would rewrite the
+    prompt every time a tool appeared.
+
+    ``messages`` are NOT a part. User and assistant text is already stored in
+    full in the messages table, and tool results — the one genuinely new
+    exposure — are deliberately out of scope for now.
+    """
+    system = ""
+    if messages and messages[0].get("role") == "system":
+        content = messages[0].get("content")
+        if isinstance(content, str):
+            system = content
+    config = {
+        "binding": binding,
+        **{
+            key: value
+            for key, value in kwargs.items()
+            if key not in {"messages", "tools", "tool_choice", "stream", "stream_options"}
+        },
+    }
+    return {
+        "system": system,
+        "tools": json.dumps(tool_schemas or [], ensure_ascii=False, sort_keys=True, default=str),
+        # Masked as insurance only: the API key travels on the client, not in
+        # these kwargs. Cheap here, and this is the one part a provider-
+        # specific extra kwarg could ever surface a credential through.
+        "config": _redact(json.dumps(config, ensure_ascii=False, sort_keys=True, default=str)),
+    }
+
+
+def _redact(text: str) -> str:
+    from deeptutor.core.observability.redaction import redact_text
+
+    return redact_text(text)
+
+
+def _schema_name(schema: Any) -> str:
+    if not isinstance(schema, dict):
+        return ""
+    function = schema.get("function")
+    if isinstance(function, dict):
+        return str(function.get("name") or "")
+    return str(schema.get("name") or "")
+
+
+def _message_skeleton(message: dict[str, Any]) -> dict[str, Any]:
+    """One message's shape — role, size, and what kind of parts it carries.
+
+    No bodies: the point is to be able to say "round 3 carried a 40k-character
+    tool result" without copying the tool result.
+    """
+    content = message.get("content")
+    chars = 0
+    has_image = False
+    if isinstance(content, str):
+        chars = len(content)
+    elif isinstance(content, list):
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text":
+                chars += len(str(part.get("text") or ""))
+            else:
+                has_image = True
+    return {
+        "role": str(message.get("role") or ""),
+        "chars": chars,
+        "has_image": has_image,
+        "has_tool_calls": bool(message.get("tool_calls")),
+    }
+
+
+def _token_counter():
+    # Imported lazily for the same reason context_budget does it: the context
+    # builder pulls in the agent base classes.
+    try:
+        from deeptutor.services.session.context_builder import count_tokens
+
+        return count_tokens
+    except Exception:  # pragma: no cover - fall back to a size proxy
+        return lambda text: max(1, len(text) // 4)
 
 
 def _count_user_turns(context: UnifiedContext) -> int:
