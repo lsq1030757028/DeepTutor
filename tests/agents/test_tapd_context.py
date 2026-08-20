@@ -134,7 +134,11 @@ async def test_u1_ready_shared_profile_continues_as_qa_without_host_profile_file
         )
     )
 
-    assert "测试搭档（QA）" in briefing
+    # 身份名词在 briefing 与 system prompt 里各写一份，两处必须同名——不同名等于
+    # 让模型自己挑一个信。这条已经漂过两次（ADR-1 改名、批次 7 改名），所以除了
+    # 钉住字面，再对拍一次 prompt 那份。
+    assert "测试助手（QA）" in briefing
+    assert "测试助手" in journey_system_block("zh")
     assert "上下文已齐" in briefing
     assert "tapd_context_project:" not in briefing
     assert [call[0] for call in pipeline.registry.calls] == [

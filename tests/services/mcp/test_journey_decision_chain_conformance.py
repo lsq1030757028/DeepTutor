@@ -107,25 +107,70 @@ def _context() -> TrustedJourneyContext:
     )
 
 
+def _prefix_probe_constant_ids(tree: ast.AST) -> set[int]:
+    """``id()`` of string constants used as a ``startswith``/``endswith`` argument.
+
+    ``execute`` opens with ``self._original_name.startswith("journey_")`` — a
+    probe over the whole Journey namespace, not a named branch. It is the one
+    ``journey_``-prefixed literal in that function that must *not* be read as a
+    tool name.
+    """
+    skip: set[int] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"startswith", "endswith"}
+        ):
+            for arg in node.args:
+                for inner in ast.walk(arg):
+                    if isinstance(inner, ast.Constant):
+                        skip.add(id(inner))
+    return skip
+
+
 def _manager_decision_tools() -> set[str]:
-    """Tool names named inside ``manager.py``'s ``needs_user_decision`` expression.
+    """Tool names named anywhere in ``manager.py``'s ``needs_user_decision`` logic.
 
     Read from the AST rather than from a duplicated list: a fourth branch added
     there shows up here without anyone remembering to update this file, which is
     the entire point of a conformance test.
+
+    **The scan is the whole enclosing function, not just the assignment's
+    right-hand side.** The narrower version only walked ``node.value`` of an
+    ``needs_user_decision = ...`` assignment, so a fourth branch written as a
+    standalone statement — ``if self._original_name == "journey_execute":
+    needs_user_decision = True`` — put the tool name in an ``if`` *test* rather
+    than in the assigned value, and this whole suite stayed green while the gate
+    silently grew a fourth door with no card. That is the B-2 deadlock shape,
+    which is precisely what this file exists to catch, so the scan errs wide:
+    every ``journey_*`` literal in the function counts, minus the namespace
+    prefix probe. A future unrelated ``journey_*`` literal added to ``execute``
+    would turn this red rather than quiet — the right direction to fail in.
     """
     source = Path(trust.__file__).resolve().parents[2] / "services" / "mcp" / "manager.py"
     tree = ast.parse(source.read_text(encoding="utf-8"))
+    functions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(
+            isinstance(inner, ast.Name) and inner.id == "needs_user_decision"
+            for inner in ast.walk(node)
+        )
+    ]
+    assert functions, "no function in manager.py mentions needs_user_decision — parser drifted"
     found: set[str] = set()
-    for node in ast.walk(tree):
-        targets = getattr(node, "targets", None) or []
-        named = [t for t in targets if isinstance(t, ast.Name) and t.id == "needs_user_decision"]
-        if not named:
-            continue
-        for inner in ast.walk(node.value):
-            if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
-                if inner.value.startswith("journey_"):
-                    found.add(inner.value)
+    for function in functions:
+        skip = _prefix_probe_constant_ids(function)
+        for inner in ast.walk(function):
+            if (
+                isinstance(inner, ast.Constant)
+                and isinstance(inner.value, str)
+                and inner.value.startswith("journey_")
+                and id(inner) not in skip
+            ):
+                found.add(inner.value)
     return found
 
 

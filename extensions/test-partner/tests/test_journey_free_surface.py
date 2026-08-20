@@ -16,6 +16,7 @@ import ast
 import email
 import json
 import os
+import urllib.request
 
 import pytest
 
@@ -348,6 +349,41 @@ def test_relative_redirect_is_absolutised_before_being_judged():
                            resolver=public_resolver, opener=opener)
     assert result["redirect"]["absolute"] == "https://api.example.com/v2/ping"
     assert result["redirect"]["landing_allowed"] is True
+
+
+def test_the_production_opener_carries_the_no_redirect_handler(monkeypatch):
+    """「3xx 不跟」这条红线，钉在**生产真建出来的那张 handler 表**上。
+
+    上面两条重定向用例都传了 `opener=`，别处的用例则整个替换掉 `build_opener`
+    ——两种做法都把 `build_opener(_NoRedirect())` 这一步换走了，于是这条红线
+    在测试里从未真正执行过。把 `_NoRedirect` 改名、或改成不再继承
+    `HTTPRedirectHandler`（那样 `build_opener` 不会替换默认 handler，3xx 会被
+    自动跟随），一条测试都不会红。
+
+    所以这里不注入 `opener`，只把 `build_opener` 包一层：真的那个照常执行，
+    建出来的 opener 留下来给断言看，返回给生产代码的替身只负责别真出网。
+    """
+    real_build_opener = urllib.request.build_opener
+    built: list = []
+
+    def spy(*handlers):
+        built.append(real_build_opener(*handlers))
+        return FakeOpener(FakeResponse())
+
+    monkeypatch.setattr(urllib.request, "build_opener", spy)
+    result = fs.probe_http(url="https://api.example.com/x", resolver=public_resolver)
+
+    assert result["ok"] is True
+    assert len(built) == 1, "生产路径没走 build_opener —— opener 的默认值被改过？"
+    handlers = built[0].handlers
+    names = [type(handler).__name__ for handler in handlers]
+    assert any(isinstance(handler, fs._NoRedirect) for handler in handlers), \
+        f"生产 opener 的 handler 表里没有 _NoRedirect：{names}"
+    assert not [h for h in handlers if type(h) is urllib.request.HTTPRedirectHandler], \
+        f"默认 HTTPRedirectHandler 仍在表里，3xx 会被自动跟随：{names}"
+    assert issubclass(fs._NoRedirect, urllib.request.HTTPRedirectHandler), \
+        "_NoRedirect 不再继承 HTTPRedirectHandler，build_opener 就不会替换掉默认 handler"
+    assert fs._NoRedirect().redirect_request(None, None, 302, "Found", {}, "http://x/") is None
 
 
 # ── 脱敏与截断 ────────────────────────────────────────────────────────────
