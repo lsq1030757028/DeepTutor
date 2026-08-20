@@ -32,10 +32,18 @@ from deeptutor.runtime.registry.scoped_registry import ScopedToolRegistry
 
 logger = logging.getLogger(__name__)
 
-#: Ceiling on connecting a caller's own servers. This runs before the turn's
-#: first stream event, so it is the one place a slow third-party host could
-#: present as "DeepTutor hung".
-_OWNER_SCOPE_TIMEOUT_S = 3.0
+#: Process-level override for the per-owner connect ceiling. ``None`` — the
+#: normal state — means "read ``mcp_owner_scope_timeout_s`` from the runtime
+#: settings at call time", which is where the value and its rationale live now
+#: (the old hard-coded 3.0s was shorter than a real remote handshake, so every
+#: first turn of a process silently lost that owner's tools). Kept as a module
+#: attribute because bounding this is what a test needs to drive directly.
+_OWNER_SCOPE_TIMEOUT_S: float | None = None
+
+#: Fallback if the settings layer is unreadable. Matches
+#: ``DEFAULT_SYSTEM_SETTINGS["mcp_owner_scope_timeout_s"]``; a settings file
+#: that cannot be parsed must not silently reinstate a too-short ceiling.
+_OWNER_SCOPE_TIMEOUT_FALLBACK_S = 15.0
 
 
 #: Assembly stages that can degrade — one per ``return []`` site in this
@@ -293,12 +301,15 @@ async def _owned_tools(
         # servers; its surface is the deployment's, filtered by its own list.
         # Not a degradation: nothing here was supposed to connect.
         return [], ToolViewHealth()
+    # Read once so the budget that is enforced and the budget that is reported
+    # cannot come from two different reads of a setting somebody just changed.
+    timeout_s = owner_scope_timeout_s()
     started = time.monotonic()
     try:
         connected = list(
             await asyncio.wait_for(
                 manager.ensure_scope(scope.owner_id),
-                timeout=_OWNER_SCOPE_TIMEOUT_S,
+                timeout=timeout_s,
             )
         )
         return connected, ToolViewHealth()
@@ -306,16 +317,16 @@ async def _owned_tools(
         logger.warning(
             "per-user MCP scope for %s did not connect in %ss; continuing without",
             scope.owner_id,
-            _OWNER_SCOPE_TIMEOUT_S,
+            timeout_s,
         )
         return [], ToolViewHealth().with_degradation(
             Degradation(
                 stage=STAGE_OWNER_SCOPE,
                 reason=REASON_TIMEOUT,
                 # The budget that was missed, not a verdict: a scope that did
-                # not answer within 3s was slow here, which is not the same
-                # claim as "that server is down".
-                detail=f"{_OWNER_SCOPE_TIMEOUT_S}s",
+                # not answer inside the ceiling was slow here, which is not the
+                # same claim as "that server is down".
+                detail=f"{timeout_s}s",
                 elapsed_ms=_elapsed_ms(started),
             )
         )
@@ -388,9 +399,21 @@ def owner_scope_timeout_s() -> float:
 
     A function rather than a re-export so that reporting the value and
     enforcing it cannot drift apart — including under a test that patches the
-    module constant.
+    module attribute, which still wins over the setting.
+
+    Non-raising on purpose: this sits on the turn's critical path, and an
+    unreadable settings file must cost the deployment its *configured* ceiling,
+    never the turn.
     """
-    return _OWNER_SCOPE_TIMEOUT_S
+    if _OWNER_SCOPE_TIMEOUT_S is not None:
+        return float(_OWNER_SCOPE_TIMEOUT_S)
+    try:
+        from deeptutor.services.config import load_system_settings
+
+        return float(load_system_settings()["mcp_owner_scope_timeout_s"])
+    except Exception:
+        logger.debug("owner scope timeout setting unreadable; using fallback", exc_info=True)
+        return _OWNER_SCOPE_TIMEOUT_FALLBACK_S
 
 
 def _elapsed_ms(started: float) -> int:

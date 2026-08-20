@@ -39,7 +39,27 @@ DEFAULT_SYSTEM_SETTINGS: dict[str, Any] = {
     "chat_attachment_max_total_mb": 25,
     "chat_attachment_max_chars_per_doc": 200_000,
     "chat_attachment_max_chars_total": 150_000,
+    # Ceiling on connecting a caller's own MCP servers, in seconds. This runs
+    # before the turn's first stream event, so it is the one place a slow
+    # third-party host could present as "DeepTutor hung" — but a ceiling below
+    # the real handshake makes every *first* turn of a process drop those
+    # servers' tools, which reads to the user as "the channel is down".
+    #
+    # The default must therefore clear a real remote handshake, not a lucky
+    # one. Measured against the reference deployment's own per-user server
+    # (a public streamable-http MCP host, 6 consecutive connects from inside
+    # the app container): 6.41 / 6.68 / 7.82 / 8.34 / 8.44 / 8.54 s to
+    # initialize + list_tools. 15s is ~1.75x the worst of those, so ordinary
+    # TLS/DNS jitter no longer costs the first turn its tools, while a host
+    # that is actually hanging still gets bounded and degraded.
+    "mcp_owner_scope_timeout_s": 15.0,
 }
+
+#: Clamp bounds for the per-owner MCP connect ceiling. The floor keeps a
+#: misconfiguration from disabling self-configured servers outright; the
+#: ceiling keeps "connecting" from ever becoming an unbounded pre-first-token
+#: stall.
+MCP_OWNER_SCOPE_TIMEOUT_RANGE = (1.0, 120.0)
 
 # Clamp bounds for the chat attachment knobs. The MB ceilings are deliberately
 # generous (local deployments parse in-process; the WS frame cap is derived
@@ -279,6 +299,19 @@ def _coerce_clamped_int(value: Any, default: int, low: int, high: int) -> int:
     return max(low, min(high, coerced))
 
 
+def _coerce_float(value: Any, default: float) -> float:
+    try:
+        coerced = float(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    # NaN compares false against every bound, so it would survive a clamp.
+    return default if coerced != coerced else coerced
+
+
+def _coerce_clamped_float(value: Any, default: float, low: float, high: float) -> float:
+    return max(low, min(high, _coerce_float(value, default)))
+
+
 def _coerce_port(value: Any, default: int) -> int:
     port = _coerce_int(value, default)
     return port if 1 <= port <= 65535 else default
@@ -512,6 +545,7 @@ class RuntimeSettingsService:
             "DISABLE_SSL_VERIFY": _bool_env(system["disable_ssl_verify"]),
             "CHAT_ATTACHMENT_DIR": system["chat_attachment_dir"],
             "DEEPTUTOR_SANDBOX_ALLOW_SUBPROCESS": _bool_env(system["sandbox_allow_subprocess"]),
+            "DEEPTUTOR_MCP_OWNER_SCOPE_TIMEOUT_S": str(system["mcp_owner_scope_timeout_s"]),
             "AUTH_ENABLED": _bool_env(auth["enabled"]),
             "AUTH_USERNAME": auth["username"],
             "AUTH_PASSWORD_HASH": auth["password_hash"],
@@ -633,6 +667,8 @@ class RuntimeSettingsService:
             payload["chat_attachment_max_chars_per_doc"] = value
         if value := self._process_env_value("CHAT_ATTACHMENT_MAX_CHARS_TOTAL"):
             payload["chat_attachment_max_chars_total"] = value
+        if value := self._process_env_value("DEEPTUTOR_MCP_OWNER_SCOPE_TIMEOUT_S"):
+            payload["mcp_owner_scope_timeout_s"] = value
         return self._normalize_system(payload)
 
     def _apply_auth_process_overrides(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -898,6 +934,11 @@ class RuntimeSettingsService:
                 settings.get("chat_attachment_max_chars_per_doc"),
                 DEFAULT_SYSTEM_SETTINGS["chat_attachment_max_chars_per_doc"],
                 *CHAT_ATTACHMENT_CHARS_RANGE,
+            ),
+            "mcp_owner_scope_timeout_s": _coerce_clamped_float(
+                settings.get("mcp_owner_scope_timeout_s"),
+                DEFAULT_SYSTEM_SETTINGS["mcp_owner_scope_timeout_s"],
+                *MCP_OWNER_SCOPE_TIMEOUT_RANGE,
             ),
             "chat_attachment_max_chars_total": _coerce_clamped_int(
                 settings.get("chat_attachment_max_chars_total"),

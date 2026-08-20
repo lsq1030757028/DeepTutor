@@ -445,3 +445,72 @@ def test_compute_ws_max_size_floor_and_inflation() -> None:
     derived = compute_ws_max_size(total)
     assert derived > (total * 4) // 3
     assert derived == (total * 4) // 3 + 8 * 1024 * 1024
+
+
+# --- D3: the per-owner MCP connect ceiling is a setting, not a constant ------
+
+
+def test_mcp_owner_scope_timeout_default_clears_a_real_handshake() -> None:
+    """The default must be a ceiling, not a coin flip.
+
+    Anchored to measurement, not taste: six consecutive connects to the
+    reference deployment's own per-user MCP server took 6.41-8.54s to
+    initialize + list_tools. A default at or below that band means the first
+    turn of every process loses those tools, which is what the old hard-coded
+    3.0s did.
+    """
+    from deeptutor.services.config.runtime_settings import (
+        DEFAULT_SYSTEM_SETTINGS,
+        MCP_OWNER_SCOPE_TIMEOUT_RANGE,
+    )
+
+    default = DEFAULT_SYSTEM_SETTINGS["mcp_owner_scope_timeout_s"]
+    worst_observed_handshake_s = 8.54
+    assert default > worst_observed_handshake_s
+    low, high = MCP_OWNER_SCOPE_TIMEOUT_RANGE
+    assert low <= default <= high
+
+
+def test_mcp_owner_scope_timeout_is_registered_in_all_four_places(tmp_path: Path) -> None:
+    """defaults / env export / env import / coerce — A18.
+
+    Asserted together because the failure mode of this key is a *partial*
+    registration: a setting that saves but never reaches the process, or one
+    the env can set but the file cannot.
+    """
+    from deeptutor.services.config.runtime_settings import DEFAULT_SYSTEM_SETTINGS
+
+    default = float(DEFAULT_SYSTEM_SETTINGS["mcp_owner_scope_timeout_s"])
+    service = RuntimeSettingsService(tmp_path / "settings", process_env={})
+
+    # 1. defaults + 4. coerce: a stored value survives a round-trip, and junk
+    #    falls back rather than disabling the connect.
+    saved = service.save_system({"mcp_owner_scope_timeout_s": 22.5})
+    assert saved["mcp_owner_scope_timeout_s"] == 22.5
+    assert service.load_system()["mcp_owner_scope_timeout_s"] == 22.5
+    assert (
+        service.save_system({"mcp_owner_scope_timeout_s": "not-a-number"})[
+            "mcp_owner_scope_timeout_s"
+        ]
+        == default
+    )
+    # Clamped, never zero or negative: "connect with no time at all" is the
+    # bug this key exists to prevent.
+    assert service.save_system({"mcp_owner_scope_timeout_s": -5})[
+        "mcp_owner_scope_timeout_s"
+    ] == 1.0
+    assert service.save_system({"mcp_owner_scope_timeout_s": 10_000})[
+        "mcp_owner_scope_timeout_s"
+    ] == 120.0
+
+    # 2. env export: subprocesses inherit the effective value.
+    service.save_system({"mcp_owner_scope_timeout_s": 22.5})
+    assert service.render_environment()["DEEPTUTOR_MCP_OWNER_SCOPE_TIMEOUT_S"] == "22.5"
+
+    # 3. env import: a deployment override beats the stored file.
+    env_service = RuntimeSettingsService(
+        tmp_path / "settings",
+        process_env={"DEEPTUTOR_MCP_OWNER_SCOPE_TIMEOUT_S": "31"},
+    )
+    assert env_service.load_system()["mcp_owner_scope_timeout_s"] == 31.0
+    assert _read_json(env_service.path_for("system"))["mcp_owner_scope_timeout_s"] == 22.5

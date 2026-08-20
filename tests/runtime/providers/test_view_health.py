@@ -183,3 +183,65 @@ def test_health_defaults_to_ok_so_existing_construction_sites_still_work() -> No
     view = ProviderToolView.empty(ToolRegistry())
     assert view.health == ToolViewHealth()
     assert view.health.state == "ok"
+
+
+# --- D3: the ceiling is configuration, and it is read at call time ----------
+
+
+def test_the_owner_scope_ceiling_comes_from_settings_by_default(monkeypatch) -> None:
+    """A ceiling shorter than a real handshake is a config bug, not a constant.
+
+    The module attribute stays honoured because bounding this is what a test
+    needs to drive directly — but with no override in place the deployment's
+    own setting decides, so raising it does not need a code change.
+    """
+    from deeptutor.runtime.providers.view import owner_scope_timeout_s
+
+    monkeypatch.setattr(view_module, "_OWNER_SCOPE_TIMEOUT_S", None)
+    monkeypatch.setattr(
+        "deeptutor.services.config.load_system_settings",
+        lambda: {"mcp_owner_scope_timeout_s": 21.0},
+    )
+    assert owner_scope_timeout_s() == 21.0
+
+    # An explicit override still wins, so every existing test that drives the
+    # module attribute keeps meaning what it meant.
+    monkeypatch.setattr(view_module, "_OWNER_SCOPE_TIMEOUT_S", 0.01)
+    assert owner_scope_timeout_s() == 0.01
+
+
+def test_an_unreadable_settings_file_does_not_reinstate_a_short_ceiling(monkeypatch) -> None:
+    from deeptutor.runtime.providers.view import (
+        _OWNER_SCOPE_TIMEOUT_FALLBACK_S,
+        owner_scope_timeout_s,
+    )
+
+    monkeypatch.setattr(view_module, "_OWNER_SCOPE_TIMEOUT_S", None)
+    monkeypatch.setattr(
+        "deeptutor.services.config.load_system_settings",
+        lambda: (_ for _ in ()).throw(OSError("settings unreadable")),
+    )
+    assert owner_scope_timeout_s() == _OWNER_SCOPE_TIMEOUT_FALLBACK_S
+    assert _OWNER_SCOPE_TIMEOUT_FALLBACK_S > 8.54
+
+
+async def test_a_scope_slower_than_the_old_constant_now_connects(
+    registry, monkeypatch, _stub_providers
+) -> None:
+    """The regression this key exists for: a 5-9s handshake used to be a
+    guaranteed first-turn degradation under the hard-coded 3.0s ceiling."""
+    monkeypatch.setattr(view_module, "_OWNER_SCOPE_TIMEOUT_S", None)
+    monkeypatch.setattr(
+        "deeptutor.services.config.load_system_settings",
+        lambda: {"mcp_owner_scope_timeout_s": 15.0},
+    )
+    _stub_providers.scope_delay = 3.2  # longer than the retired 3.0s constant
+    _stub_providers.scopes["u_ada"] = [_McpTool("mcp_slow_thing", "slow")]
+
+    view = await build_tool_view(
+        base_registry=registry,
+        scope=ToolScope(owner_id="u_ada", session_id="s"),
+    )
+
+    assert view.health.state == "ok"
+    assert "mcp_slow_thing" in {tool.get_definition().name for tool in view.pool}
