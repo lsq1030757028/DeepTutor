@@ -37,6 +37,7 @@ from deeptutor.core.agentic.messages import assistant_message_with_tool_calls
 from deeptutor.core.agentic.tool_dispatch import DispatchOutcome
 from deeptutor.core.agentic.usage import message_content_chars, record_streamed_usage
 from deeptutor.core.context import UnifiedContext
+from deeptutor.core.observability.stop_reason import stop_completed
 from deeptutor.core.stream_bus import StreamBus
 from deeptutor.core.trace import build_trace_metadata, merge_trace_metadata, new_call_id
 from deeptutor.services.llm import clean_thinking_tags
@@ -142,10 +143,18 @@ class LoopOutcome:
     terminator tool's content). ``completed`` is False only when the turn
     halted on an unresolved ``ask_user`` pause — the pending question is then
     the turn's final artefact.
+
+    ``last_step`` names the loop-level outcome of the step that ended the turn
+    (``pause`` / ``terminator`` / ``forced_budget`` / ``forced_error``). Those
+    four are decided *after* the LLM call they follow has already reported
+    ``call_status/complete``, so they cannot be carried on that event without
+    delaying it past the round's tool dispatch; they ride the turn's ``stop``
+    envelope instead. A plain finish leaves this ``None``.
     """
 
     final_text: str = ""
     completed: bool = False
+    last_step: dict[str, Any] | None = None
 
 
 class AgentLoop:
@@ -168,6 +177,16 @@ class AgentLoop:
         self.enabled_tools = enabled_tools
         self.tool_schemas = tool_schemas
         self._last_request: LLMRequestSnapshot | None = None
+        # Turn/step double numbering. One user turn is one AgentLoop, so the
+        # turn index is read off the history this turn was built from (the
+        # count of user messages already in the conversation) and every LLM
+        # call inside the loop takes the next step index.
+        self._turn_index = _count_user_turns(context)
+        self._step_index = 0
+        # Provider-compat retries spent inside this turn (stream_options /
+        # tool-schema / image fallbacks). Reported on the turn's ``stop`` so a
+        # failure that took three attempts does not read like a first-try one.
+        self._provider_retries = 0
 
     async def run(self) -> None:
         state = AgentLoopState()
@@ -214,6 +233,14 @@ class AgentLoop:
             "engine": "agent_loop",
             "rounds": state.rounds,
             "tool_steps": state.tool_steps,
+            # Reaching here means the loop ended on its own terms, which is the
+            # ``completed`` row ``turns.status`` will carry. The cancelled and
+            # failed terminal states never get this far — they are stamped on
+            # the turn-terminal error event in ``turn_runtime``.
+            "stop": stop_completed(
+                retries=self._provider_retries or None,
+                step_outcome=outcome.last_step,
+            ),
         }
         if self._last_request is not None:
             budget = self.pipeline.measure_context_budget(self._last_request)
@@ -256,6 +283,7 @@ class AgentLoop:
                     trace_role="explore",
                     max_tokens=self.pipeline.loop_max_tokens,
                     tool_schemas=self.tool_schemas,
+                    can_nudge=not nudged_empty_finish,
                 )
             except Exception as exc:
                 # A mid-loop LLM failure (timeout / transient network) must not
@@ -334,7 +362,11 @@ class AgentLoop:
                 if not resumed:
                     # The pending question is already the turn's final
                     # artefact (or the user abandoned the turn) — stop.
-                    return LoopOutcome(final_text="", completed=False)
+                    return LoopOutcome(
+                        final_text="",
+                        completed=False,
+                        last_step=self._last_step("pause"),
+                    )
                 # The user's answers were substituted into the matching
                 # ``role=tool`` message; the next round sees them in-protocol.
                 continue
@@ -351,6 +383,7 @@ class AgentLoop:
                 return LoopOutcome(
                     final_text=str(payload.get("content") or ""),
                     completed=True,
+                    last_step=self._last_step("terminator"),
                 )
 
         # Round budget ran out while still requesting tools — force a finish.
@@ -400,6 +433,7 @@ class AgentLoop:
             metadata={"trace_kind": "warning"},
         )
         messages.append({"role": "user", "content": self.pipeline._finish_exhausted_instruction()})
+        outcome_kind = "forced_error" if reason == "error" else "forced_budget"
         try:
             result = await self._call_llm(
                 messages=messages,
@@ -408,17 +442,39 @@ class AgentLoop:
                 trace_role="response",
                 max_tokens=self.pipeline.loop_max_tokens,
                 tool_schemas=None,  # tools disabled so the model must finish
+                outcome_hint=outcome_kind,
+                outcome_detail=reason,
             )
         except Exception as exc:
             # The salvage call itself failed (e.g. the provider is still
             # stalling). Don't bubble up and lose the turn — emit the graceful
             # fallback answer instead.
             logger.warning("forced-finish LLM call failed: %s", exc)
-            return await self._finalize_finish("")
+            return await self._finalize_finish(
+                "", last_step=self._last_step(outcome_kind, detail=reason)
+            )
         state.rounds += 1
-        return await self._finalize_finish(result.text)
+        return await self._finalize_finish(
+            result.text, last_step=self._last_step(outcome_kind, detail=reason)
+        )
 
-    async def _finalize_finish(self, raw_text: str) -> LoopOutcome:
+    def _last_step(self, kind: str, *, detail: str = "") -> dict[str, Any]:
+        """Loop-level outcome of the step that is ending the turn."""
+        step: dict[str, Any] = {
+            "kind": kind,
+            "turn_index": self._turn_index,
+            "step_index": max(0, self._step_index - 1),
+        }
+        if detail:
+            step["detail"] = detail
+        return step
+
+    async def _finalize_finish(
+        self,
+        raw_text: str,
+        *,
+        last_step: dict[str, Any] | None = None,
+    ) -> LoopOutcome:
         final_text = self._clean(raw_text)
         if not final_text:
             # The finish round produced no usable text; nothing streamed to
@@ -431,7 +487,7 @@ class AgentLoop:
                 ),
             )
             await self.pipeline._emit_protocol_fallback_final_response(self.stream, final_text)
-        return LoopOutcome(final_text=final_text, completed=True)
+        return LoopOutcome(final_text=final_text, completed=True, last_step=last_step)
 
     # ---- LLM call ----------------------------------------------------------
 
@@ -444,9 +500,14 @@ class AgentLoop:
         trace_role: str,
         max_tokens: int,
         tool_schemas: list[dict[str, Any]] | None = None,
+        can_nudge: bool = False,
+        outcome_hint: str | None = None,
+        outcome_detail: str = "",
     ) -> LLMCallResult:
         await self.pipeline._guard_context_window(messages, self.stream)
         stage = LOOP_STAGE
+        step_index = self._step_index
+        self._step_index += 1
         call_id = new_call_id(f"chat-{stage}")
         trace_meta = build_trace_metadata(
             call_id=call_id,
@@ -463,7 +524,12 @@ class AgentLoop:
             stage=stage,
             metadata=merge_trace_metadata(
                 trace_meta,
-                {"trace_kind": "call_status", "call_state": "running"},
+                {
+                    "trace_kind": "call_status",
+                    "call_state": "running",
+                    "turn_index": self._turn_index,
+                    "step_index": step_index,
+                },
             ),
         )
 
@@ -619,6 +685,13 @@ class AgentLoop:
                 tool_calls = dsml_calls
                 text = cleaned_text
 
+        step_outcome = self._step_outcome(
+            tool_calls=tool_calls,
+            text=text,
+            can_nudge=can_nudge,
+            outcome_hint=outcome_hint,
+            outcome_detail=outcome_detail,
+        )
         await self.stream.progress(
             "",
             source="chat",
@@ -631,10 +704,53 @@ class AgentLoop:
                     # A round with tool calls is narration; a tool-less round
                     # is the finish whose text is the user-facing answer.
                     "call_role": "narration" if tool_calls else "finish",
+                    "turn_index": self._turn_index,
+                    "step_index": step_index,
+                    # Verbatim from the provider — ``stop`` / ``tool_calls`` /
+                    # ``length`` / ``content_filter`` / "" — deliberately not
+                    # normalised: "the provider sent nothing" is itself a lead.
+                    "finish_reason": finish_reason,
+                    "step_outcome": step_outcome,
+                    "tool_calls_requested": [call["name"] for call in tool_calls],
+                    "tools_offered": len(tool_schemas or []),
                 },
             ),
         )
         return LLMCallResult(text=text, tool_calls=tool_calls, finish_reason=finish_reason)
+
+    def _step_outcome(
+        self,
+        *,
+        tool_calls: list[dict[str, Any]],
+        text: str,
+        can_nudge: bool,
+        outcome_hint: str | None,
+        outcome_detail: str,
+    ) -> dict[str, Any]:
+        """Why this LLM call ended, as the loop reads it.
+
+        Deliberately parallel to ``finish_reason`` rather than merged with it:
+        the provider's word and the loop's own reading disagreeing is exactly
+        the kind of thing worth being able to see.
+
+        Only the outcomes decidable *at call completion* appear here. A round
+        whose tool dispatch later pauses or terminates the turn is still
+        ``narration`` from this call's point of view; that turn-level ending
+        rides ``stop.step_outcome`` (see :class:`LoopOutcome`).
+        """
+        if outcome_hint:
+            outcome: dict[str, Any] = {"kind": outcome_hint}
+            if outcome_detail:
+                outcome["detail"] = outcome_detail
+            return outcome
+        if tool_calls:
+            return {"kind": "narration"}
+        if can_nudge and not self._clean(text):
+            # Matches the loop's own nudge condition: a tool-less round whose
+            # text cleans away to nothing gets one prod to act instead of
+            # ending the turn on an empty answer.
+            return {"kind": "nudge_empty"}
+        return {"kind": "finish"}
 
     async def _create_response_stream(
         self,
@@ -646,10 +762,12 @@ class AgentLoop:
             return await self.client.chat.completions.create(**kwargs)
         except Exception as exc:
             if "stream_options" in kwargs and is_stream_options_unsupported(exc):
+                self._provider_retries += 1
                 retry_kwargs = dict(kwargs)
                 retry_kwargs.pop("stream_options", None)
                 return await self.client.chat.completions.create(**retry_kwargs)
             if kwargs.get("tools") and is_tool_schema_unsupported(exc):
+                self._provider_retries += 1
                 await self.stream.progress(
                     self.pipeline._t(
                         "notices.tool_schema_fallback",
@@ -672,6 +790,7 @@ class AgentLoop:
                 self.pipeline.model,
                 kwargs.get("messages") or [],
             ):
+                self._provider_retries += 1
                 strip_image_parts_inplace(kwargs["messages"])
                 await self.stream.progress(
                     self.pipeline._t(
@@ -687,6 +806,21 @@ class AgentLoop:
                 )
                 return await self.client.chat.completions.create(**kwargs)
             raise
+
+
+def _count_user_turns(context: UnifiedContext) -> int:
+    """Zero-based index of this turn within its session.
+
+    One user turn is one :class:`AgentLoop`, so the turn's own index is the
+    number of user messages already in the history it was built from. Read off
+    the context rather than kept in a counter: the loop is constructed fresh
+    per turn and has nowhere durable to count.
+    """
+    try:
+        history = context.conversation_history or []
+        return sum(1 for item in history if (item or {}).get("role") == "user")
+    except Exception:  # pragma: no cover - an index is informational
+        return 0
 
 
 def _last_context_checkpoint_summary(dispatch: DispatchOutcome) -> str:

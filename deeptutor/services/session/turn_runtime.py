@@ -13,6 +13,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Literal
 
+from deeptutor.core.observability.stop_reason import classify_exception, stop_interrupted
 from deeptutor.core.stream import StreamEvent, StreamEventType
 from deeptutor.services.llm.utils import clean_thinking_tags
 from deeptutor.services.path_service import get_path_service
@@ -1732,7 +1733,11 @@ class TurnRuntimeManager:
                         type=StreamEventType.ERROR,
                         source=capability_name,
                         content="Turn cancelled",
-                        metadata={"turn_terminal": True, "status": "cancelled"},
+                        metadata={
+                            "turn_terminal": True,
+                            "status": "cancelled",
+                            "stop": stop_interrupted(),
+                        },
                     ),
                 )
                 await self._publish_live_event(
@@ -1791,7 +1796,11 @@ class TurnRuntimeManager:
                         type=StreamEventType.ERROR,
                         source=capability_name,
                         content=str(exc),
-                        metadata={"turn_terminal": True, "status": "failed"},
+                        metadata={
+                            "turn_terminal": True,
+                            "status": "failed",
+                            "stop": classify_exception(exc),
+                        },
                     ),
                 )
                 await self._publish_live_event(
