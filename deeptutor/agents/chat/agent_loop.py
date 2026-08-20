@@ -197,6 +197,11 @@ class AgentLoop:
             self.context, self.stream
         )
         async with self.stream.stage(LOOP_STAGE, source="chat"):
+            # First row of this turn's trace: what the capability-assembly step
+            # managed to put on the table, before the model gets a say. Without
+            # it, "the model did not call the tool" and "the tool was never
+            # offered" look identical after the fact.
+            await self.pipeline.emit_channel_health(self.stream, stage=LOOP_STAGE)
             seed_block = await self.pipeline._retrieve_kb_seed_block(self.context, self.stream)
             capability_seed = self.pipeline._capability_pre_loop_seed(self.context)
             seed_block = "\n\n".join(

@@ -26,6 +26,7 @@ class ChatPromptAssembler:
         notebook_manifest: str = "",
         workspace_note: str = "",
         capability_blocks: list[PromptBlock] | None = None,
+        channel_health_note: str = "",
         include_tool_manifest: bool = True,
     ) -> str:
         return self.render(
@@ -37,6 +38,7 @@ class ChatPromptAssembler:
                 notebook_manifest=notebook_manifest,
                 workspace_note=workspace_note,
                 capability_blocks=capability_blocks,
+                channel_health_note=channel_health_note,
                 include_tool_manifest=include_tool_manifest,
             )
         )
@@ -64,6 +66,7 @@ class ChatPromptAssembler:
         notebook_manifest: str = "",
         workspace_note: str = "",
         capability_blocks: list[PromptBlock] | None = None,
+        channel_health_note: str = "",
         include_tool_manifest: bool = True,
     ) -> list[PromptBlock]:
         blocks: list[PromptBlock] = [
@@ -81,6 +84,13 @@ class ChatPromptAssembler:
             blocks.append(PromptBlock("partner_turn_policy", partner_policy))
         if context.memory_context:
             blocks.append(PromptBlock("memory", context.memory_context))
+        # Sits immediately before the tool list it describes, and is emitted
+        # on healthy turns too: were it written only when something degraded,
+        # its absence would stay ambiguous between "assembly was fine" and
+        # "this build does not report assembly" — the ambiguity that let a
+        # thinner tool list be read as a dead channel.
+        if channel_health_note:
+            blocks.append(PromptBlock("channel_health", channel_health_note))
         if include_tool_manifest:
             tools = tool_manifest or self._fallback_empty_tool_list()
             if kb_note:

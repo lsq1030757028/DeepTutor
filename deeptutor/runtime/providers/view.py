@@ -14,8 +14,9 @@ itself must still run.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
+import time
 from typing import Any
 
 from deeptutor.core.tool_protocol import BaseTool, ToolLookup
@@ -37,6 +38,64 @@ logger = logging.getLogger(__name__)
 _OWNER_SCOPE_TIMEOUT_S = 3.0
 
 
+#: Assembly stages that can degrade — one per ``return []`` site in this
+#: module, plus the pipeline's defence-in-depth fallback. Named values rather
+#: than free text so "which channel dropped out" is answerable mechanically.
+STAGE_OWNER_SCOPE = "owner_scope"
+STAGE_CLI_APPS = "cli_apps"
+STAGE_TOOL_VIEW = "tool_view"
+
+REASON_TIMEOUT = "timeout"
+REASON_ERROR = "error"
+
+
+@dataclass(frozen=True)
+class Degradation:
+    """One assembly stage that produced nothing, and why.
+
+    This is what the health field exists for: the four ``return []`` sites
+    below each hand the turn a smaller tool surface than was asked for, and
+    until now they said so only to a log line nobody reads mid-incident.
+    """
+
+    stage: str
+    reason: str
+    detail: str = ""
+    elapsed_ms: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "stage": self.stage,
+            "reason": self.reason,
+            "detail": self.detail,
+            "elapsed_ms": self.elapsed_ms,
+        }
+
+
+@dataclass(frozen=True)
+class ToolViewHealth:
+    """What the assembly of one turn's tool surface actually managed to do."""
+
+    degradations: tuple[Degradation, ...] = ()
+
+    @property
+    def state(self) -> str:
+        return "degraded" if self.degradations else "ok"
+
+    @property
+    def degraded(self) -> bool:
+        return bool(self.degradations)
+
+    def with_degradation(self, degradation: Degradation) -> "ToolViewHealth":
+        return ToolViewHealth(degradations=(*self.degradations, degradation))
+
+    def merged(self, other: "ToolViewHealth") -> "ToolViewHealth":
+        return ToolViewHealth(degradations=(*self.degradations, *other.degradations))
+
+    def as_dicts(self) -> list[dict[str, Any]]:
+        return [degradation.as_dict() for degradation in self.degradations]
+
+
 @dataclass(frozen=True)
 class ProviderToolView:
     """One turn's resolved provider surface."""
@@ -50,10 +109,23 @@ class ProviderToolView:
     pool: tuple[BaseTool, ...]
     #: Rendered ``extended_tools`` system-prompt block ("" when suppressed).
     manifest: str
+    #: Which assembly stages, if any, degraded while building this view.
+    #: Defaults to healthy, so every existing construction site stays valid.
+    health: ToolViewHealth = field(default=ToolViewHealth())
 
     @classmethod
-    def empty(cls, registry: ToolLookup) -> "ProviderToolView":
-        return cls(registry=registry, loader=None, pool=(), manifest="")
+    def empty(
+        cls,
+        registry: ToolLookup,
+        health: ToolViewHealth | None = None,
+    ) -> "ProviderToolView":
+        return cls(
+            registry=registry,
+            loader=None,
+            pool=(),
+            manifest="",
+            health=health or ToolViewHealth(),
+        )
 
     def attach(self, tool_schemas: list[dict[str, Any]]) -> None:
         """Add already-loaded schemas and bind the turn's live schema list.
@@ -83,9 +155,18 @@ async def build_tool_view(
             language=language,
             refusal_message=refusal_message,
         )
-    except Exception:
+    except Exception as exc:
         logger.warning("provider tool view assembly failed; continuing without", exc_info=True)
-        return ProviderToolView.empty(base_registry)
+        return ProviderToolView.empty(
+            base_registry,
+            ToolViewHealth().with_degradation(
+                Degradation(
+                    stage=STAGE_TOOL_VIEW,
+                    reason=REASON_ERROR,
+                    detail=_detail(exc),
+                )
+            ),
+        )
 
 
 async def _build(
@@ -101,10 +182,11 @@ async def _build(
     await manager.ensure_started()
 
     shared_pool = list(base_registry.deferred_tools())
-    owned_pool = await _owned_tools(manager, scope)
-    cli_pool = _cli_app_tools(scope)
+    owned_pool, owned_health = await _owned_tools(manager, scope)
+    cli_pool, cli_health = _cli_app_tools(scope)
+    health = owned_health.merged(cli_health)
     if not shared_pool and not owned_pool and not cli_pool:
-        return ProviderToolView.empty(base_registry)
+        return ProviderToolView.empty(base_registry, health)
 
     # Resolve resource-derived authorisation (e.g. an attached PageIndex KB
     # authorises that server) from provider ids to concrete tool names.
@@ -165,7 +247,7 @@ async def _build(
     if not pool:
         # Nothing authorised: no manifest, no loader — but keep the scoped
         # registry so dispatch still refuses names the model may invent.
-        return ProviderToolView(registry=registry, loader=None, pool=(), manifest="")
+        return ProviderToolView(registry=registry, loader=None, pool=(), manifest="", health=health)
 
     loader = DeferredToolLoader(
         registry=registry,
@@ -181,7 +263,9 @@ async def _build(
         if scope.exclusive_capability
         else render_deferred_tools_manifest(list(pool), language=language)
     )
-    return ProviderToolView(registry=registry, loader=loader, pool=pool, manifest=manifest)
+    return ProviderToolView(
+        registry=registry, loader=loader, pool=pool, manifest=manifest, health=health
+    )
 
 
 def _is_test_journey_tool(tool: BaseTool) -> bool:
@@ -193,7 +277,10 @@ def _is_test_journey_tool(tool: BaseTool) -> bool:
         return False
 
 
-async def _owned_tools(manager: Any, scope: ToolScope) -> list[BaseTool]:
+async def _owned_tools(
+    manager: Any,
+    scope: ToolScope,
+) -> tuple[list[BaseTool], ToolViewHealth]:
     """Tools from servers this caller configured for themselves.
 
     Bounded by a per-scope timeout: connecting somebody's own remote server is a
@@ -204,27 +291,47 @@ async def _owned_tools(manager: Any, scope: ToolScope) -> list[BaseTool]:
     if scope.is_partner or not scope.owner_id:
         # A partner has no account of its own, so it has no self-configured
         # servers; its surface is the deployment's, filtered by its own list.
-        return []
+        # Not a degradation: nothing here was supposed to connect.
+        return [], ToolViewHealth()
+    started = time.monotonic()
     try:
-        return list(
+        connected = list(
             await asyncio.wait_for(
                 manager.ensure_scope(scope.owner_id),
                 timeout=_OWNER_SCOPE_TIMEOUT_S,
             )
         )
+        return connected, ToolViewHealth()
     except asyncio.TimeoutError:
         logger.warning(
             "per-user MCP scope for %s did not connect in %ss; continuing without",
             scope.owner_id,
             _OWNER_SCOPE_TIMEOUT_S,
         )
-        return []
-    except Exception:
+        return [], ToolViewHealth().with_degradation(
+            Degradation(
+                stage=STAGE_OWNER_SCOPE,
+                reason=REASON_TIMEOUT,
+                # The budget that was missed, not a verdict: a scope that did
+                # not answer within 3s was slow here, which is not the same
+                # claim as "that server is down".
+                detail=f"{_OWNER_SCOPE_TIMEOUT_S}s",
+                elapsed_ms=_elapsed_ms(started),
+            )
+        )
+    except Exception as exc:
         logger.warning("per-user MCP scope for %s failed", scope.owner_id, exc_info=True)
-        return []
+        return [], ToolViewHealth().with_degradation(
+            Degradation(
+                stage=STAGE_OWNER_SCOPE,
+                reason=REASON_ERROR,
+                detail=_detail(exc),
+                elapsed_ms=_elapsed_ms(started),
+            )
+        )
 
 
-def _cli_app_tools(scope: ToolScope) -> list[BaseTool]:
+def _cli_app_tools(scope: ToolScope) -> tuple[list[BaseTool], ToolViewHealth]:
     """Installed CLI apps this caller may invoke, as tools.
 
     Synchronous and cheap on purpose — it reads two small JSON files. Unlike the
@@ -235,7 +342,10 @@ def _cli_app_tools(scope: ToolScope) -> list[BaseTool]:
     gets none of these (the same rule ``authorize_mcp_tools`` applies to MCP).
     """
     if scope.exclusive_capability:
-        return []
+        # Deliberate policy, not a failure: an exclusive capability replaces
+        # the tool surface, so there is nothing here to report as degraded.
+        return [], ToolViewHealth()
+    started = time.monotonic()
     try:
         from deeptutor.multi_user.tool_access import allowed_cli_apps, exec_override
         from deeptutor.services.cli_apps.provider import authorized_apps, build_app_tools
@@ -246,10 +356,17 @@ def _cli_app_tools(scope: ToolScope) -> list[BaseTool]:
             granted=allowed_cli_apps(),
             exec_allowed=exec_override(),
         )
-        return build_app_tools(access.apps)
-    except Exception:
+        return build_app_tools(access.apps), ToolViewHealth()
+    except Exception as exc:
         logger.warning("CLI app tools unavailable this turn; continuing", exc_info=True)
-        return []
+        return [], ToolViewHealth().with_degradation(
+            Degradation(
+                stage=STAGE_CLI_APPS,
+                reason=REASON_ERROR,
+                detail=_detail(exc),
+                elapsed_ms=_elapsed_ms(started),
+            )
+        )
 
 
 def _user_grant(scope: ToolScope) -> Allowlist:
@@ -266,4 +383,42 @@ def _user_grant(scope: ToolScope) -> Allowlist:
     return Allowlist.of(allowed_mcp_tools())
 
 
-__all__ = ["ProviderToolView", "build_tool_view"]
+def owner_scope_timeout_s() -> float:
+    """The per-scope connect ceiling, read at call time.
+
+    A function rather than a re-export so that reporting the value and
+    enforcing it cannot drift apart — including under a test that patches the
+    module constant.
+    """
+    return _OWNER_SCOPE_TIMEOUT_S
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int((time.monotonic() - started) * 1000))
+
+
+def _detail(exc: BaseException) -> str:
+    """Short, masked description of a failure, safe to put on the wire.
+
+    Imported lazily: ``core.observability`` must not become a load-time
+    dependency of the provider layer.
+    """
+    from deeptutor.core.observability.redaction import redact_text
+
+    text = str(exc).strip()
+    described = f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+    return redact_text(described, max_chars=200)
+
+
+__all__ = [
+    "Degradation",
+    "ProviderToolView",
+    "REASON_ERROR",
+    "REASON_TIMEOUT",
+    "STAGE_CLI_APPS",
+    "STAGE_OWNER_SCOPE",
+    "STAGE_TOOL_VIEW",
+    "ToolViewHealth",
+    "build_tool_view",
+    "owner_scope_timeout_s",
+]
