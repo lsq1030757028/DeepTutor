@@ -39,7 +39,8 @@ from deeptutor.core.agentic.messages import assistant_message_with_tool_calls
 from deeptutor.core.agentic.tool_dispatch import DispatchOutcome
 from deeptutor.core.agentic.usage import message_content_chars, record_streamed_usage
 from deeptutor.core.context import UnifiedContext
-from deeptutor.core.observability.stop_reason import stop_completed
+from deeptutor.core.observability.diagnostics import Elapsed, diag
+from deeptutor.core.observability.stop_reason import classify_exception, stop_completed
 from deeptutor.core.observability.trace_sidecar import record_header_async, unavailable_ref
 from deeptutor.core.stream_bus import StreamBus
 from deeptutor.core.trace import build_trace_metadata, merge_trace_metadata, new_call_id
@@ -617,7 +618,30 @@ class AgentLoop:
                         segment, source="chat", stage=stage, metadata=chunk_meta
                     )
 
-        response_stream = await self._create_response_stream(kwargs, trace_meta, stage)
+        diag(
+            "llm.call.start",
+            call_id=call_id,
+            turn_index=self._turn_index,
+            step_index=step_index,
+            call_kind=call_kind,
+            model=self.pipeline.model,
+            tools_offered=len(tool_schemas or []),
+            messages=len(messages),
+            header_mode=header_ref.get("mode"),
+        )
+        clock = Elapsed()
+        try:
+            response_stream = await self._create_response_stream(kwargs, trace_meta, stage)
+        except Exception as exc:
+            diag(
+                "llm.call.error",
+                call_id=call_id,
+                turn_index=self._turn_index,
+                step_index=step_index,
+                elapsed_ms=clock.ms,
+                stop=classify_exception(exc, retries=self._provider_retries),
+            )
+            raise
         try:
             async for chunk in response_stream:
                 usage = getattr(chunk, "usage", None)
@@ -747,6 +771,19 @@ class AgentLoop:
                     "header_ref": header_ref,
                 },
             ),
+        )
+        diag(
+            "llm.call.end",
+            call_id=call_id,
+            turn_index=self._turn_index,
+            step_index=step_index,
+            elapsed_ms=clock.ms,
+            finish_reason=finish_reason,
+            step_outcome=step_outcome.get("kind"),
+            tool_calls_requested=[call["name"] for call in tool_calls],
+            text_chars=len(text),
+            output_chars=output_chars,
+            retries=self._provider_retries or None,
         )
         return LLMCallResult(text=text, tool_calls=tool_calls, finish_reason=finish_reason)
 
@@ -896,11 +933,13 @@ class AgentLoop:
         except Exception as exc:
             if "stream_options" in kwargs and is_stream_options_unsupported(exc):
                 self._provider_retries += 1
+                diag("llm.compat_retry", reason="stream_options", attempt=self._provider_retries)
                 retry_kwargs = dict(kwargs)
                 retry_kwargs.pop("stream_options", None)
                 return await self.client.chat.completions.create(**retry_kwargs)
             if kwargs.get("tools") and is_tool_schema_unsupported(exc):
                 self._provider_retries += 1
+                diag("llm.compat_retry", reason="tool_schema", attempt=self._provider_retries)
                 await self.stream.progress(
                     self.pipeline._t(
                         "notices.tool_schema_fallback",
@@ -924,6 +963,7 @@ class AgentLoop:
                 kwargs.get("messages") or [],
             ):
                 self._provider_retries += 1
+                diag("llm.compat_retry", reason="image_input", attempt=self._provider_retries)
                 strip_image_parts_inplace(kwargs["messages"])
                 await self.stream.progress(
                     self.pipeline._t(

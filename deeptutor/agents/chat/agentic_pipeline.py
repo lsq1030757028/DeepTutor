@@ -33,6 +33,7 @@ from deeptutor.core.agentic import (
 )
 from deeptutor.core.agentic.tool_dispatch import MAX_PARALLEL_TOOL_CALLS
 from deeptutor.core.context import UnifiedContext
+from deeptutor.core.observability.diagnostics import diag
 from deeptutor.core.stream_bus import StreamBus
 from deeptutor.core.tool_protocol import ToolLookup
 from deeptutor.core.trace import (
@@ -648,6 +649,16 @@ class AgenticChatPipeline:
                 degraded_stages=[item["stage"] for item in degradations],
             )
             await stream.progress("", source="chat", stage=stage, metadata=metadata)
+            diag(
+                "assembly.result",
+                state=health.state,
+                degradations=degradations,
+                tools_available=metadata["tools_available"],
+                mcp_servers=[
+                    {"name": row["name"], "status": row["status"]}
+                    for row in metadata["mcp_servers"]
+                ],
+            )
         except Exception:
             logger.debug("channel health event not emitted", exc_info=True)
 

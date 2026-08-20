@@ -27,6 +27,7 @@ import logging
 from typing import Any
 
 from deeptutor.core.context import UnifiedContext
+from deeptutor.core.observability.diagnostics import Elapsed, diag
 from deeptutor.core.stream_bus import StreamBus
 from deeptutor.core.tool_protocol import ToolLookup, provider_identity
 from deeptutor.core.trace import (
@@ -41,6 +42,15 @@ from deeptutor.utils.json_parser import parse_json_response
 logger = logging.getLogger(__name__)
 
 MAX_PARALLEL_TOOL_CALLS = 8
+
+
+def _diag_call_id(meta: dict[str, Any] | None) -> str:
+    """Sub-trace id this tool call streams under, for the diagnostic log.
+
+    Empty for a bare call made outside the dispatcher: those have no sub-trace
+    to correlate against, and inventing an id would imply one exists.
+    """
+    return str((meta or {}).get("call_id") or "")
 
 
 KwargAugmenter = Callable[[str, dict[str, Any], UnifiedContext], dict[str, Any]]
@@ -422,6 +432,15 @@ async def execute_tool_call(
                 call_state="running",
             ),
         )
+    # Argument *names* only. Which tool ran, and with what shape of call, is
+    # the diagnostic question; the values are user data and tool payloads.
+    diag(
+        "tool.call",
+        tool=tool_name,
+        call_id=_diag_call_id(status_meta),
+        args=sorted(tool_args),
+    )
+    tool_clock = Elapsed()
     try:
         result = await registry.execute(
             tool_name,
@@ -453,6 +472,19 @@ async def execute_tool_call(
                     call_state="complete" if result.success else "error",
                 ),
             )
+        diag(
+            "tool.result",
+            tool=tool_name,
+            call_id=_diag_call_id(status_meta),
+            elapsed_ms=tool_clock.ms,
+            success=result.success,
+            # Size, not text: a tool result is exactly the kind of body this
+            # log must never start carrying.
+            result_chars=len(result.content or ""),
+            sources=len(result.sources or []),
+            terminate_turn=bool(getattr(result, "terminate_turn", False)),
+            paused=bool(getattr(result, "pause_for_user", None)),
+        )
         return {
             "result_text": result.content or empty_tool_result_message,
             "success": result.success,
@@ -466,6 +498,13 @@ async def execute_tool_call(
         # every failure mode — raise, missing tool — closes the sub-trace with a
         # terminal state instead of leaving a row that reads as completed.
         logger.error("Tool %s failed", tool_name, exc_info=True)
+        diag(
+            "tool.error",
+            tool=tool_name,
+            call_id=_diag_call_id(status_meta),
+            elapsed_ms=tool_clock.ms,
+            error=f"{type(exc).__name__}: {exc}",
+        )
         if status_meta is not None:
             # A raising tool closes its sub-trace with a terminal *progress*
             # event, not a stream ERROR. The frontend keys terminality off

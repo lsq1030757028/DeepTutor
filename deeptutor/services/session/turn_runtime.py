@@ -13,8 +13,10 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Literal
 
+from deeptutor.core.observability.diagnostics import Elapsed, diag
 from deeptutor.core.observability.stop_reason import classify_exception, stop_interrupted
 from deeptutor.core.stream import StreamEvent, StreamEventType
+from deeptutor.logging import bind_log_context
 from deeptutor.services.llm.utils import clean_thinking_tags
 from deeptutor.services.path_service import get_path_service
 from deeptutor.services.session.artifact_attachments import (
@@ -1114,6 +1116,58 @@ class TurnRuntimeManager:
             yield item
 
     async def _run_turn(self, execution: _TurnExecution) -> None:
+        """Bind this turn's identity, then run it.
+
+        Everything the turn does — this module, the pipeline, the agent loop,
+        the tools, and any library that logs through stdlib logging — inherits
+        ``session_id`` / ``turn_id`` / ``capability`` from here via
+        contextvars. That is what makes "which lines belong to the session
+        that misbehaved" a ``grep``, which it previously was not: the fields
+        were declared but nothing ever set them.
+        """
+        with bind_log_context(
+            session_id=execution.session_id,
+            turn_id=execution.turn_id,
+            capability=execution.capability,
+        ):
+            clock = Elapsed()
+            diag(
+                "turn.start",
+                capability=execution.capability,
+                content_chars=len(str(execution.payload.get("content") or "")),
+                tools=list(execution.payload.get("tools") or []),
+                knowledge_bases=list(execution.payload.get("knowledge_bases") or []),
+                attachments=len(execution.payload.get("attachments") or []),
+            )
+            try:
+                await self._execute_turn(execution)
+            except asyncio.CancelledError:
+                diag("turn.end", status="cancelled", elapsed_ms=clock.ms)
+                raise
+            except BaseException as exc:
+                diag(
+                    "turn.end",
+                    status="failed",
+                    elapsed_ms=clock.ms,
+                    stop=classify_exception(exc)
+                    if isinstance(exc, Exception)
+                    else {"kind": "error", "code": "UNKNOWN"},
+                )
+                raise
+            diag("turn.end", status=self._last_status(execution), elapsed_ms=clock.ms)
+
+    def _last_status(self, execution: _TurnExecution) -> str:
+        """Terminal status as the turn's own DONE event reported it.
+
+        Read back off the event rather than recomputed: the runtime already
+        decided this, and a second derivation is a second thing to drift.
+        """
+        for payload in reversed(execution.events):
+            if payload.get("type") == "done":
+                return str((payload.get("metadata") or {}).get("status") or "completed")
+        return "completed"
+
+    async def _execute_turn(self, execution: _TurnExecution) -> None:
         payload = execution.payload
         session_id = execution.session_id
         capability_name = execution.capability
@@ -1790,6 +1844,7 @@ class TurnRuntimeManager:
                     await self.store.update_turn_status(turn_id, "failed", str(exc))
             else:
                 logger.error("Turn %s failed: %s", turn_id, exc, exc_info=True)
+                diag("turn.error", stop=classify_exception(exc))
                 await self._publish_live_event(
                     execution,
                     StreamEvent(

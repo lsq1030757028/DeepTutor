@@ -19,6 +19,16 @@ class ContextFilter(logging.Filter):
             value = getattr(record, key, None)
             if value is not None:
                 context[key] = value
+        # Structured per-call detail (``diag(...)`` and anything else passing
+        # ``extra={"log_extra": {...}}``). Merged rather than promoted to top
+        # level so the entry shape stays timestamp/level/logger/message/context
+        # — and merged *after* the bound identifiers so a stray field cannot
+        # overwrite the session or turn a line belongs to.
+        extra = getattr(record, "log_extra", None)
+        if isinstance(extra, dict):
+            for key, value in extra.items():
+                if key not in LOG_CONTEXT_FIELDS:
+                    context[key] = value
         record.log_context = context
         return True
 
