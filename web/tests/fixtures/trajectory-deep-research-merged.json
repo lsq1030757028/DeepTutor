@@ -1,0 +1,290 @@
+[
+  {
+    "events": [
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {
+          "call_id": "assembly-turn_dr_parent",
+          "phase": "assembling",
+          "label": "Capability assembly",
+          "call_kind": "channel_health",
+          "trace_id": "assembly-turn_dr_parent",
+          "trace_kind": "channel_health",
+          "assembly_state": "ok",
+          "degradations": [],
+          "mcp_servers": [
+            {
+              "name": "fastmcp",
+              "transport": "streamableHttp",
+              "status": "connected",
+              "error": ""
+            }
+          ],
+          "tools_available": 41,
+          "owner_scope_timeout_s": 15.0,
+          "status_key": "channel_health_ok",
+          "degraded_stages": []
+        },
+        "session_id": "sess_fixture",
+        "turn_id": "turn_dr_parent",
+        "seq": 1,
+        "timestamp": 1787230600.0
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "Exploring",
+        "metadata": {
+          "call_id": "round-turn_dr_parent-0",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "round-turn_dr_parent-0",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "call_status",
+          "call_state": "running",
+          "turn_index": 0,
+          "step_index": 0
+        },
+        "session_id": "sess_fixture",
+        "turn_id": "turn_dr_parent",
+        "seq": 2,
+        "timestamp": 1787230600.1
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "part",
+        "metadata": {
+          "call_id": "round-turn_dr_parent-0",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "round-turn_dr_parent-0",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "sess_fixture",
+        "turn_id": "turn_dr_parent",
+        "seq": 3,
+        "timestamp": 1787230600.7
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {
+          "call_id": "round-turn_dr_parent-0",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "round-turn_dr_parent-0",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "call_status",
+          "call_state": "complete",
+          "call_role": "finish",
+          "turn_index": 0,
+          "step_index": 0,
+          "finish_reason": "stop",
+          "step_outcome": {
+            "kind": "finish"
+          },
+          "tool_calls_requested": [],
+          "tools_offered": 41,
+          "header_ref": {
+            "seq": 4,
+            "hash": "hhhhhhhh",
+            "mode": "recorded",
+            "parts": {
+              "system": "ssssssss",
+              "tools": "tttttttt",
+              "config": "cccccccc"
+            }
+          }
+        },
+        "session_id": "sess_fixture",
+        "turn_id": "turn_dr_parent",
+        "seq": 4,
+        "timestamp": 1787230602.0
+      },
+      {
+        "type": "result",
+        "source": "chat",
+        "stage": "",
+        "content": "",
+        "metadata": {
+          "response": "answer",
+          "completed": true,
+          "engine": "agent_loop",
+          "rounds": 1,
+          "tool_steps": 0,
+          "stop": {
+            "kind": "completed",
+            "code": "OK"
+          },
+          "metadata": {
+            "cost_summary": {
+              "total_tokens": 500,
+              "total_calls": 1
+            }
+          }
+        },
+        "session_id": "sess_fixture",
+        "turn_id": "turn_dr_parent",
+        "seq": 5,
+        "timestamp": 1787230602.1
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {
+          "call_id": "assembly-turn_dr_followup",
+          "phase": "assembling",
+          "label": "Capability assembly",
+          "call_kind": "channel_health",
+          "trace_id": "assembly-turn_dr_followup",
+          "trace_kind": "channel_health",
+          "assembly_state": "ok",
+          "degradations": [],
+          "mcp_servers": [
+            {
+              "name": "fastmcp",
+              "transport": "streamableHttp",
+              "status": "connected",
+              "error": ""
+            }
+          ],
+          "tools_available": 41,
+          "owner_scope_timeout_s": 15.0,
+          "status_key": "channel_health_ok",
+          "degraded_stages": []
+        },
+        "session_id": "sess_fixture",
+        "turn_id": "turn_dr_followup",
+        "seq": 1,
+        "timestamp": 1787230620.0
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "Exploring",
+        "metadata": {
+          "call_id": "round-turn_dr_followup-0",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "round-turn_dr_followup-0",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "call_status",
+          "call_state": "running",
+          "turn_index": 1,
+          "step_index": 0
+        },
+        "session_id": "sess_fixture",
+        "turn_id": "turn_dr_followup",
+        "seq": 2,
+        "timestamp": 1787230620.1
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "part",
+        "metadata": {
+          "call_id": "round-turn_dr_followup-0",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "round-turn_dr_followup-0",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "sess_fixture",
+        "turn_id": "turn_dr_followup",
+        "seq": 3,
+        "timestamp": 1787230620.7
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {
+          "call_id": "round-turn_dr_followup-0",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "round-turn_dr_followup-0",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "call_status",
+          "call_state": "complete",
+          "call_role": "finish",
+          "turn_index": 1,
+          "step_index": 0,
+          "finish_reason": "stop",
+          "step_outcome": {
+            "kind": "finish"
+          },
+          "tool_calls_requested": [],
+          "tools_offered": 41,
+          "header_ref": {
+            "seq": 4,
+            "hash": "hhhhhhhh",
+            "mode": "recorded",
+            "parts": {
+              "system": "ssssssss",
+              "tools": "tttttttt",
+              "config": "cccccccc"
+            }
+          }
+        },
+        "session_id": "sess_fixture",
+        "turn_id": "turn_dr_followup",
+        "seq": 4,
+        "timestamp": 1787230622.0
+      },
+      {
+        "type": "result",
+        "source": "chat",
+        "stage": "",
+        "content": "",
+        "metadata": {
+          "response": "answer",
+          "completed": true,
+          "engine": "agent_loop",
+          "rounds": 1,
+          "tool_steps": 0,
+          "stop": {
+            "kind": "completed",
+            "code": "OK"
+          },
+          "metadata": {
+            "cost_summary": {
+              "total_tokens": 500,
+              "total_calls": 1
+            }
+          }
+        },
+        "session_id": "sess_fixture",
+        "turn_id": "turn_dr_followup",
+        "seq": 5,
+        "timestamp": 1787230622.1
+      }
+    ]
+  }
+]

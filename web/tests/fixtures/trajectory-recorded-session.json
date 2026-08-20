@@ -1,0 +1,1580 @@
+[
+  {
+    "events": [
+      {
+        "type": "session",
+        "source": "turn_runtime",
+        "stage": "",
+        "content": "",
+        "metadata": {
+          "session_id": "unified_1787230540034_00ea4dc2",
+          "turn_id": "turn_1787230540061_48bb803daa"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 1,
+        "timestamp": 1787230540.070927
+      },
+      {
+        "type": "stage_start",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {},
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 2,
+        "timestamp": 1787230543.103162
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {
+          "current": 0,
+          "total": 0,
+          "call_id": "chat-assembly-fff49d7aa7",
+          "phase": "assembling",
+          "label": "Capability assembly",
+          "call_kind": "channel_health",
+          "trace_id": "chat-assembly-fff49d7aa7",
+          "trace_kind": "channel_health",
+          "assembly_state": "degraded",
+          "degradations": [
+            {
+              "stage": "owner_scope",
+              "reason": "timeout",
+              "detail": "3.0s",
+              "elapsed_ms": 3000
+            }
+          ],
+          "mcp_servers": [
+            {
+              "name": "fastmcp",
+              "transport": "streamableHttp",
+              "status": "connecting",
+              "error": ""
+            }
+          ],
+          "tools_available": 46,
+          "owner_scope_timeout_s": 3.0,
+          "status_key": "channel_health_degraded",
+          "degraded_stages": [
+            "owner_scope"
+          ]
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 3,
+        "timestamp": 1787230543.1032503
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "Exploring",
+        "metadata": {
+          "current": 0,
+          "total": 0,
+          "call_id": "chat-responding-8a82964d35",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-8a82964d35",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "call_status",
+          "call_state": "running",
+          "turn_index": 0,
+          "step_index": 0
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 4,
+        "timestamp": 1787230543.1204066
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {
+          "current": 0,
+          "total": 0,
+          "call_id": "chat-responding-8a82964d35",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-8a82964d35",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "model_input",
+          "status_key": "model_input",
+          "turn_index": 0,
+          "step_index": 0,
+          "prompt_segments": [
+            {
+              "name": "general",
+              "tokens": 35,
+              "sha12": "b1de39a699a9"
+            },
+            {
+              "name": "runtime_policy",
+              "tokens": 78,
+              "sha12": "7ed1956b110a"
+            },
+            {
+              "name": "loop",
+              "tokens": 391,
+              "sha12": "8ca370bdfe3c"
+            },
+            {
+              "name": "test_journey",
+              "tokens": 4396,
+              "sha12": "082079672d67"
+            },
+            {
+              "name": "channel_health",
+              "tokens": 68,
+              "sha12": "6aaa3b832946"
+            },
+            {
+              "name": "tools",
+              "tokens": 1927,
+              "sha12": "470fb5918c17"
+            },
+            {
+              "name": "skills",
+              "tokens": 753,
+              "sha12": "c753f8069605"
+            },
+            {
+              "name": "extended_tools",
+              "tokens": 4527,
+              "sha12": "fa64485f3775"
+            },
+            {
+              "name": "notebooks",
+              "tokens": 20,
+              "sha12": "95799fde259c"
+            },
+            {
+              "name": "workspace",
+              "tokens": 121,
+              "sha12": "5fc61abece6b"
+            }
+          ],
+          "tools_in_window": [
+            "brainstorm",
+            "web_search",
+            "paper_search",
+            "reason",
+            "geogebra_analysis",
+            "read_memory",
+            "list_notebook",
+            "write_note",
+            "read_skill",
+            "load_tools",
+            "exec",
+            "code_execution",
+            "write_memory",
+            "web_fetch",
+            "github",
+            "ask_user",
+            "cron"
+          ],
+          "tools_loaded": [],
+          "tools_deferred_count": 46,
+          "messages_skeleton": [
+            {
+              "role": "system",
+              "chars": 42503,
+              "has_image": false,
+              "has_tool_calls": false
+            },
+            {
+              "role": "user",
+              "chars": 194,
+              "has_image": false,
+              "has_tool_calls": false
+            }
+          ],
+          "header_ref": {
+            "seq": 3,
+            "hash": "e14a2fb44fb8b0fe44e007a8016e2c460ddd5d54cd315f925e30fc2815193a19",
+            "mode": "recorded",
+            "parts": {
+              "system": "25765cb511925d8e15b28744f635f01688fc77ec02d10c881ac021c1c7b92015",
+              "tools": "65914a837d96fae095d7ae08b897b9ea180c44c77dc87ae3d219da0ef26f7a5a",
+              "config": "16e6787a0bde401f7559313885abea3391d8e3a9792dff616d4199d464c88ffd"
+            }
+          }
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 5,
+        "timestamp": 1787230543.1272705
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "你好,我是 DeepTutor 的测试助手,专注帮你把\"测试\"这件事从头跑到尾—",
+        "metadata": {
+          "call_id": "chat-responding-8a82964d35",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-8a82964d35",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 6,
+        "timestamp": 1787230566.8994365
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "—不管是formal的需求测试,还是日常调试。\n\n我能接住这些场景:\n\n- **",
+        "metadata": {
+          "call_id": "chat-responding-8a82964d35",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-8a82964d35",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 7,
+        "timestamp": 1787230566.8996842
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "接口调试**:贴一段 curl、一条报错、一段日志,我可以帮你实际发请求探测、读",
+        "metadata": {
+          "call_id": "chat-responding-8a82964d35",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-8a82964d35",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 8,
+        "timestamp": 1787230566.8998413
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "响应、给出初步归因和下一步建议。\n- **数据库只读查询**:单条 SELECT",
+        "metadata": {
+          "call_id": "chat-responding-8a82964d35",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-8a82964d35",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 9,
+        "timestamp": 1787230566.900022
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "/WITH/SHOW,帮你核对数据现象。\n- **需求测试**:如果你想\"正式测",
+        "metadata": {
+          "call_id": "chat-responding-8a82964d35",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-8a82964d35",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 10,
+        "timestamp": 1787230566.900167
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "试某个需求\",我会走完整流程——取需求原文 → 澄清 → 设计用例 → 你确认范",
+        "metadata": {
+          "call_id": "chat-responding-8a82964d35",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-8a82964d35",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 11,
+        "timestamp": 1787230566.900346
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "围 → 生成可执行用例 → (可选)当场跑一遍拿证据。\n- **TAPD 只读查",
+        "metadata": {
+          "call_id": "chat-responding-8a82964d35",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-8a82964d35",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 12,
+        "timestamp": 1787230566.900527
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "询**:拉需求、缺陷、任务信息辅助排查。\n\n有什么想丢给我看看的吗?比如一个报错",
+        "metadata": {
+          "call_id": "chat-responding-8a82964d35",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-8a82964d35",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 13,
+        "timestamp": 1787230566.9007347
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "、一条 curl,或者一个想测试的需求——都可以直接开始,不需要先按流程\"建档\"",
+        "metadata": {
+          "call_id": "chat-responding-8a82964d35",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-8a82964d35",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 14,
+        "timestamp": 1787230566.9009101
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "。",
+        "metadata": {
+          "call_id": "chat-responding-8a82964d35",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-8a82964d35",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 15,
+        "timestamp": 1787230566.9010832
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {
+          "current": 0,
+          "total": 0,
+          "call_id": "chat-responding-8a82964d35",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-8a82964d35",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "call_status",
+          "call_state": "complete",
+          "call_role": "finish",
+          "turn_index": 0,
+          "step_index": 0,
+          "finish_reason": "stop",
+          "step_outcome": {
+            "kind": "finish"
+          },
+          "tool_calls_requested": [],
+          "tools_offered": 17,
+          "header_ref": {
+            "seq": 3,
+            "hash": "e14a2fb44fb8b0fe44e007a8016e2c460ddd5d54cd315f925e30fc2815193a19",
+            "mode": "recorded",
+            "parts": {
+              "system": "25765cb511925d8e15b28744f635f01688fc77ec02d10c881ac021c1c7b92015",
+              "tools": "65914a837d96fae095d7ae08b897b9ea180c44c77dc87ae3d219da0ef26f7a5a",
+              "config": "16e6787a0bde401f7559313885abea3391d8e3a9792dff616d4199d464c88ffd"
+            }
+          }
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 16,
+        "timestamp": 1787230566.9017959
+      },
+      {
+        "type": "stage_end",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {},
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 17,
+        "timestamp": 1787230566.9018655
+      },
+      {
+        "type": "result",
+        "source": "chat",
+        "stage": "",
+        "content": "",
+        "metadata": {
+          "response": "你好,我是 DeepTutor 的测试助手,专注帮你把\"测试\"这件事从头跑到尾——不管是formal的需求测试,还是日常调试。\n\n我能接住这些场景:\n\n- **接口调试**:贴一段 curl、一条报错、一段日志,我可以帮你实际发请求探测、读响应、给出初步归因和下一步建议。\n- **数据库只读查询**:单条 SELECT/WITH/SHOW,帮你核对数据现象。\n- **需求测试**:如果你想\"正式测试某个需求\",我会走完整流程——取需求原文 → 澄清 → 设计用例 → 你确认范围 → 生成可执行用例 → (可选)当场跑一遍拿证据。\n- **TAPD 只读查询**:拉需求、缺陷、任务信息辅助排查。\n\n有什么想丢给我看看的吗?比如一个报错、一条 curl,或者一个想测试的需求——都可以直接开始,不需要先按流程\"建档\"。",
+          "completed": true,
+          "engine": "agent_loop",
+          "rounds": 1,
+          "tool_steps": 0,
+          "stop": {
+            "kind": "completed",
+            "code": "OK"
+          },
+          "metadata": {
+            "context_budget": {
+              "window": 200000,
+              "window_estimated": false,
+              "used_tokens": 15906,
+              "free_tokens": 184094,
+              "model": "claude-sonnet-5",
+              "counter": "cl100k_base",
+              "deferred_tool_count": 46,
+              "segments": [
+                {
+                  "key": "extended_tools",
+                  "tokens": 4531
+                },
+                {
+                  "key": "capability",
+                  "tokens": 4401
+                },
+                {
+                  "key": "system_tools",
+                  "tokens": 3427
+                },
+                {
+                  "key": "tool_manifest",
+                  "tokens": 1930
+                },
+                {
+                  "key": "skills",
+                  "tokens": 756
+                },
+                {
+                  "key": "system_prompt",
+                  "tokens": 591
+                },
+                {
+                  "key": "workspace",
+                  "tokens": 124
+                },
+                {
+                  "key": "channel_health",
+                  "tokens": 72
+                },
+                {
+                  "key": "messages",
+                  "tokens": 51
+                },
+                {
+                  "key": "notebooks",
+                  "tokens": 23
+                }
+              ]
+            }
+          }
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 18,
+        "timestamp": 1787230566.9091423
+      }
+    ]
+  },
+  {
+    "events": [
+      {
+        "type": "done",
+        "source": "test",
+        "stage": "",
+        "content": "",
+        "metadata": {
+          "user_message_id": 178,
+          "assistant_message_id": 179,
+          "status": "completed"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 19,
+        "timestamp": 1787230566.9091744
+      },
+      {
+        "type": "session",
+        "source": "turn_runtime",
+        "stage": "",
+        "content": "",
+        "metadata": {
+          "session_id": "unified_1787230540034_00ea4dc2",
+          "turn_id": "turn_1787230566962_bf37a0d4ea"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230566962_bf37a0d4ea",
+        "seq": 1,
+        "timestamp": 1787230566.9707785
+      },
+      {
+        "type": "stage_start",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {},
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230566962_bf37a0d4ea",
+        "seq": 2,
+        "timestamp": 1787230567.0018013
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {
+          "current": 0,
+          "total": 0,
+          "call_id": "chat-assembly-05f420f326",
+          "phase": "assembling",
+          "label": "Capability assembly",
+          "call_kind": "channel_health",
+          "trace_id": "chat-assembly-05f420f326",
+          "trace_kind": "channel_health",
+          "assembly_state": "ok",
+          "degradations": [],
+          "mcp_servers": [
+            {
+              "name": "fastmcp",
+              "transport": "streamableHttp",
+              "status": "connecting",
+              "error": ""
+            }
+          ],
+          "tools_available": 49,
+          "owner_scope_timeout_s": 3.0,
+          "status_key": "channel_health_ok",
+          "degraded_stages": []
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230566962_bf37a0d4ea",
+        "seq": 3,
+        "timestamp": 1787230567.0018945
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "Exploring",
+        "metadata": {
+          "current": 0,
+          "total": 0,
+          "call_id": "chat-responding-3e43898842",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-3e43898842",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "call_status",
+          "call_state": "running",
+          "turn_index": 1,
+          "step_index": 0
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230566962_bf37a0d4ea",
+        "seq": 4,
+        "timestamp": 1787230567.0137093
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {
+          "current": 0,
+          "total": 0,
+          "call_id": "chat-responding-3e43898842",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-3e43898842",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "model_input",
+          "status_key": "model_input",
+          "turn_index": 1,
+          "step_index": 0,
+          "prompt_segments": [
+            {
+              "name": "general",
+              "tokens": 35,
+              "sha12": "b1de39a699a9"
+            },
+            {
+              "name": "runtime_policy",
+              "tokens": 78,
+              "sha12": "7ed1956b110a"
+            },
+            {
+              "name": "loop",
+              "tokens": 391,
+              "sha12": "8ca370bdfe3c"
+            },
+            {
+              "name": "test_journey",
+              "tokens": 4396,
+              "sha12": "082079672d67"
+            },
+            {
+              "name": "channel_health",
+              "tokens": 21,
+              "sha12": "4ec5fd04a549"
+            },
+            {
+              "name": "tools",
+              "tokens": 1927,
+              "sha12": "470fb5918c17"
+            },
+            {
+              "name": "skills",
+              "tokens": 753,
+              "sha12": "c753f8069605"
+            },
+            {
+              "name": "extended_tools",
+              "tokens": 4696,
+              "sha12": "987ba0f20f6b"
+            },
+            {
+              "name": "notebooks",
+              "tokens": 20,
+              "sha12": "95799fde259c"
+            },
+            {
+              "name": "workspace",
+              "tokens": 123,
+              "sha12": "bad4608fd5cb"
+            }
+          ],
+          "tools_in_window": [
+            "brainstorm",
+            "web_search",
+            "paper_search",
+            "reason",
+            "geogebra_analysis",
+            "read_memory",
+            "list_notebook",
+            "write_note",
+            "read_skill",
+            "load_tools",
+            "exec",
+            "code_execution",
+            "write_memory",
+            "web_fetch",
+            "github",
+            "ask_user",
+            "cron"
+          ],
+          "tools_loaded": [],
+          "tools_deferred_count": 49,
+          "messages_skeleton": [
+            {
+              "role": "system",
+              "chars": 42975,
+              "has_image": false,
+              "has_tool_calls": false
+            },
+            {
+              "role": "user",
+              "chars": 6,
+              "has_image": false,
+              "has_tool_calls": false
+            },
+            {
+              "role": "assistant",
+              "chars": 361,
+              "has_image": false,
+              "has_tool_calls": false
+            },
+            {
+              "role": "user",
+              "chars": 164,
+              "has_image": false,
+              "has_tool_calls": false
+            }
+          ],
+          "header_ref": {
+            "seq": 5,
+            "hash": "fc245971af7d7f77071dc68b58a8e72f531dfda0bb26c94192e2f30a7ca6a300",
+            "mode": "recorded",
+            "parts": {
+              "system": "3ba4eea81d5de8608a2e8c0a347056ed5fddcdedfddc47e5fd69b4366811cb44",
+              "tools": "65914a837d96fae095d7ae08b897b9ea180c44c77dc87ae3d219da0ef26f7a5a",
+              "config": "16e6787a0bde401f7559313885abea3391d8e3a9792dff616d4199d464c88ffd"
+            }
+          }
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230566962_bf37a0d4ea",
+        "seq": 5,
+        "timestamp": 1787230567.0197873
+      },
+      {
+        "type": "session_meta",
+        "source": "turn_runtime",
+        "stage": "title",
+        "content": "DeepTutor Test Assistant Introduction",
+        "metadata": {
+          "title": "DeepTutor Test Assistant Introduction",
+          "session_id": "unified_1787230540034_00ea4dc2"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230540061_48bb803daa",
+        "seq": 20,
+        "timestamp": 1787230577.7382405
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "TAPD 目前连不上——这一轮没有拿到可信的 TAPD 连接上下文,是**连接/",
+        "metadata": {
+          "call_id": "chat-responding-3e43898842",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-3e43898842",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230566962_bf37a0d4ea",
+        "seq": 6,
+        "timestamp": 1787230582.5356834
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "能力层面的问题**,不是\"没查到数据\"。\n\n具体说:我这边的 TAPD 通道没有",
+        "metadata": {
+          "call_id": "chat-responding-3e43898842",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-3e43898842",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230566962_bf37a0d4ea",
+        "seq": 7,
+        "timestamp": 1787230582.5363011
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "握手成功,所以我不会去猜项目 ID、也不会问你要 token(这类凭证由系统侧注",
+        "metadata": {
+          "call_id": "chat-responding-3e43898842",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-3e43898842",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230566962_bf37a0d4ea",
+        "seq": 8,
+        "timestamp": 1787230582.5365522
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "入,不需要你手动提供)。\n\n你可以:\n\n1. **去检查 MCP 配置**:确认",
+        "metadata": {
+          "call_id": "chat-responding-3e43898842",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-3e43898842",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230566962_bf37a0d4ea",
+        "seq": 9,
+        "timestamp": 1787230582.5367417
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": " TAPD 这个服务是否已启用/连接正常(入口通常在配置页,比如 workben",
+        "metadata": {
+          "call_id": "chat-responding-3e43898842",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-3e43898842",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230566962_bf37a0d4ea",
+        "seq": 10,
+        "timestamp": 1787230582.537007
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "ch 的 MCP Services)。\n2. **绕过 TAPD,直接把需求正文",
+        "metadata": {
+          "call_id": "chat-responding-3e43898842",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-3e43898842",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230566962_bf37a0d4ea",
+        "seq": 11,
+        "timestamp": 1787230582.537251
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "贴给我**:我照样能走完整的需求测试流程——拆规则、设计用例、你确认范围、生成可",
+        "metadata": {
+          "call_id": "chat-responding-3e43898842",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-3e43898842",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230566962_bf37a0d4ea",
+        "seq": 12,
+        "timestamp": 1787230582.5376742
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": "执行用例。\n3. 如果你是想调试接口(贴 curl/报错/日志)或跑只读 SQL",
+        "metadata": {
+          "call_id": "chat-responding-3e43898842",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-3e43898842",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230566962_bf37a0d4ea",
+        "seq": 13,
+        "timestamp": 1787230582.537882
+      },
+      {
+        "type": "content",
+        "source": "chat",
+        "stage": "responding",
+        "content": ",这些通道不依赖 TAPD,可以直接用。\n\n要不要先试试把需求文本直接贴过来?",
+        "metadata": {
+          "call_id": "chat-responding-3e43898842",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-3e43898842",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "llm_chunk"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230566962_bf37a0d4ea",
+        "seq": 14,
+        "timestamp": 1787230582.5381424
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {
+          "current": 0,
+          "total": 0,
+          "call_id": "chat-responding-3e43898842",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-3e43898842",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "call_status",
+          "call_state": "complete",
+          "call_role": "finish",
+          "turn_index": 1,
+          "step_index": 0,
+          "finish_reason": "stop",
+          "step_outcome": {
+            "kind": "finish"
+          },
+          "tool_calls_requested": [],
+          "tools_offered": 17,
+          "header_ref": {
+            "seq": 5,
+            "hash": "fc245971af7d7f77071dc68b58a8e72f531dfda0bb26c94192e2f30a7ca6a300",
+            "mode": "recorded",
+            "parts": {
+              "system": "3ba4eea81d5de8608a2e8c0a347056ed5fddcdedfddc47e5fd69b4366811cb44",
+              "tools": "65914a837d96fae095d7ae08b897b9ea180c44c77dc87ae3d219da0ef26f7a5a",
+              "config": "16e6787a0bde401f7559313885abea3391d8e3a9792dff616d4199d464c88ffd"
+            }
+          }
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230566962_bf37a0d4ea",
+        "seq": 15,
+        "timestamp": 1787230582.539306
+      },
+      {
+        "type": "stage_end",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {},
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230566962_bf37a0d4ea",
+        "seq": 16,
+        "timestamp": 1787230582.5393884
+      },
+      {
+        "type": "result",
+        "source": "chat",
+        "stage": "",
+        "content": "",
+        "metadata": {
+          "response": "TAPD 目前连不上——这一轮没有拿到可信的 TAPD 连接上下文,是**连接/能力层面的问题**,不是\"没查到数据\"。\n\n具体说:我这边的 TAPD 通道没有握手成功,所以我不会去猜项目 ID、也不会问你要 token(这类凭证由系统侧注入,不需要你手动提供)。\n\n你可以:\n\n1. **去检查 MCP 配置**:确认 TAPD 这个服务是否已启用/连接正常(入口通常在配置页,比如 workbench 的 MCP Services)。\n2. **绕过 TAPD,直接把需求正文贴给我**:我照样能走完整的需求测试流程——拆规则、设计用例、你确认范围、生成可执行用例。\n3. 如果你是想调试接口(贴 curl/报错/日志)或跑只读 SQL,这些通道不依赖 TAPD,可以直接用。\n\n要不要先试试把需求文本直接贴过来?",
+          "completed": true,
+          "engine": "agent_loop",
+          "rounds": 1,
+          "tool_steps": 0,
+          "stop": {
+            "kind": "completed",
+            "code": "OK"
+          },
+          "metadata": {
+            "context_budget": {
+              "window": 200000,
+              "window_estimated": false,
+              "used_tokens": 16335,
+              "free_tokens": 183665,
+              "model": "claude-sonnet-5",
+              "counter": "cl100k_base",
+              "deferred_tool_count": 49,
+              "segments": [
+                {
+                  "key": "extended_tools",
+                  "tokens": 4700
+                },
+                {
+                  "key": "capability",
+                  "tokens": 4401
+                },
+                {
+                  "key": "system_tools",
+                  "tokens": 3427
+                },
+                {
+                  "key": "tool_manifest",
+                  "tokens": 1930
+                },
+                {
+                  "key": "skills",
+                  "tokens": 756
+                },
+                {
+                  "key": "system_prompt",
+                  "tokens": 591
+                },
+                {
+                  "key": "messages",
+                  "tokens": 356
+                },
+                {
+                  "key": "workspace",
+                  "tokens": 126
+                },
+                {
+                  "key": "channel_health",
+                  "tokens": 25
+                },
+                {
+                  "key": "notebooks",
+                  "tokens": 23
+                }
+              ]
+            }
+          }
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230566962_bf37a0d4ea",
+        "seq": 17,
+        "timestamp": 1787230582.5492046
+      }
+    ]
+  },
+  {
+    "events": [
+      {
+        "type": "done",
+        "source": "test",
+        "stage": "",
+        "content": "",
+        "metadata": {
+          "user_message_id": 180,
+          "assistant_message_id": 181,
+          "status": "completed"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230566962_bf37a0d4ea",
+        "seq": 18,
+        "timestamp": 1787230582.549244
+      },
+      {
+        "type": "session",
+        "source": "turn_runtime",
+        "stage": "",
+        "content": "",
+        "metadata": {
+          "session_id": "unified_1787230540034_00ea4dc2",
+          "turn_id": "turn_1787230582598_c31ac21bd5"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230582598_c31ac21bd5",
+        "seq": 1,
+        "timestamp": 1787230582.7574298
+      },
+      {
+        "type": "stage_start",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {},
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230582598_c31ac21bd5",
+        "seq": 2,
+        "timestamp": 1787230582.784991
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {
+          "current": 0,
+          "total": 0,
+          "call_id": "chat-assembly-d7f22c9835",
+          "phase": "assembling",
+          "label": "Capability assembly",
+          "call_kind": "channel_health",
+          "trace_id": "chat-assembly-d7f22c9835",
+          "trace_kind": "channel_health",
+          "assembly_state": "ok",
+          "degradations": [],
+          "mcp_servers": [
+            {
+              "name": "fastmcp",
+              "transport": "streamableHttp",
+              "status": "connecting",
+              "error": ""
+            }
+          ],
+          "tools_available": 49,
+          "owner_scope_timeout_s": 3.0,
+          "status_key": "channel_health_ok",
+          "degraded_stages": []
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230582598_c31ac21bd5",
+        "seq": 3,
+        "timestamp": 1787230582.7850842
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "Exploring",
+        "metadata": {
+          "current": 0,
+          "total": 0,
+          "call_id": "chat-responding-d6f5a5cf8f",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-d6f5a5cf8f",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "call_status",
+          "call_state": "running",
+          "turn_index": 2,
+          "step_index": 0
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230582598_c31ac21bd5",
+        "seq": 4,
+        "timestamp": 1787230582.7970114
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {
+          "current": 0,
+          "total": 0,
+          "call_id": "chat-responding-d6f5a5cf8f",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-d6f5a5cf8f",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "model_input",
+          "status_key": "model_input",
+          "turn_index": 2,
+          "step_index": 0,
+          "prompt_segments": [
+            {
+              "name": "general",
+              "tokens": 35,
+              "sha12": "b1de39a699a9"
+            },
+            {
+              "name": "runtime_policy",
+              "tokens": 78,
+              "sha12": "7ed1956b110a"
+            },
+            {
+              "name": "loop",
+              "tokens": 391,
+              "sha12": "8ca370bdfe3c"
+            },
+            {
+              "name": "test_journey",
+              "tokens": 4396,
+              "sha12": "082079672d67"
+            },
+            {
+              "name": "channel_health",
+              "tokens": 21,
+              "sha12": "4ec5fd04a549"
+            },
+            {
+              "name": "tools",
+              "tokens": 1927,
+              "sha12": "470fb5918c17"
+            },
+            {
+              "name": "skills",
+              "tokens": 753,
+              "sha12": "c753f8069605"
+            },
+            {
+              "name": "extended_tools",
+              "tokens": 4696,
+              "sha12": "987ba0f20f6b"
+            },
+            {
+              "name": "notebooks",
+              "tokens": 20,
+              "sha12": "95799fde259c"
+            },
+            {
+              "name": "workspace",
+              "tokens": 121,
+              "sha12": "c7e8b68a2e8d"
+            }
+          ],
+          "tools_in_window": [
+            "brainstorm",
+            "web_search",
+            "paper_search",
+            "reason",
+            "geogebra_analysis",
+            "read_memory",
+            "list_notebook",
+            "write_note",
+            "read_skill",
+            "load_tools",
+            "exec",
+            "code_execution",
+            "write_memory",
+            "web_fetch",
+            "github",
+            "ask_user",
+            "cron"
+          ],
+          "tools_loaded": [],
+          "tools_deferred_count": 49,
+          "messages_skeleton": [
+            {
+              "role": "system",
+              "chars": 42975,
+              "has_image": false,
+              "has_tool_calls": false
+            },
+            {
+              "role": "user",
+              "chars": 6,
+              "has_image": false,
+              "has_tool_calls": false
+            },
+            {
+              "role": "assistant",
+              "chars": 361,
+              "has_image": false,
+              "has_tool_calls": false
+            },
+            {
+              "role": "user",
+              "chars": 8,
+              "has_image": false,
+              "has_tool_calls": false
+            },
+            {
+              "role": "assistant",
+              "chars": 359,
+              "has_image": false,
+              "has_tool_calls": false
+            },
+            {
+              "role": "user",
+              "chars": 204,
+              "has_image": false,
+              "has_tool_calls": false
+            }
+          ],
+          "header_ref": {
+            "seq": 7,
+            "hash": "ec380dbb9eb4134bb6631fa9f2ec544fb94c0378602b5c5501c464fe5f11e616",
+            "mode": "recorded",
+            "parts": {
+              "system": "f271ed4a5f846894ce381fb18d756d4f7a13e44e4e4c41096a7d3841fd5bcc33",
+              "tools": "65914a837d96fae095d7ae08b897b9ea180c44c77dc87ae3d219da0ef26f7a5a",
+              "config": "16e6787a0bde401f7559313885abea3391d8e3a9792dff616d4199d464c88ffd"
+            }
+          }
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230582598_c31ac21bd5",
+        "seq": 5,
+        "timestamp": 1787230582.8023107
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {
+          "current": 0,
+          "total": 0,
+          "call_id": "chat-responding-d6f5a5cf8f",
+          "phase": "responding",
+          "label": "Exploring",
+          "call_kind": "agent_loop_round",
+          "trace_id": "chat-responding-d6f5a5cf8f",
+          "trace_role": "explore",
+          "trace_group": "stage",
+          "trace_kind": "call_status",
+          "call_state": "complete",
+          "call_role": "narration",
+          "turn_index": 2,
+          "step_index": 0,
+          "finish_reason": "tool_calls",
+          "step_outcome": {
+            "kind": "narration"
+          },
+          "tool_calls_requested": [
+            "ask_user"
+          ],
+          "tools_offered": 17,
+          "header_ref": {
+            "seq": 7,
+            "hash": "ec380dbb9eb4134bb6631fa9f2ec544fb94c0378602b5c5501c464fe5f11e616",
+            "mode": "recorded",
+            "parts": {
+              "system": "f271ed4a5f846894ce381fb18d756d4f7a13e44e4e4c41096a7d3841fd5bcc33",
+              "tools": "65914a837d96fae095d7ae08b897b9ea180c44c77dc87ae3d219da0ef26f7a5a",
+              "config": "16e6787a0bde401f7559313885abea3391d8e3a9792dff616d4199d464c88ffd"
+            }
+          }
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230582598_c31ac21bd5",
+        "seq": 6,
+        "timestamp": 1787230598.5967834
+      },
+      {
+        "type": "tool_call",
+        "source": "chat",
+        "stage": "responding",
+        "content": "ask_user",
+        "metadata": {
+          "args": {
+            "intro": "关于「AI创新」相关需求,先确认一下需求来源:",
+            "questions": [
+              {
+                "id": "requirement_source",
+                "header": "需求来源",
+                "prompt": "你想让我怎么获取「AI创新」相关的需求?",
+                "options": [
+                  {
+                    "label": "从 TAPD 拉取 (Recommended)",
+                    "description": "尝试连接 TAPD,按你的账号检索 AI创新 相关需求;若通道仍不可用会如实告知"
+                  },
+                  {
+                    "label": "我直接贴文本",
+                    "description": "你把需求正文或链接粘贴过来,我直接基于文本处理,不依赖 TAPD 连接"
+                  },
+                  {
+                    "label": "我有附件",
+                    "description": "需求写在文档/截图里,你上传附件,我读取后处理"
+                  }
+                ]
+              }
+            ]
+          },
+          "call_id": "chat-loop-0-tool-0-55af2f04dc",
+          "phase": "responding",
+          "label": "Tool call",
+          "call_kind": "tool_planning",
+          "trace_id": "chat-loop-0-tool-0-55af2f04dc",
+          "trace_role": "tool",
+          "trace_group": "tool_call",
+          "tool_call_id": "toolu_88e1375c8cea416fb7268b",
+          "tool_name": "ask_user",
+          "tool_index": 0,
+          "iteration_index": 0,
+          "session_id": "unified_1787230540034_00ea4dc2",
+          "turn_id": "turn_1787230582598_c31ac21bd5",
+          "trace_kind": "tool_call"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230582598_c31ac21bd5",
+        "seq": 7,
+        "timestamp": 1787230598.5970213
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {
+          "current": 0,
+          "total": 0,
+          "call_id": "chat-loop-0-tool-0-55af2f04dc",
+          "phase": "responding",
+          "label": "Tool call",
+          "call_kind": "tool_planning",
+          "trace_id": "chat-loop-0-tool-0-55af2f04dc",
+          "trace_role": "tool",
+          "trace_group": "tool_call",
+          "tool_call_id": "toolu_88e1375c8cea416fb7268b",
+          "tool_name": "ask_user",
+          "tool_index": 0,
+          "iteration_index": 0,
+          "session_id": "unified_1787230540034_00ea4dc2",
+          "turn_id": "turn_1787230582598_c31ac21bd5",
+          "trace_kind": "call_status",
+          "call_state": "running"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230582598_c31ac21bd5",
+        "seq": 8,
+        "timestamp": 1787230598.5970936
+      },
+      {
+        "type": "progress",
+        "source": "chat",
+        "stage": "responding",
+        "content": "",
+        "metadata": {
+          "current": 0,
+          "total": 0,
+          "call_id": "chat-loop-0-tool-0-55af2f04dc",
+          "phase": "responding",
+          "label": "Tool call",
+          "call_kind": "tool_planning",
+          "trace_id": "chat-loop-0-tool-0-55af2f04dc",
+          "trace_role": "tool",
+          "trace_group": "tool_call",
+          "tool_call_id": "toolu_88e1375c8cea416fb7268b",
+          "tool_name": "ask_user",
+          "tool_index": 0,
+          "iteration_index": 0,
+          "session_id": "unified_1787230540034_00ea4dc2",
+          "turn_id": "turn_1787230582598_c31ac21bd5",
+          "trace_kind": "call_status",
+          "call_state": "complete"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230582598_c31ac21bd5",
+        "seq": 9,
+        "timestamp": 1787230598.6077194
+      },
+      {
+        "type": "tool_result",
+        "source": "chat",
+        "stage": "responding",
+        "content": "[awaiting user reply to: 你想让我怎么获取「AI创新」相关的需求?]",
+        "metadata": {
+          "tool": "ask_user",
+          "call_id": "chat-loop-0-tool-0-55af2f04dc",
+          "phase": "responding",
+          "label": "Tool call",
+          "call_kind": "tool_planning",
+          "trace_id": "chat-loop-0-tool-0-55af2f04dc",
+          "trace_role": "tool",
+          "trace_group": "tool_call",
+          "tool_call_id": "toolu_88e1375c8cea416fb7268b",
+          "tool_name": "ask_user",
+          "tool_index": 0,
+          "iteration_index": 0,
+          "session_id": "unified_1787230540034_00ea4dc2",
+          "turn_id": "turn_1787230582598_c31ac21bd5",
+          "trace_kind": "tool_result",
+          "tool_metadata": {
+            "ask_user": {
+              "intro": "关于「AI创新」相关需求,先确认一下需求来源:",
+              "questions": [
+                {
+                  "id": "requirement_source",
+                  "prompt": "你想让我怎么获取「AI创新」相关的需求?",
+                  "header": "需求来源",
+                  "multi_select": false,
+                  "options": [
+                    {
+                      "label": "从 TAPD 拉取 (Recommended)",
+                      "description": "尝试连接 TAPD,按你的账号检索 AI创新 相关需求;若通道仍不可用会如实告知"
+                    },
+                    {
+                      "label": "我直接贴文本",
+                      "description": "你把需求正文或链接粘贴过来,我直接基于文本处理,不依赖 TAPD 连接"
+                    },
+                    {
+                      "label": "我有附件",
+                      "description": "需求写在文档/截图里,你上传附件,我读取后处理"
+                    }
+                  ],
+                  "allow_free_text": true,
+                  "placeholder": null
+                }
+              ]
+            }
+          }
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "turn_1787230582598_c31ac21bd5",
+        "seq": 10,
+        "timestamp": 1787230598.6081593
+      }
+    ]
+  },
+  {
+    "events": [
+      {
+        "type": "error",
+        "source": "unified_ws",
+        "stage": "",
+        "content": "Session already has an active turn: turn_1787230582598_c31ac21bd5",
+        "metadata": {
+          "turn_terminal": true,
+          "status": "rejected"
+        },
+        "session_id": "unified_1787230540034_00ea4dc2",
+        "turn_id": "",
+        "seq": 0
+      }
+    ]
+  }
+]

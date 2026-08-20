@@ -39,6 +39,13 @@ import type { ContextBudget } from "@/components/chat/home/ContextBudgetChip";
 import { ChatMessageList } from "@/components/chat/home/ChatMessages";
 import { TurnNavigator } from "@/components/chat/home/TurnNavigator";
 import SessionLoadingView from "@/components/chat/home/SessionLoadingView";
+import { SessionViewTabs } from "@/components/chat/trajectory/SessionViewTabs";
+import { TrajectoryPanel } from "@/components/chat/trajectory/TrajectoryPanel";
+import {
+  conversationLayerClass,
+  shouldRenderTurnNavigator,
+  type SessionView,
+} from "@/components/chat/trajectory/view-state";
 // Imported eagerly so the drawer shell is always mounted off-screen —
 // clicking a chip becomes a single CSS class flip, no chunk fetch + double
 // render. The heavy renderers inside still load lazily.
@@ -669,6 +676,15 @@ export default function ChatPage() {
     }
   }, [capabilityNeedsConfig, ensureActivityPanelOpen]);
   const hasMessages = state.messages.length > 0;
+  // ─── Conversation / trajectory ───
+  // Which of the two peer views is on screen. Page state on purpose: not in
+  // the URL and not in session preferences (see SessionViewTabs), and it falls
+  // back to the conversation whenever the session changes.
+  const [sessionView, setSessionView] = useState<SessionView>("conversation");
+  useEffect(() => {
+    setSessionView("conversation");
+  }, [state.sessionId]);
+  const trajectoryOpen = hasMessages && sessionView === "trajectory";
   // Time-of-day greeting: seeded once on mount from the user's local clock so
   // the heading stays stable while they're on the page. State (not useMemo)
   // because the random pick would otherwise mismatch SSR ↔ client hydration.
@@ -1997,6 +2013,9 @@ export default function ChatPage() {
               />
             </div>
           </div>
+          {!sessionLoading && hasMessages ? (
+            <SessionViewTabs view={sessionView} onChange={setSessionView} />
+          ) : null}
           <div className="flex w-full flex-1 min-h-0 flex-col">
             {sessionLoading ? (
               <div className="flex w-full flex-1 min-h-0 justify-center px-6">
@@ -2026,8 +2045,14 @@ export default function ChatPage() {
               // inside the masked scroll container (its top/bottom fade
               // would clip the rail's ends).
               <div className="relative flex w-full flex-1 min-h-0 flex-col">
+                {/* The transcript stays mounted whichever tab is on screen —
+                    the trajectory hides it, never unmounts it, so a turn that
+                    streams while the user is reading the trajectory keeps
+                    following its own tail and comes back exactly where they
+                    left it (see conversationLayerClass). */}
                 <div
                   ref={messagesContainerRef}
+                  aria-hidden={trajectoryOpen}
                   data-chat-scroll-root="true"
                   onScroll={handleMessagesScroll}
                   onClick={handleMessagesClick}
@@ -2036,7 +2061,7 @@ export default function ChatPage() {
                   // header and composer (siblings outside this scrollport) on
                   // classic-scrollbar platforms; plain `stable` would shift it
                   // ~half a scrollbar-width left of them.
-                  className={`w-full flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable_both-edges] ${hasMessages ? "pt-6" : "pt-2 pb-6"}`}
+                  className={`w-full flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable_both-edges] ${hasMessages ? "pt-6" : "pt-2 pb-6"} ${conversationLayerClass(sessionView)}`}
                   style={
                     hasMessages
                       ? (() => {
@@ -2083,12 +2108,17 @@ export default function ChatPage() {
                     />
                   </div>
                 </div>
-                <TurnNavigator
-                  entries={chatOutline}
-                  scrollRootRef={messagesContainerRef}
-                  onJump={jumpToTurn}
-                  onJumpToBottom={resumeFollowingLatest}
-                />
+                {shouldRenderTurnNavigator(sessionView) ? (
+                  <TurnNavigator
+                    entries={chatOutline}
+                    scrollRootRef={messagesContainerRef}
+                    onJump={jumpToTurn}
+                    onJumpToBottom={resumeFollowingLatest}
+                  />
+                ) : null}
+                {trajectoryOpen ? (
+                  <TrajectoryPanel messages={state.messages} />
+                ) : null}
               </div>
             )}
 
