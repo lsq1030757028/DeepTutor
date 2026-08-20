@@ -390,3 +390,93 @@ def test_prompt_carries_the_clarify_convergence_discipline(language: str) -> Non
     for zh_anchor, en_anchor in anchors:
         anchor = zh_anchor if language == "zh" else en_anchor
         assert anchor in body, f"{language} 丢了澄清收敛锚：{anchor}"
+
+
+# --- D1：纪律段点名的工具必须在窗口里，不在两步舞后面 -------------------------
+
+
+def test_the_capability_declares_its_primary_tools_as_window_tools() -> None:
+    """本模式的主用工具走「直接进窗口」，不是「先 load_tools」。
+
+    这条盯的是一个具体的错配，不是风格：纪律段按 `journey_ingest` 这种**裸名**
+    指挥模型，而唯一能派发的名字是 `mcp_test-partner_journey_ingest`，
+    `DeferredToolLoader.load()` 只认后者。裸名去加载必然 unknown，
+    于是「工具在手」这件事对模型不可发现。声明为主用集之后，schema 直接
+    进窗口，模型看到的就是能调的那个名字。
+    """
+    from deeptutor.agents.test.pipeline import (
+        JOURNEY_PRELOAD_PREFIXES,
+        TAPD_PRELOAD_READ_TOOLS,
+        TestJourneyPipeline,
+    )
+    from deeptutor.core.context import UnifiedContext
+
+    pipeline = TestJourneyPipeline(language="zh")
+    # 这两个属性由 run() 在轮内建立；这里只取工具面这一段，直接给中性值。
+    pipeline._pageindex_docs = {}
+    scope = pipeline._tool_scope(
+        UnifiedContext(session_id="s", user_message="hi", active_capability="test")
+    )
+
+    assert scope.active_capability == "test"
+    assert scope.preload_original_prefixes == JOURNEY_PRELOAD_PREFIXES
+    assert scope.preload_original_names == TAPD_PRELOAD_READ_TOOLS
+    # 前缀而不是名单：扩展侧加一个 journey_* 工具不该在这边变成够不着。
+    assert "journey_" in JOURNEY_PRELOAD_PREFIXES
+
+
+def test_plain_chat_declares_no_primary_tools() -> None:
+    """加法只加在本模式身上，普通聊天的工具面一个字节都不变。"""
+    from deeptutor.agents.chat.agentic_pipeline import AgenticChatPipeline
+    from deeptutor.core.context import UnifiedContext
+
+    pipeline = AgenticChatPipeline(language="zh")
+    pipeline._pageindex_docs = {}
+    scope = pipeline._tool_scope(UnifiedContext(session_id="s", user_message="hi"))
+    assert scope.preload_original_prefixes == frozenset()
+    assert scope.preload_original_names == frozenset()
+
+
+def test_the_tapd_primary_set_is_read_only() -> None:
+    """主用集是「先去查」的手，不是绕过写确认闸的门。
+
+    写类工具一旦进了免加载窗口，模型就能在没过任何人闸的情况下直接改 TAPD。
+    这条按名字前缀机械挡住，而不是靠挑名单的人当时想着这件事。
+    """
+    from deeptutor.agents.test.pipeline import TAPD_PRELOAD_READ_TOOLS
+
+    write_prefixes = ("create_", "update_", "delete_", "add_", "send_", "remove_")
+    offenders = [
+        name for name in TAPD_PRELOAD_READ_TOOLS if name.startswith(write_prefixes)
+    ]
+    assert offenders == []
+    assert all(name.startswith("get_") for name in TAPD_PRELOAD_READ_TOOLS)
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_every_journey_tool_the_prompt_names_is_covered_by_the_primary_prefix(
+    language: str,
+) -> None:
+    """提示词点名的每个 `journey_*`，都落在主用前缀里。
+
+    这是错配的机械闸：纪律段里新写一个 `journey_xxx`，而主用声明没覆盖到，
+    就会重现「提示词命令模型用一个够不着的工具」这个原始缺陷。
+    """
+    import re
+
+    from deeptutor.agents.test.pipeline import (
+        JOURNEY_PRELOAD_PREFIXES,
+        PROMPT_AGENT,
+        PROMPT_MODULE,
+    )
+
+    prompts = PromptManager().load_prompts(PROMPT_MODULE, PROMPT_AGENT, language=language)
+    body = "\n".join(str(v or "") for v in prompts.values() if isinstance(v, str))
+    named = set(re.findall(r"journey_[a-z_]+", body))
+    assert named, f"{language} 提示词里一个 journey_ 工具都没点到，判据失去意义"
+    uncovered = [
+        name
+        for name in named
+        if not any(name.startswith(prefix) for prefix in JOURNEY_PRELOAD_PREFIXES)
+    ]
+    assert uncovered == [], f"{language} 提示词点名但主用声明没覆盖：{uncovered}"

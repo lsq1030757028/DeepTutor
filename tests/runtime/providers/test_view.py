@@ -353,3 +353,97 @@ async def test_a_slow_personal_server_costs_only_its_own_tools(
     assert not any(t.name == "mcp_slow_thing" for t in view.pool)
     # The deployment's tools still made it — the turn is not degraded further.
     assert {t.name for t in view.pool} == {"mcp_gh_search", "mcp_pageindex_search"}
+
+
+# --- D1: the tools a capability drives are in the window, not behind a dance -
+
+
+def _window_names(view) -> set[str]:
+    """Tool names whose schema this turn ships in the initial request."""
+    schemas: list[dict[str, Any]] = []
+    view.attach(schemas)
+    return {schema["function"]["name"] for schema in schemas}
+
+
+@pytest.mark.asyncio
+async def test_a_declared_primary_tool_ships_its_schema_in_the_window(
+    registry, monkeypatch
+) -> None:
+    """The defect this exists for: the Test capability's prompt names
+    ``journey_ingest`` while the only dispatchable name is
+    ``mcp_test-partner_journey_ingest``, reachable only via ``load_tools``.
+    A tool the turn's own instructions already name must arrive callable."""
+    journey = _JourneyMcpTool()
+    registry.register(journey)
+    _grant(monkeypatch, None)
+
+    view = await build_tool_view(
+        base_registry=registry,
+        scope=ToolScope(
+            session_id="s",
+            active_capability="test",
+            preload_original_prefixes=frozenset({"journey_"}),
+        ),
+    )
+
+    assert journey.name in _window_names(view)
+    # And it is not also advertised as "NOT loaded yet" — that line would be
+    # false about it, which is the same class of bug one layer down.
+    assert journey.name not in view.manifest
+    # Everything not declared primary keeps progressive disclosure.
+    assert "mcp_gh_search" not in _window_names(view)
+    assert "mcp_gh_search" in view.manifest
+
+
+@pytest.mark.asyncio
+async def test_preloading_decides_timing_not_permission(registry, monkeypatch) -> None:
+    """A capability may say 'lead with this'; it may not widen its own grant."""
+    journey = _JourneyMcpTool()
+    registry.register(journey)
+    _grant(monkeypatch, {"mcp_gh_search"})
+
+    view = await build_tool_view(
+        base_registry=registry,
+        scope=ToolScope(
+            session_id="s",
+            active_capability="chat",
+            preload_original_prefixes=frozenset({"journey_"}),
+            preload_original_names=frozenset({"nonexistent_tool"}),
+        ),
+    )
+
+    # Not in the pool (chat strips journey), so not in the window either.
+    assert journey.name not in _window_names(view)
+    assert journey not in view.pool
+    # A declared name the deployment never connected is simply absent.
+    assert "nonexistent_tool" not in _window_names(view)
+
+
+@pytest.mark.asyncio
+async def test_a_preloaded_tool_is_already_loaded_for_load_tools(registry, monkeypatch) -> None:
+    """A model that follows the old instructions anyway must not be told the
+    tool is unknown — that reply is what 'the channel is down' gets built on."""
+    journey = _JourneyMcpTool()
+    registry.register(journey)
+    _grant(monkeypatch, None)
+
+    view = await build_tool_view(
+        base_registry=registry,
+        scope=ToolScope(
+            session_id="s",
+            active_capability="test",
+            preload_original_prefixes=frozenset({"journey_"}),
+        ),
+    )
+    assert view.loader is not None
+    outcome = view.loader.load([journey.name])
+    assert outcome["already_loaded"] == [journey.name]
+    assert outcome["unknown"] == []
+
+
+@pytest.mark.asyncio
+async def test_no_declaration_leaves_every_other_caller_unchanged(registry, monkeypatch) -> None:
+    _grant(monkeypatch, None)
+    view = await build_tool_view(base_registry=registry, scope=ToolScope(session_id="s"))
+    assert _window_names(view) == set()
+    assert "mcp_gh_search" in view.manifest

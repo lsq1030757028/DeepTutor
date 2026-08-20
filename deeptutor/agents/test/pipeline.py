@@ -33,6 +33,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import re
 from typing import Any
 
@@ -40,6 +41,7 @@ from deeptutor.agents.chat.agentic_pipeline import AgenticChatPipeline
 from deeptutor.capabilities.protocol import PromptBlock
 from deeptutor.core.context import UnifiedContext
 from deeptutor.core.stream_bus import StreamBus
+from deeptutor.runtime.providers.scope import ToolScope
 from deeptutor.services.prompt.manager import PromptManager
 from deeptutor.services.tapd_field_baseline import (
     candidate_query_template,
@@ -89,6 +91,61 @@ JOURNEY_BLOCK_NAME = "test_journey"
 #: （内容有、通道没接上），所以判据直接遍历这个列表逐段验，加一段自动带一条断言。
 JOURNEY_PROMPT_KEYS = ("journey_discipline", "human_gates", "workbench_pointer")
 
+#: 本模式**主用**的旅程工具前缀。带前缀而不是列名字：扩展侧新增一个
+#: `journey_*` 工具不该在这边变成「连上了但够不着」。
+#:
+#: 为什么必须直接进窗口，而不是留在 `load_tools` 后面：纪律段（`test_journey`
+#: 提示词块）通篇按 `journey_ingest` / `journey_adopt` 这种**裸名**指挥模型，
+#: 而唯一能派发的名字是带服务器前缀的 `mcp_test-partner_journey_ingest`——
+#: `DeferredToolLoader.load()` 只认后者。于是提示词点名的工具，模型照着点名
+#: 去加载必然拿到 `unknown`，而真名只在 extended_tools 清单的末尾出现过一次。
+#: 把 schema 直接放进窗口，模型看到的就是能调的那个名字，两步舞和名字错配
+#: 一起消失。
+#:
+#: 实测代价（真实会话 `unified_1787233269913_fd5966af` 的 header 侧车）：
+#: 该部署放行 13 个 journey 工具，schema 2,704 tokens + system prompt 的
+#: `## tools` 提示行 1,070 tokens；同时它们从 extended_tools 清单里退出，
+#: 净增约 1.9k tokens。
+JOURNEY_PRELOAD_PREFIXES = frozenset({"journey_"})
+
+#: TAPD **只读**主用集，按纪律段真正点名要求的动作挑，不是把整个服务端搬进来。
+#: 逐条对应关系（纪律段 `journey_discipline` 里的原话 → 工具）：
+#:   ·「本轮就去查」候选需求        → get_stories_or_tasks / get_story_or_task_count
+#:   ·「字段号不许写死，先确认当前项目的字段语义」→ get_stories_fields_info /
+#:     get_stories_fields_lable / get_entity_custom_fields
+#:   ·「不要靠状态名字去猜」        → get_workflows_status_map
+#:   ·「TAPD 能不能访问」          → get_user_participant_projects / get_workspace_info
+#:   · 缺陷面                      → get_bug / get_bug_count / get_comments
+#:
+#: 取舍有实测依据。基线窗口 15,843 tokens（system 12,428 + tools 3,415，
+#: 17 个内建工具）。该部署 TAPD 服务端放行 26 个只读工具，全进窗口仅 schema
+#: 就 9,235 tokens，加上 `## tools` 提示行会到 ~16k —— 比整个基线窗口还大。
+#: 上面这 11 个实测 6,997 tokens（schema 3,998 + 提示行 2,999）。
+#:
+#: 其余（工时、wiki、迭代、附件、提交信息、发布单…）纪律段一次都没要求过，
+#: 留在 extended_tools 里按需 `load_tools`，一次也没变得够不着。
+#:
+#: 这一整条是**一个可撤的杠杆**：把这个 frozenset 清空，窗口立刻退回约
+#: 17.7k tokens，journey 那半分文不动。要加要减，先量再改，别凭手感。
+#:
+#: 只放**读**动作：写类工具（create_*/update_*）连出现在这里都不该出现，
+#: 主用集是「先去查」的手，不是绕过写确认闸的门。
+TAPD_PRELOAD_READ_TOOLS = frozenset(
+    {
+        "get_user_participant_projects",
+        "get_workspace_info",
+        "get_stories_or_tasks",
+        "get_story_or_task_count",
+        "get_stories_fields_info",
+        "get_stories_fields_lable",
+        "get_entity_custom_fields",
+        "get_workflows_status_map",
+        "get_bug",
+        "get_bug_count",
+        "get_comments",
+    }
+)
+
 
 def journey_system_block(language: str = "zh") -> str:
     """旅程纪律系统块。加载失败**如实返回空串**，不塞一段兜底文案。
@@ -114,6 +171,19 @@ class TestJourneyPipeline(AgenticChatPipeline):
     _tapd_session_context: str = ""
     _tapd_story_candidates: tuple[TapdStory, ...] = ()
     _tapd_selected_story: TapdStory | None = None
+
+    def _tool_scope(self, context: UnifiedContext) -> ToolScope:
+        """主用工具直接进窗口，不留在两步舞后面。
+
+        只声明「哪些是主用的」，不碰授权：`build_tool_view` 拿这个集合去和
+        本轮真实允许的池子求交，没连上的不会凭空出现，没授权的也进不来。
+        所以这一步只能改变 schema 到达的**时机**，改变不了可见性。
+        """
+        return replace(
+            super()._tool_scope(context),
+            preload_original_prefixes=JOURNEY_PRELOAD_PREFIXES,
+            preload_original_names=TAPD_PRELOAD_READ_TOOLS,
+        )
 
     def _capability_system_blocks(self, context: UnifiedContext) -> list[PromptBlock]:
         # 先拿父类的（用户另外开着的 loop capability 照常生效），再追加自己的。

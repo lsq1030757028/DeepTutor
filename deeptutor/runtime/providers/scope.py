@@ -44,6 +44,19 @@ class ToolScope:
     #: An exclusive knowledge capability owns the turn and replaces the tool
     #: surface, so provider tools must not be advertised (see ``authorize``).
     exclusive_capability: bool = False
+    #: Provider tools this capability *drives* rather than discovers, given as
+    #: server-side (unwrapped) names. They enter the turn with their schemas
+    #: already in the window instead of behind a ``load_tools`` round-trip.
+    #:
+    #: Why this is a scope field and not a rule inside the view: which tools a
+    #: capability leads with is the capability's own knowledge, and the view
+    #: must not grow a table of third-party tool names to keep that knowledge
+    #: in. Empty for every other caller, so nothing else changes shape.
+    preload_original_names: frozenset[str] = frozenset()
+    #: Same, by name prefix — for a provider whose tool set grows on its own
+    #: side. A prefix rather than an enumeration so that adding a tool over
+    #: there does not silently become "present but unreachable" over here.
+    preload_original_prefixes: frozenset[str] = frozenset()
 
 
 __all__ = ["ToolScope"]

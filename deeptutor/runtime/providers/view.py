@@ -257,6 +257,13 @@ async def _build(
         # registry so dispatch still refuses names the model may invent.
         return ProviderToolView(registry=registry, loader=None, pool=(), manifest="", health=health)
 
+    # Tools the capability leads with. Progressive disclosure is a good default
+    # for tools a turn might discover a need for; it is the wrong default for
+    # the ones the turn's own instructions already name. A capability that
+    # tells the model to call a tool, and then puts that tool behind a
+    # `load_tools` round-trip under a name the instructions never mention, has
+    # advertised a capability it does not actually hand over.
+    capability_preloaded = _capability_preloaded_names(scope, pool)
     loader = DeferredToolLoader(
         registry=registry,
         session_id=scope.session_id,
@@ -265,15 +272,46 @@ async def _build(
         # round-trip before its first retrieval.
         loaded=load_loaded_tools(scope.session_id) | implicit_names,
         allowed=allowed.as_set(),
+        preloaded=capability_preloaded,
     )
+    # A preloaded tool must not appear under a heading that says "NOT loaded
+    # yet; calling one directly will fail" — that sentence would be false about
+    # it, and a false line in the manifest is how a model ends up reporting a
+    # capability as unavailable while holding it.
+    advertised = [
+        tool for tool in pool if tool.get_definition().name not in capability_preloaded
+    ]
     manifest = (
         ""
         if scope.exclusive_capability
-        else render_deferred_tools_manifest(list(pool), language=language)
+        else render_deferred_tools_manifest(advertised, language=language)
     )
     return ProviderToolView(
         registry=registry, loader=loader, pool=pool, manifest=manifest, health=health
     )
+
+
+def _capability_preloaded_names(scope: ToolScope, pool: tuple[BaseTool, ...]) -> set[str]:
+    """Wrapped names of the tools *scope*'s capability drives directly.
+
+    Resolved against the live pool rather than trusted from the scope: a name
+    the capability asks for but the deployment has not connected simply is not
+    preloaded, and a name outside the turn's allowlist never reaches ``pool``
+    in the first place. So this can only ever shrink what the model may call —
+    it decides *when* a tool's schema arrives, never *whether* it is allowed.
+    """
+    if not scope.preload_original_names and not scope.preload_original_prefixes:
+        return set()
+    preloaded: set[str] = set()
+    for tool in pool:
+        original = str(getattr(tool, "original_name", "") or "")
+        if not original:
+            continue
+        if original in scope.preload_original_names or any(
+            original.startswith(prefix) for prefix in scope.preload_original_prefixes
+        ):
+            preloaded.add(tool.get_definition().name)
+    return preloaded
 
 
 def _is_test_journey_tool(tool: BaseTool) -> bool:
