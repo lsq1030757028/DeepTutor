@@ -207,11 +207,16 @@ def parse_business_query(
     truncated = payload.get("是否截断")
     if (
         not isinstance(count, Mapping)
-        or set(count) != {"符合", "返回"}
+        # Renamed 2026-08-22 together with the producer. "符合" alone read as
+        # "matched in this project"; the number is really "matched among the
+        # rows that sweep read", which differs whenever 扫描范围 says the sweep
+        # was not provably complete. Both sides are still unmerged, which is
+        # the cheapest moment to fix a public field name.
+        or set(count) != {"已扫描范围内符合", "返回"}
         or not isinstance(truncated, bool)
     ):
         return TapdBusinessOutcome("blocked", error_code="BUSINESS_RESULT_INVALID")
-    matched = count.get("符合")
+    matched = count.get("已扫描范围内符合")
     returned = count.get("返回")
     if (
         isinstance(matched, bool)

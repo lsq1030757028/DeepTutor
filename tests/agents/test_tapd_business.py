@@ -124,7 +124,7 @@ def _query(*rows: tuple[str, str], identity_source: str = "persistent_profile") 
         "可答": True,
         "条目": items,
         "口径": [{"谓词": "未开始测试"}],
-        "计数": {"符合": len(items), "返回": len(items)},
+        "计数": {"已扫描范围内符合": len(items), "返回": len(items)},
         "是否截断": False,
         "证据": {"工作区": "W1", "身份上下文": identity_source},
         "error": None,
@@ -541,7 +541,7 @@ def test_business_parser_rejects_contradictory_or_malformed_success_envelopes(
     if mutation == "ok_with_error":
         payload["error"] = {"code": "SHOULD_NOT_COEXIST", "message": "contradiction"}
     elif mutation == "bool_count":
-        payload["计数"]["符合"] = True
+        payload["计数"]["已扫描范围内符合"] = True
     elif mutation == "string_row":
         payload["条目"][0]["指派人"] = ["张三"]
     elif mutation == "string_records":
@@ -590,7 +590,7 @@ def test_business_result_parser_rejects_missing_story_reference() -> None:
             "status": "ok",
             "可答": True,
             "条目": [{"标题": "没有链接", "状态": "规划中"}],
-            "计数": {"符合": 1, "返回": 1},
+            "计数": {"已扫描范围内符合": 1, "返回": 1},
             "是否截断": False,
         }
     )
