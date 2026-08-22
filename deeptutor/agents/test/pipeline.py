@@ -239,14 +239,42 @@ class TestJourneyPipeline(AgenticChatPipeline):
             self._logical_mcp_tool_count(name) > 1
             for name in ("tapd_context_status", "tapd_context_resolve")
         )
+        # Three different situations, and the model has to be able to tell the
+        # user which one it is. They used to share one message --
+        # "TAPD MCP is not connected or missing shared context operations" --
+        # which fused "nothing is connected" with "something is connected but
+        # it is the wrong server". The model then relayed whichever half it
+        # picked, and told the user TAPD was unreachable while a TAPD server
+        # was in fact answering, just without the contract tools. A message
+        # that is true of two mutually exclusive states cannot help the reader
+        # act on either.
+        any_tapd_tool = any(
+            self._logical_mcp_tool_count(name) > 0
+            for name in (
+                "tapd_context_status",
+                "tapd_context_resolve",
+                "tapd_business_query",
+                "tapd_baseline_status",
+            )
+        )
         if duplicate or not status_name or not resolve_name:
             resolution = resolve_shared_context(None, None, session=session)
-            code = "DUPLICATE_PROVIDER" if duplicate else "MCP_TOOL_UNAVAILABLE"
-            message = (
-                "检测到重复的 TAPD MCP 提供方"
-                if duplicate
-                else "TAPD MCP is not connected or missing shared context operations"
-            )
+            if duplicate:
+                code = "DUPLICATE_PROVIDER"
+                message = "检测到重复的 TAPD MCP 提供方"
+            elif not any_tapd_tool:
+                code = "MCP_NOT_CONNECTED"
+                message = (
+                    "TAPD MCP 服务没有连上：本轮工具里找不到任何 TAPD 工具。"
+                    "请在 MCP Services 里检查该服务是否已注册并启用"
+                )
+            else:
+                code = "MCP_CONTRACT_TOOLS_MISSING"
+                message = (
+                    "TAPD MCP 服务连上了，但缺少共享上下文契约工具"
+                    "（tapd_context_status / tapd_context_resolve）。"
+                    "多半是连到了只提供裸查询的旧服务，请改连 tapd-capability"
+                )
             resolution = resolution.__class__(status="unavailable", error_code=code, error=message)
         else:
             try:
