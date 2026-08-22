@@ -441,7 +441,12 @@ def test_the_tapd_primary_set_is_read_only() -> None:
     """主用集是「先去查」的手，不是绕过写确认闸的门。
 
     写类工具一旦进了免加载窗口，模型就能在没过任何人闸的情况下直接改 TAPD。
-    这条按名字前缀机械挡住，而不是靠挑名单的人当时想着这件事。
+    这条按名字机械挡住，而不是靠挑名单的人当时想着这件事。
+
+    2026-08-22：原来还断言 `all(name.startswith("get_"))`。那是**第三方服务的
+    命名习惯**，被当成了普遍规律写进断言；换到 tapd-capability 之后全都叫
+    `tapd_*`，这条断言随即失效。留个记号：给某一家供应商的命名约定写机械断言，
+    等于把供应商钉进了自己的测试。
     """
     from deeptutor.agents.test.pipeline import TAPD_PRELOAD_READ_TOOLS
 
@@ -450,7 +455,69 @@ def test_the_tapd_primary_set_is_read_only() -> None:
         name for name in TAPD_PRELOAD_READ_TOOLS if name.startswith(write_prefixes)
     ]
     assert offenders == []
-    assert all(name.startswith("get_") for name in TAPD_PRELOAD_READ_TOOLS)
+    assert all(name.startswith("tapd_") for name in TAPD_PRELOAD_READ_TOOLS)
+    # tapd_semantic_confirm 带 workspace-write，但写的是本地确认记录、不写 TAPD
+    # （服务端返回 tapd_write=false），它是状态语义的人核环节，必须能被模型走完。
+    assert "tapd_context_save" not in TAPD_PRELOAD_READ_TOOLS
+
+
+def _declared_service_tools() -> set[str]:
+    import json
+    from pathlib import Path
+
+    manifest = Path(__file__).with_name("tapd_capability_tool_surface.json")
+    return set(json.loads(manifest.read_text(encoding="utf-8"))["tools"])
+
+
+def test_every_preloaded_name_exists_on_the_tapd_service() -> None:
+    """预载清单里的每个名字，服务端真的有。
+
+    这条是 2026-08-22 那次线上缺陷的机械闸。当时把 TAPD 服务从第三方
+    mcp-server-tapd 换成了自有的 tapd-capability，但宿主这份常量还写着退役的
+    `get_stories_or_tasks` / `get_bug` / `get_workspace_info`……与服务端实际
+    暴露的 `tapd_*` **零重合**：19 个工具连着，一个都没进模型窗口，
+    轨迹是 `窗口=34 | tapd类=0`，模型于是照实回答"没连通"。
+
+    **离线测试当时全绿**，因为常量和真实工具面之间没有任何东西在对拍。
+    这就是那个对拍：清单来自对 3796 真实 list_tools 的抓取（见 json 里的出处），
+    不是手写的期望值。
+    """
+    from deeptutor.agents.test.pipeline import TAPD_PRELOAD_READ_TOOLS
+
+    declared = _declared_service_tools()
+    assert declared, "服务端工具清单快照不该为空"
+    missing = sorted(TAPD_PRELOAD_READ_TOOLS - declared)
+    assert missing == [], (
+        f"预载了服务端没有的工具：{missing}。"
+        "要么服务端改了名而这份常量没跟着改，要么快照过期——"
+        "重新对 3796 抓一次 list_tools 再对。"
+    )
+
+
+def test_the_preloaded_set_is_not_empty_and_actually_overlaps_the_service() -> None:
+    """空集或零重合都不许当"通过"。
+
+    上一条只断言"没有多余的名字"——一个空的预载清单能轻松满足它，
+    而空清单正是那次线上故障的**表现形态**（有效重合为 0）。
+    所以重合必须被正面断言，不能靠"没有反例"推出来。
+    """
+    from deeptutor.agents.test.pipeline import TAPD_PRELOAD_READ_TOOLS
+
+    overlap = TAPD_PRELOAD_READ_TOOLS & _declared_service_tools()
+    assert overlap, "预载清单与服务端工具面零重合——这正是那次线上故障的形态"
+    assert len(overlap) == len(TAPD_PRELOAD_READ_TOOLS)
+
+
+def test_the_query_and_business_paths_are_both_reachable_in_window() -> None:
+    """两条答复路径都得在窗口里，否则模型只能走其中一条还不知道另一条存在。"""
+    from deeptutor.agents.test.pipeline import TAPD_PRELOAD_READ_TOOLS
+
+    # 引用路径：先拿句柄，再取条目——少一个都走不完
+    assert {"tapd_find", "tapd_cite"} <= TAPD_PRELOAD_READ_TOOLS
+    # 业务路径：可答性检查 + 可信查询
+    assert {"tapd_semantic_status", "tapd_business_query"} <= TAPD_PRELOAD_READ_TOOLS
+    # 语义人核环节：不给这两个，业务路径永远停在 SEMANTIC_UNCONFIRMED
+    assert {"tapd_semantic_review", "tapd_semantic_confirm"} <= TAPD_PRELOAD_READ_TOOLS
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
@@ -480,3 +547,88 @@ def test_every_journey_tool_the_prompt_names_is_covered_by_the_primary_prefix(
         if not any(name.startswith(prefix) for prefix in JOURNEY_PRELOAD_PREFIXES)
     ]
     assert uncovered == [], f"{language} 提示词点名但主用声明没覆盖：{uncovered}"
+
+
+class _FakeDefinition:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _FakeTool:
+    """Minimal stand-in for a pooled MCP tool: a server-prefixed public name."""
+
+    def __init__(self, original: str, server: str = "tapd-capability") -> None:
+        self.original_name = original
+        self._definition = _FakeDefinition(f"mcp_{server}_{original}")
+
+    def get_definition(self):
+        return self._definition
+
+
+def _pipeline_with_pool(names):
+    from deeptutor.agents.test.pipeline import TestJourneyPipeline
+
+    pipeline = TestJourneyPipeline(language="zh")
+    pipeline._pageindex_docs = {}
+    pipeline._deferred_pool = tuple(_FakeTool(n) for n in names)
+    return pipeline
+
+
+def test_stale_preload_is_reported_as_stale_not_as_disconnected() -> None:
+    """连着但一个预载名都对不上时，必须说清是清单过期，不是连不上。
+
+    这是 2026-08-22 线上那次的确切形态：19 个工具连着、契约工具齐全、
+    宿主上下文解析成功，唯独预载清单还写着退役服务的名字，于是
+    `窗口=34 | tapd类=0`，模型照实说"没连通"，把所有人引去查网络。
+    症状与断线**无法区分**，除非有人明确说出来——上次没人说。
+    """
+    from deeptutor.core.context import UnifiedContext
+
+    # 服务连着（契约工具在池子里），但池子里的名字与预载清单零重合
+    pipeline = _pipeline_with_pool(
+        ["tapd_context_status", "tapd_context_resolve", "tapd_projects"]
+    )
+    # 预载清单临时换成退役的第三方名字 = 复现当时的漂移
+    import deeptutor.agents.test.pipeline as mod
+
+    original = mod.TAPD_PRELOAD_READ_TOOLS
+    mod.TAPD_PRELOAD_READ_TOOLS = frozenset({"get_stories_or_tasks", "get_bug"})
+    try:
+        notice = pipeline._stale_preload_notice(
+            UnifiedContext(session_id="s", user_message="帮我拉一下TAPD的需求",
+                           active_capability="test")
+        )
+    finally:
+        mod.TAPD_PRELOAD_READ_TOOLS = original
+
+    assert notice, "零重合必须被说出来，不能静默"
+    assert "预载" in notice
+    assert "不是连接问题" in notice
+    assert "不要说" in notice and "连不上" in notice
+
+
+def test_no_stale_notice_when_the_preloaded_names_do_resolve() -> None:
+    """正常情况下不加噪：对得上就什么都不说。"""
+    from deeptutor.agents.test.pipeline import TAPD_PRELOAD_READ_TOOLS
+    from deeptutor.core.context import UnifiedContext
+
+    pipeline = _pipeline_with_pool(sorted(TAPD_PRELOAD_READ_TOOLS))
+    notice = pipeline._stale_preload_notice(
+        UnifiedContext(session_id="s", user_message="hi", active_capability="test")
+    )
+    assert notice == ""
+
+
+def test_nothing_connected_stays_the_context_gates_story() -> None:
+    """一个 TAPD 工具都没有时不重复报警——那句话该由上下文闸去说。
+
+    两处各说一遍会让读的人以为是两个问题。
+    """
+    from deeptutor.core.context import UnifiedContext
+
+    pipeline = _pipeline_with_pool(["journey_ingest", "kb_search"])
+    notice = pipeline._stale_preload_notice(
+        UnifiedContext(session_id="s", user_message="hi", active_capability="test")
+    )
+    assert notice == ""
+

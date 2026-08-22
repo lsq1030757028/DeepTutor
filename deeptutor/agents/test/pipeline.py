@@ -108,41 +108,53 @@ JOURNEY_PROMPT_KEYS = ("journey_discipline", "human_gates", "workbench_pointer")
 #: 净增约 1.9k tokens。
 JOURNEY_PRELOAD_PREFIXES = frozenset({"journey_"})
 
-#: TAPD **只读**主用集，按纪律段真正点名要求的动作挑，不是把整个服务端搬进来。
-#: 逐条对应关系（纪律段 `journey_discipline` 里的原话 → 工具）：
-#:   ·「本轮就去查」候选需求        → get_stories_or_tasks / get_story_or_task_count
-#:   ·「字段号不许写死，先确认当前项目的字段语义」→ get_stories_fields_info /
-#:     get_stories_fields_lable / get_entity_custom_fields
-#:   ·「不要靠状态名字去猜」        → get_workflows_status_map
-#:   ·「TAPD 能不能访问」          → get_user_participant_projects / get_workspace_info
-#:   · 缺陷面                      → get_bug / get_bug_count / get_comments
+#: TAPD **只读**主用集：进模型窗口的那几个。
 #:
-#: 取舍有实测依据。基线窗口 15,843 tokens（system 12,428 + tools 3,415，
-#: 17 个内建工具）。该部署 TAPD 服务端放行 26 个只读工具，全进窗口仅 schema
-#: 就 9,235 tokens，加上 `## tools` 提示行会到 ~16k —— 比整个基线窗口还大。
-#: 上面这 11 个实测 6,997 tokens（schema 3,998 + 提示行 2,999）。
+#: 2026-08-22 全表重写。上一版写的是**已退役的第三方 mcp-server-tapd** 的名字
+#: （get_stories_or_tasks / get_bug / get_workspace_info …）。服务换成自有的
+#: tapd-capability 之后，这份清单与真实工具面**零重合**：3796 上 19 个工具连着，
+#: 一个都进不了窗口，轨迹里是 `窗口=34 | tapd类=0`，模型于是照实说"没连通"。
+#: 这就是本轮反复出现的那个形状——一侧改了、另一侧的名字清单没跟着改，
+#: 而且**离线测试发现不了**，因为常量和真实服务之间此前没有任何对拍。
+#: 下面 `_preload_names_resolved()` 与 MCP_PRELOAD_NAMES_STALE 就是补这个洞。
 #:
-#: 其余（工时、wiki、迭代、附件、提交信息、发布单…）纪律段一次都没要求过，
-#: 留在 extended_tools 里按需 `load_tools`，一次也没变得够不着。
+#: 选取依据仍是纪律段真正点名的动作，不是把服务端整个搬进来：
+#:   ·「本轮就去查」候选需求      → tapd_find（拿句柄与命中数）→ tapd_cite（取具体条目）
+#:   ·「可信业务结论」            → tapd_semantic_status / tapd_business_query
+#:   ·「不要靠状态名字去猜」      → tapd_semantic_review / tapd_semantic_confirm
+#:                                （状态语义的人核环节，模型要能走完，否则永远卡在
+#:                                 SEMANTIC_UNCONFIRMED）
+#:   ·「字段号不许写死」          → tapd_field_config
+#:   ·「TAPD 能不能访问」        → tapd_projects / tapd_workspace / tapd_probe
 #:
-#: 这一整条是**一个可撤的杠杆**：把这个 frozenset 清空，窗口立刻退回约
-#: 17.7k tokens，journey 那半分文不动。要加要减，先量再改，别凭手感。
+#: **`tapd_context_*` 刻意不进窗口。** 它们是宿主的闸：`_tapd_context_briefing`
+#: 在首次模型调用之前就把项目上下文解析完了。放进窗口只会诱导模型再去问用户
+#: 「哪个项目 / 你是谁 / 什么角色」，而纪律段明令禁止问这些。
+#: 不进窗口**不影响宿主取用**——`_logical_mcp_tool_name` 找的是 `_deferred_pool`，
+#: 预载只改变 schema 到达窗口的时机，不改变可见性（见 `_tool_scope` 的说明）。
 #:
-#: 只放**读**动作：写类工具（create_*/update_*）连出现在这里都不该出现，
-#: 主用集是「先去查」的手，不是绕过写确认闸的门。
+#: 基线那一套（tapd_baseline_*/watchlist/field_evidence）同样留在 extended_tools：
+#: `tapd_baseline_status` 由宿主自己调，其余按需 `load_tools`，一次也没变得够不着。
+#:
+#: 这一整条仍是**一个可撤的杠杆**：清空这个 frozenset，窗口立刻退回基线大小，
+#: journey 那半分文不动。要加要减，先量再改，别凭手感。
+#:
+#: 只放**读**动作。写类工具连出现在这里都不该出现；
+#: `tapd_semantic_confirm` 与 `tapd_context_save` 虽然带 workspace-write，
+#: 但写的是本地确认记录、不写 TAPD（服务端 `tapd_write=false`），
+#: 前者是人核环节必需所以进，后者按上面的理由不进。
 TAPD_PRELOAD_READ_TOOLS = frozenset(
     {
-        "get_user_participant_projects",
-        "get_workspace_info",
-        "get_stories_or_tasks",
-        "get_story_or_task_count",
-        "get_stories_fields_info",
-        "get_stories_fields_lable",
-        "get_entity_custom_fields",
-        "get_workflows_status_map",
-        "get_bug",
-        "get_bug_count",
-        "get_comments",
+        "tapd_projects",
+        "tapd_workspace",
+        "tapd_probe",
+        "tapd_field_config",
+        "tapd_find",
+        "tapd_cite",
+        "tapd_semantic_status",
+        "tapd_semantic_review",
+        "tapd_semantic_confirm",
+        "tapd_business_query",
     }
 )
 
@@ -356,7 +368,51 @@ class TestJourneyPipeline(AgenticChatPipeline):
             business = await self._tapd_business_briefing(context, resolution.selected_project)
             if business:
                 briefing = f"{briefing}\n\n{business}"
+        stale = self._stale_preload_notice(context)
+        if stale:
+            briefing = f"{briefing}\n\n{stale}" if briefing else stale
         return briefing
+
+    def _stale_preload_notice(self, context: UnifiedContext) -> str:
+        """Say so when TAPD is connected but no preloaded name matches it.
+
+        This check sits OUTSIDE the context gate on purpose. A first attempt
+        put it inside, where it could never have fired: that gate only runs
+        when the contract tools are MISSING, whereas the failure it is meant
+        to catch had them present -- context_status and context_resolve both
+        resolved, the host briefing succeeded, and the drift stayed invisible
+        until a real deployment showed `window=34 | tapd-class=0`.
+
+        The symptom is indistinguishable from a dead connection unless someone
+        names it, and last time nobody did: the model said "not connected",
+        which sent the search toward the network.
+        """
+        if not TAPD_PRELOAD_READ_TOOLS or self._preload_names_resolved() > 0:
+            return ""
+        connected = any(
+            self._logical_mcp_tool_count(name) > 0
+            for name in (
+                "tapd_context_status",
+                "tapd_context_resolve",
+                "tapd_business_query",
+                "tapd_baseline_status",
+                "tapd_projects",
+            )
+        )
+        if not connected:
+            # Nothing is connected at all -- the context gate already said so,
+            # and a second voice saying it differently only muddies the report.
+            return ""
+        context.metadata["tapd_preload"] = {"status": "stale", "resolved": 0}
+        return (
+            "[TAPD 工具预载清单已过期（宿主检测）]\n"
+            "TAPD 服务连上了，但宿主的预载清单里没有一个名字与该服务实际暴露的工具"
+            "对得上，所以这一轮**没有任何 TAPD 工具进入你的可用工具**。\n"
+            "这不是连接问题，也不是权限问题，是宿主侧 TAPD_PRELOAD_READ_TOOLS 与"
+            "服务端工具名不一致（多半是服务换了、清单没跟着改）。\n"
+            "请如实告诉用户：TAPD 是连着的，但工具没挂上，需要开发改宿主的预载清单；"
+            "不要说“连不上 TAPD”，那会把人引到网络上白查。"
+        )
 
     async def _tapd_business_briefing(
         self,
@@ -585,6 +641,22 @@ class TestJourneyPipeline(AgenticChatPipeline):
         # Two configured servers exposing the same logical capability are not
         # interchangeable: picking one by sort order could use the wrong token.
         return matches[0] if len(matches) == 1 else ""
+
+    def _preload_names_resolved(self) -> int:
+        """How many of TAPD_PRELOAD_READ_TOOLS actually exist in this turn's pool.
+
+        Exists because a stale constant is invisible offline. When the TAPD
+        service was swapped for tapd-capability the preload set still named the
+        retired third-party tools; 19 tools were connected and **zero** reached
+        the model window, so the model truthfully reported "not connected" while
+        the connection was fine. No offline test could catch it: the constant
+        and the live tool surface had nothing comparing them.
+
+        This is that comparison, done at the only moment both are knowable.
+        """
+        return sum(
+            1 for name in TAPD_PRELOAD_READ_TOOLS if self._logical_mcp_tool_count(name) > 0
+        )
 
     def _logical_mcp_tool_count(self, logical_name: str) -> int:
         return sum(

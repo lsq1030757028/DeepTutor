@@ -1,0 +1,29 @@
+{
+  "_why": "tapd-capability 服务端真实暴露的工具名快照。存在的理由：宿主的 TAPD_PRELOAD_READ_TOOLS 是个常量，服务端换了它不会自己变——2026-08-22 服务从第三方 mcp-server-tapd 换成 tapd-capability 后，那份常量仍写着退役的 get_* 名字，与真实工具面零重合，19 个工具连着却一个都进不了模型窗口，而离线测试全绿。这份清单就是让那次漂移能被离线抓住的对拍物。",
+  "_captured_from": "http://host.docker.internal:3796/mcp (MCP list_tools)",
+  "_captured_at": "2026-08-22",
+  "_source_repo": "github.com/lsq1030757028/tapd-capability",
+  "_source_ref": "integ/tapd-contract-tools-20260822",
+  "_refresh": "服务端增删工具后重新抓一次并更新本文件；不要手写。抓法：对 3796 跑一次 MCP list_tools，取 sorted(tool.name)。",
+  "tools": [
+    "tapd_baseline_confirm",
+    "tapd_baseline_drift",
+    "tapd_baseline_review",
+    "tapd_baseline_status",
+    "tapd_business_query",
+    "tapd_cite",
+    "tapd_context_resolve",
+    "tapd_context_save",
+    "tapd_context_status",
+    "tapd_field_config",
+    "tapd_field_evidence",
+    "tapd_find",
+    "tapd_probe",
+    "tapd_projects",
+    "tapd_semantic_confirm",
+    "tapd_semantic_review",
+    "tapd_semantic_status",
+    "tapd_watchlist_recheck",
+    "tapd_workspace"
+  ]
+}
