@@ -134,9 +134,25 @@ def test_write_tools_are_not_reachable_through_oracle():
 
 
 def test_channel_is_config_driven_not_hardcoded():
-    """端点、条目名、传输方式都从配置读——TAPD 通道形态已被现实推翻两次，不写死。"""
-    for key in ("transport", "server_name", "endpoint", "bearer_secret_key"):
+    """端点、条目名、传输方式都从配置读——TAPD 通道形态已被现实推翻三次，不写死。"""
+    for key in ("transport", "server_name", "endpoint", "rest_base",
+                "bearer_secret_key"):
         assert key in oracle.DEFAULT_CHANNEL
+
+
+def test_default_transport_is_tapd_rest_against_official_api():
+    """BB-672 防复发钉：默认通道必须是当下真实可用的那条。
+
+    旧默认 deeptutor_plugins 指向 `mcp_tapd_get_stories_or_tasks`，而容器侧
+    2026-08-22 起挂的是 tapd-capability——那 19 个工具**构造上不返回条目正文**
+    （RAW 闸），默认通道于是在所有现役部署上 100% 404。这条测试钉住的不是
+    "永远必须 REST"，是"改默认通道必须来这里改断言并给出新的可用性证据"。
+    """
+    assert oracle.DEFAULT_CHANNEL["transport"] == "tapd_rest"
+    assert oracle.DEFAULT_CHANNEL["rest_base"] == "https://api.tapd.cn"
+    # 键名必须在网关密钥白名单里，否则配置页根本录不进这个键
+    from server.gateway.config import ALLOWED_SECRETS
+    assert oracle.DEFAULT_CHANNEL["bearer_secret_key"] in ALLOWED_SECRETS
 
 
 def test_tool_name_follows_configured_server_name():
@@ -156,6 +172,7 @@ def test_deeptutor_plugin_transport_sends_configured_auth(monkeypatch):
     monkeypatch.setattr(oracle, "_http_json", fake_http)
     result = oracle.call_read_tool(
         "get_stories_or_tasks", {"workspace_id": "67600006"},
+        channel=dict(oracle.DEFAULT_CHANNEL, transport="deeptutor_plugins"),
         config=_ConfigStub(),
     )
     assert result == {"data": []}
@@ -313,6 +330,184 @@ def test_direct_bearer_is_scrubbed_from_error_payload():
         assert "<redacted>" in json.dumps(payload)
     finally:
         server.shutdown()
+
+
+# ── tapd_rest 传输（BB-672 修复主体）────────────────────────────────────────
+
+
+class _RestConfigStub:
+    def __init__(self, token="sentinel-rest-token"):
+        self.token = token
+
+    def get_secret(self, key):
+        assert key == "TAPD_ACCESS_TOKEN"
+        return self.token
+
+
+def _rest_channel(port, **overrides):
+    ch = dict(oracle.DEFAULT_CHANNEL,
+              rest_base=f"http://127.0.0.1:{port}")
+    ch.update(overrides)
+    return ch
+
+
+def test_tapd_rest_fetches_story_row_with_flattened_options():
+    """MCP 形状的 options 参数拍平成 REST 查询串；返回 TAPD data 原文行。"""
+    seen = {}
+
+    class Api(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            seen["path"] = self.path
+            seen["authorization"] = self.headers.get("Authorization", "")
+            body = json.dumps({"status": 1, "info": "success",
+                               "data": [{"Story": STORY}]}).encode()
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    server = _serve(Api)
+    try:
+        result = oracle.call_read_tool(
+            "get_stories_or_tasks",
+            {"workspace_id": "67600006",
+             "options": {"id": "1167600006001046281",
+                         "fields": "id,name,description"}},
+            channel=_rest_channel(server.server_port),
+            config=_RestConfigStub())
+    finally:
+        server.shutdown()
+    assert result["data"][0]["Story"]["description"] == STORY["description"]
+    assert seen["path"].startswith("/stories?")
+    assert "workspace_id=67600006" in seen["path"]
+    assert "id=1167600006001046281" in seen["path"]      # options 已拍平
+    assert "description" in seen["path"]
+    assert "options" not in seen["path"]
+    assert seen["authorization"] == "Bearer sentinel-rest-token"
+
+
+def test_tapd_rest_business_error_is_error_not_data():
+    """status != 1 的信封是错误——错误串绝不能被当需求正文快照下来。"""
+
+    class Api(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(json.dumps(
+                {"status": 0, "info": "workspace_id error"}).encode())
+
+        def log_message(self, *_args):
+            pass
+
+    server = _serve(Api)
+    try:
+        with pytest.raises(oracle.OracleError) as exc:
+            oracle.call_read_tool(
+                "get_stories_or_tasks", {"workspace_id": "x"},
+                channel=_rest_channel(server.server_port),
+                config=_RestConfigStub())
+    finally:
+        server.shutdown()
+    assert exc.value.code == oracle.E_ORACLE_FETCH_FAILED
+    assert "workspace_id error" in str(exc.value)
+
+
+def test_tapd_rest_requires_https_off_loopback():
+    ch = dict(oracle.DEFAULT_CHANNEL, rest_base="http://api.tapd.cn")
+    with pytest.raises(oracle.OracleError) as exc:
+        oracle.call_read_tool("get_stories_or_tasks", {},
+                              channel=ch, config=_RestConfigStub())
+    assert exc.value.code == oracle.E_ORACLE_FORBIDDEN
+
+
+def test_tapd_rest_missing_token_fails_closed_with_key_name():
+    """令牌没配就提前拒绝，并把该配的键名说出来——不打一次注定 401 的出网。"""
+    with pytest.raises(oracle.OracleError) as exc:
+        oracle.call_read_tool("get_stories_or_tasks", {},
+                              channel=_rest_channel(1),
+                              config=_RestConfigStub(token=""))
+    assert exc.value.code == oracle.E_ORACLE_FORBIDDEN
+    assert "TAPD_ACCESS_TOKEN" in str(exc.value)
+
+
+def test_tapd_rest_write_tools_have_no_route():
+    """写不进 TAPD 是构造保证：路由表里根本没有写路径，全部路由都是 GET。"""
+    for tool in ("create_story", "update_story_or_task", "add_bug"):
+        with pytest.raises(oracle.OracleError) as exc:
+            oracle.call_read_tool(tool, {}, channel=_rest_channel(1),
+                                  config=_RestConfigStub())
+        assert exc.value.code == oracle.E_ORACLE_FORBIDDEN
+
+
+def test_tapd_rest_401_maps_to_forbidden_and_scrubs_token():
+    token = "sentinel-rest-401-token"
+
+    class Api(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(401)
+            self.end_headers()
+            self.wfile.write(
+                ("echo=" + self.headers.get("Authorization", "")).encode())
+
+        def log_message(self, *_args):
+            pass
+
+    server = _serve(Api)
+    try:
+        with pytest.raises(oracle.OracleError) as exc:
+            oracle.call_read_tool(
+                "get_stories_or_tasks", {"workspace_id": "x"},
+                channel=_rest_channel(server.server_port),
+                config=_RestConfigStub(token))
+    finally:
+        server.shutdown()
+    assert exc.value.code == oracle.E_ORACLE_FORBIDDEN
+    payload = json.dumps(exc.value.as_payload())
+    assert token not in payload
+    assert "<redacted>" in payload
+
+
+def test_tapd_rest_bearer_does_not_follow_redirect_to_another_origin():
+    token = "sentinel-rest-redirect-token"
+
+    class Sink(BaseHTTPRequestHandler):
+        hits = 0
+
+        def do_GET(self):  # noqa: N802
+            type(self).hits += 1
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    sink = _serve(Sink)
+
+    class Redirect(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(302)
+            self.send_header("Location",
+                             f"http://127.0.0.1:{sink.server_port}/steal")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    source = _serve(Redirect)
+    try:
+        with pytest.raises(oracle.OracleError) as exc:
+            oracle.call_read_tool(
+                "get_stories_or_tasks", {"workspace_id": "x"},
+                channel=_rest_channel(source.server_port),
+                config=_RestConfigStub(token))
+        assert exc.value.code == oracle.E_ORACLE_FETCH_FAILED
+        assert Sink.hits == 0
+        assert token not in str(exc.value)
+    finally:
+        source.shutdown()
+        sink.shutdown()
 
 
 # ── 快照冻结 ────────────────────────────────────────────────────────────────

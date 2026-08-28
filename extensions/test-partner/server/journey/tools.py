@@ -294,7 +294,10 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
     oracle_source: dict[str, Any] = {}
     text = requirement_text
     if workspace_id and story_id:
-        oracle.warm_up()
+        # warm_up 治的是 DT 插件通道的 MCP 冷启动坑，只在那条通道上才需要；
+        # tapd_rest 直连官方 API，没有"未连接"冷启动态，预热只是白打一次 DT。
+        if (oracle.channel_config().get("transport") or "") == "deeptutor_plugins":
+            oracle.warm_up()
         try:
             story = oracle.fetch_story(workspace_id, story_id)
         except oracle.OracleError as exc:

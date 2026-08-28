@@ -10,18 +10,30 @@ M1 的 oracle 是人贴的一段文字；M2 的 oracle 是**带出处与摘要�
 
 ## 通道是可切换的（2026-08-11 manager 裁定，不是可选项）
 
-TAPD MCP 的落地形态已经被现实推翻两次：0012 拍的是「进容器 + stdio」，
-实际先是「宿主 HTTP + 服务端存令牌」，现在又变成「宿主 HTTP + 每请求带 Bearer、
-服务端零存储」。**所以这里不写死任何一种**：端点、MCP 服务器条目名、传输方式、
+TAPD MCP 的落地形态已经被现实推翻三次：0012 拍的是「进容器 + stdio」，
+实际先是「宿主 HTTP + 服务端存令牌」，后来是「宿主 HTTP + 每请求带 Bearer、
+服务端零存储」，2026-08-22 起容器挂的是自研 `tapd-capability`（19 个工具）。
+**所以这里不写死任何一种**：端点、MCP 服务器条目名、传输方式、
 鉴权形态全部从网关配置读（`services.tapd.oracle`），换通道只改配置不改代码。
 
-两种传输：
+三种传输：
 
-- `deeptutor_plugins`（默认，也是当前唯一验通的一种）：经 DT 的
-  `POST /api/v1/plugins/tools/mcp_<server>_<tool>/execute` 拿**服务器原文**
-  （`manager.py:137-154`，不经 LLM）。**令牌不由我们持有**——容器侧 MCP 条目
-  自己带（新通道是每请求 Bearer，用户在 DT 的 MCP Services 页面自填）。
-- `direct_http`：网关直连 MCP 端点。仅在 DT 侧条目尚未配好时的排障路径；
+- `tapd_rest`（默认）：网关用自己密钥库里的 TAPD 个人令牌（键名默认
+  `TAPD_ACCESS_TOKEN`，本就在 `ALLOWED_SECRETS` 白名单里）直连 TAPD 官方
+  REST API（`GET https://api.tapd.cn/stories`），拿**带 description 的服务器
+  原文行**。为什么默认是它（BB-672 的根因结论，2026-08-28）：
+  容器侧 `tapd-capability` 的 19 个工具面是**构造级 RAW 闸**——没有任何工具
+  返回条目正文（`tapd_cite` 只回五个业务字段），那道闸管的是模型答复面；
+  而 oracle 是宿主的机器快照通道，要的恰恰是原文。旧默认 `deeptutor_plugins`
+  指向的 `mcp_tapd_get_stories_or_tasks` 在现部署已不存在（第三方运行时
+  2026-08-22 退役），是「贴 TAPD 链接正式测需求」必失败的直接原因。
+  只做 GET、只有两条只读路由（`_REST_PATHS`），写不进 TAPD。
+- `deeptutor_plugins`：经 DT 的
+  `POST /api/v1/plugins/tools/mcp_<server>_<tool>/execute` 拿服务器原文
+  （不经 LLM）。**前提是容器侧条目真的暴露 `get_stories_or_tasks` 形状的
+  正文工具**——当前挂载的 tapd-capability 没有，此通道在现部署不可用，
+  保留是为将来条目形态再变时可以配置切回。
+- `direct_http`：网关直连 MCP 端点。仅排障路径；
   Bearer 从密钥库按键名取，**用完即弃、不落盘、不进日志**。
 
 ## 为什么 fields 白名单是硬要求（施工期实测，写进设计的东西）
@@ -45,7 +57,7 @@ import re
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from typing import Any
 
 from server.journey import artifacts
@@ -74,17 +86,29 @@ READ_TOOLS = ("get_stories_or_tasks", "get_stories_fields_info")
 
 #: 通道默认值。**任何一项都可被 `services.tapd.oracle` 覆盖。**
 DEFAULT_CHANNEL: dict[str, Any] = {
-    # deeptutor_plugins | direct_http
-    "transport": "deeptutor_plugins",
-    # 容器内 MCP 条目名。旧通道叫 tapd；新通道（每请求 Bearer 那条）由用户在
-    # DT 的 MCP Services 页面自己命名，配置里改这一项即可切换。
+    # tapd_rest | deeptutor_plugins | direct_http（默认见模块文档串的根因结论）
+    "transport": "tapd_rest",
+    # 容器内 MCP 条目名（deeptutor_plugins 专用）。旧通道叫 tapd；条目改名时
+    # 配置里改这一项即可切换。
     "server_name": "tapd",
     "story_tool": "get_stories_or_tasks",
     "fields_tool": "get_stories_fields_info",
-    # direct_http 专用：端点与 Bearer 的**键名**（不是值）。
+    # direct_http 专用：MCP 端点。
     "endpoint": "",
-    "bearer_secret_key": "",
+    # tapd_rest 专用：官方 API 基址。非 loopback 必须 HTTPS。
+    "rest_base": "https://api.tapd.cn",
+    # Bearer 的**键名**（不是值），tapd_rest 与 direct_http 共用语义。
+    # TAPD_ACCESS_TOKEN 是网关密钥白名单的第一位成员（config.ALLOWED_SECRETS），
+    # 设计上本就归网关持有，不是为这条通道新开的口子。
+    "bearer_secret_key": "TAPD_ACCESS_TOKEN",
     "timeout_s": 60,
+}
+
+#: tapd_rest 的只读路由表。**只有列在这里的工具名可走 REST，且全部是 GET**——
+#: 写不进 TAPD 是构造保证（没有 POST 路由），不是提示词承诺。
+_REST_PATHS: dict[str, str] = {
+    "get_stories_or_tasks": "/stories",
+    "get_stories_fields_info": "/stories/get_fields_info",
 }
 
 
@@ -165,6 +189,32 @@ def _http_json(url: str, body: dict[str, Any], *, timeout_s: int,
                           code=E_ORACLE_FETCH_FAILED) from exc
 
 
+def _http_get_json(url: str, *, timeout_s: int, bearer: str = "") -> Any:
+    """带 Bearer 的只读 GET。不跟随重定向（跟随会把令牌带去别的源）。"""
+    headers = {"Accept": "application/json"}
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    opener = urllib.request.build_opener(_NoRedirect())
+    try:
+        with opener.open(req, timeout=timeout_s) as resp:  # noqa: S310
+            raw = _scrub_secret(resp.read().decode("utf-8"), bearer)
+            return json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        detail = _scrub_secret(
+            exc.read().decode("utf-8", "replace")[:400], bearer)
+        if exc.code in (401, 403):
+            raise OracleError(
+                f"TAPD 拒绝了这次调用（HTTP {exc.code}）。令牌无权或已失效——"
+                "去配置页重新录入 TAPD 个人访问令牌。",
+                code=E_ORACLE_FORBIDDEN, detail=detail) from exc
+        raise OracleError(f"TAPD 返回 HTTP {exc.code}：{detail}",
+                          code=E_ORACLE_FETCH_FAILED, detail=detail) from exc
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise OracleError(f"TAPD 不可达：{exc}",
+                          code=E_ORACLE_FETCH_FAILED) from exc
+
+
 def warm_up(api_base: str = "", *, timeout_s: int = 30,
             config: Any = None) -> bool:
     """预热 DT 的 MCP 连接（治 `ensure_started` 冷启动坑，ADR-M2-02 第 5 条末）。
@@ -210,7 +260,9 @@ def call_read_tool(tool: str, params: dict[str, Any], *,
     （`success=true` + 普通字符串），不判就会被当需求正文快照下来。
     """
     ch = channel or channel_config(config)
-    transport = ch.get("transport") or "deeptutor_plugins"
+    transport = ch.get("transport") or "tapd_rest"
+    if transport == "tapd_rest":
+        return _call_tapd_rest(tool, params, channel=ch, config=config)
     if transport == "deeptutor_plugins":
         url = f"{_api_base(config)}/api/v1/plugins/tools/{_dt_tool_name(ch, tool)}/execute"
         envelope = _http_json(url, {"params": params},
@@ -242,6 +294,58 @@ def call_read_tool(tool: str, params: dict[str, Any], *,
     except McpPayloadError as exc:
         raise OracleError(str(exc), code=E_ORACLE_FETCH_FAILED,
                           detail=exc.raw_head) from exc
+
+
+def _call_tapd_rest(tool: str, params: dict[str, Any], *,
+                    channel: dict[str, Any], config: Any = None) -> Any:
+    """直连 TAPD 官方 REST 调一次只读工具，返回**已判别过的**业务对象。
+
+    - 路由只认 `_REST_PATHS`（全是 GET）——写操作在构造上就不存在；
+    - MCP 形状的 `{"options": {...}}` 参数拍平成 REST 查询串，调用方不用感知通道差异；
+    - TAPD 的业务信封 `{"status": 1, "info": ..., "data": ...}` 在这里判别：
+      status != 1 是**错误不是数据**——错误串被当正文快照下来正是
+      `parse_mcp_payload` 在 MCP 通道上防的那类事故，REST 通道同责。
+    """
+    path = _REST_PATHS.get(tool)
+    if path is None:
+        raise OracleError(f"工具 {tool!r} 不在 tapd_rest 只读路由表 "
+                          f"{tuple(_REST_PATHS)} 里", code=E_ORACLE_FORBIDDEN)
+    base = str(channel.get("rest_base") or "https://api.tapd.cn").rstrip("/")
+    parts = urlsplit(base)
+    if parts.scheme != "https" and parts.hostname not in {
+            "127.0.0.1", "localhost", "::1"}:
+        raise OracleError("tapd_rest 携带 Bearer 时只允许 HTTPS；本机 loopback 例外。",
+                          code=E_ORACLE_FORBIDDEN)
+    bearer = _read_bearer(channel, config)
+    if not bearer:
+        raise OracleError(
+            "密钥库里没有 TAPD 令牌（键名 "
+            f"{channel.get('bearer_secret_key') or 'TAPD_ACCESS_TOKEN'}）——"
+            "去配置页录入 TAPD 个人访问令牌后重试。不带令牌打 TAPD 只会得到 401，"
+            "这里提前说清楚，省一次注定失败的出网。",
+            code=E_ORACLE_FORBIDDEN)
+
+    flat: dict[str, Any] = {}
+    for key, value in (params or {}).items():
+        if key == "options" and isinstance(value, dict):
+            flat.update(value)
+        else:
+            flat[key] = value
+    query = urlencode({k: v for k, v in flat.items() if v not in (None, "")})
+    url = f"{base}{path}" + (f"?{query}" if query else "")
+    envelope = _http_get_json(url, timeout_s=int(channel.get("timeout_s") or 60),
+                              bearer=bearer)
+    if not isinstance(envelope, dict) or "status" not in envelope:
+        raise OracleError("TAPD REST 返回体不是标准信封（缺 status）",
+                          code=E_ORACLE_FETCH_FAILED,
+                          detail=str(envelope)[:200])
+    if envelope.get("status") != 1:
+        raise OracleError(
+            f"TAPD 返回业务错误：{envelope.get('info') or '(无 info)'}",
+            code=E_ORACLE_FETCH_FAILED,
+            detail={"status": envelope.get("status"),
+                    "info": envelope.get("info")})
+    return {"data": envelope.get("data")}
 
 
 def _read_bearer(channel: dict[str, Any], config: Any = None) -> str:
