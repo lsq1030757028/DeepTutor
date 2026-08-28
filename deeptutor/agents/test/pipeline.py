@@ -34,6 +34,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import os
 import re
 from typing import Any
 
@@ -89,7 +90,53 @@ JOURNEY_BLOCK_NAME = "test_journey"
 #: yaml 里哪几段拼进纪律块，**顺序即拼接顺序**。
 #: 单列成常量是因为「写了一段提示词但忘了挂进来」与 BB-508 是同一个形状的错
 #: （内容有、通道没接上），所以判据直接遍历这个列表逐段验，加一段自动带一条断言。
-JOURNEY_PROMPT_KEYS = ("journey_discipline", "human_gates", "workbench_pointer")
+JOURNEY_PROMPT_KEYS = (
+    "journey_discipline",
+    "human_gates",
+    "answer_discipline",
+    "workbench_pointer",
+)
+
+#: yaml 里**不拼进系统块**的那一段：`loop.finish_exhausted` 是轮次预算耗尽时
+#: 追加的 user 消息，不是 system prompt 的一节，所以它写成嵌套 mapping 而不是
+#: 顶层字符串（顶层字符串会被 `test_every_declared_prompt_section_reaches_the_
+#: rendered_prompt` 要求进 JOURNEY_PROMPT_KEYS，那会把它错挂进系统块）。
+LOOP_PROMPT_SECTION = "loop"
+
+#: Test 模式一轮的**最低**轮次预算。
+#:
+#: 基线是 `DEFAULT_MAX_ROUNDS = 8`（`agents/chat/agentic_pipeline.py`），
+#: 对普通聊天够用，对本模式不够：2026-08-29「帮我拉一下 TAPD 的需求」这一句
+#: 冷启动要走完 项目上下文 → 字段语义确认 → 候选查询 → 交叉验证 → 取条目，
+#: 实测一轮 8-10 次工具调用、每次占一轮，于是**正常任务必然触顶**，
+#: 收尾话术把用户变成点火键（"回复继续"），一次请求被切成 N 次人肉续跑。
+#:
+#: 24 的取法：实测上界 10 轮，留一倍余量给交叉验证与澄清卡，再加收尾一轮。
+#: 它是**兜底**不是目标——没有工具调用的一轮照旧提前结束循环，
+#: 正常任务根本走不到这个数；走到了就说明真失控，那时才该触顶。
+TEST_MODE_MIN_LOOP_ROUNDS = 24
+
+#: 上面那个数的运行时开关。fork 侧刻意走环境变量而不是 `capabilities.chat`
+#: 的配置键：后者要改 `services/config/loader.py` 的 `DEFAULT_CHAT_PARAMS`
+#: （未知键会被 `get_chat_params` 过滤掉），那是**新增一个上游触点**，
+#: 而登记表只剩 1 行硬余量（`extensions/UPSTREAM-TOUCHPOINTS.md`）。
+TEST_MODE_MAX_ROUNDS_ENV = "DEEPTUTOR_TEST_MODE_MAX_ROUNDS"
+
+#: 轮次预算抬升走的那个键。宿主侧的通用缝，subagent capability 用的也是它
+#: （`capabilities/subagent/capability.py`），所以这里只写值不改循环。
+MIN_LOOP_ROUNDS_KEY = "_min_loop_rounds"
+
+
+def journey_round_floor() -> int:
+    """本模式这一轮的轮次下限。环境变量能调，非法值按默认走。"""
+    raw = os.getenv(TEST_MODE_MAX_ROUNDS_ENV)
+    if raw is None or not str(raw).strip():
+        return TEST_MODE_MIN_LOOP_ROUNDS
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return TEST_MODE_MIN_LOOP_ROUNDS
+    return value if value >= 1 else TEST_MODE_MIN_LOOP_ROUNDS
 
 #: 本模式**主用**的旅程工具前缀。带前缀而不是列名字：扩展侧新增一个
 #: `journey_*` 工具不该在这边变成「连上了但够不着」。
@@ -165,12 +212,24 @@ def journey_system_block(language: str = "zh") -> str:
     塞兜底文案会让「prompt 模块没注册」这个配置错误看起来像正常工作——
     正是 MODULES 那条漏改不报错的放大器。空串至少会让人发现模型没按纪律走。
     """
-    try:
-        prompts = PromptManager().load_prompts(PROMPT_MODULE, PROMPT_AGENT, language=language)
-    except Exception:  # noqa: BLE001 - 提示词读不到不该让整轮崩
-        return ""
+    prompts = _load_journey_prompts(language)
     parts = [str(prompts.get(key) or "").strip() for key in JOURNEY_PROMPT_KEYS]
     return "\n\n".join(p for p in parts if p)
+
+
+def _load_journey_prompts(language: str) -> dict[str, Any]:
+    try:
+        return PromptManager().load_prompts(PROMPT_MODULE, PROMPT_AGENT, language=language) or {}
+    except Exception:  # noqa: BLE001 - 提示词读不到不该让整轮崩
+        return {}
+
+
+def journey_loop_prompt(key: str, language: str = "zh") -> str:
+    """`loop.<key>` 那一段。读不到返回空串，由调用方回落到宿主默认。"""
+    section = _load_journey_prompts(language).get(LOOP_PROMPT_SECTION)
+    if not isinstance(section, dict):
+        return ""
+    return str(section.get(key) or "").strip()
 
 
 class TestJourneyPipeline(AgenticChatPipeline):
@@ -206,6 +265,32 @@ class TestJourneyPipeline(AgenticChatPipeline):
             blocks.append(PromptBlock(JOURNEY_BLOCK_NAME, content))
         return blocks
 
+    def _finish_exhausted_instruction(self) -> str:
+        """轮次触顶时追加的收尾指令 —— 本模式覆盖宿主那句。
+
+        宿主默认只说「停止调用工具、基于已有材料作答、简短说明不确定的部分」。
+        它没禁掉两件真发生过的事（2026-08-29 会话 unified_1787911414542_1ab2ebda
+        与同日 TAPD 拉需求那两轮）：把回复写成「当前进度小结 / 已完成 / 还没完成 /
+        下一步」的工作汇报，以及让用户回一句"继续"当点火键——**一次请求被切成
+        N 次人肉续跑**。所以这里换成一句交付优先的指令，读不到就回落宿主的。
+        """
+        own = journey_loop_prompt("finish_exhausted", self.language)
+        return own or super()._finish_exhausted_instruction()
+
+    def _apply_round_floor(self, context: UnifiedContext) -> int:
+        """把本模式的轮次下限写进宿主的通用缝，取较大值不覆盖别人的。
+
+        `effective_max_rounds` 读的就是这个键；写而不是改循环，是为了让
+        subagent 之类同时活跃的能力各自的下限都还算数。
+        """
+        try:
+            current = int(context.metadata.get(MIN_LOOP_ROUNDS_KEY) or 0)
+        except (TypeError, ValueError):
+            current = 0
+        floor = max(current, journey_round_floor())
+        context.metadata[MIN_LOOP_ROUNDS_KEY] = floor
+        return floor
+
     async def _capability_pre_loop_briefings(
         self,
         context: UnifiedContext,
@@ -217,6 +302,9 @@ class TestJourneyPipeline(AgenticChatPipeline):
         consumes the shared context status/resolve contract and keeps only an
         explicit current-session override inside DeepTutor.
         """
+        # 第一句就抬轮次预算：后面任何一段简报失败都不该把这一轮打回 8 轮，
+        # 那正是「正常任务必然触顶」的形态。
+        self._apply_round_floor(context)
         inherited = await super()._capability_pre_loop_briefings(context, stream)
         tapd = await self._tapd_context_briefing(context)
         return "\n\n".join(part for part in (inherited.strip(), tapd.strip()) if part)
