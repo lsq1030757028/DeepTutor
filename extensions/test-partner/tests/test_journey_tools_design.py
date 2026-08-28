@@ -239,6 +239,26 @@ def test_analyze_gate_fail_closed(store, local_target):
     assert not bad["ok"] and not store.has_artifact(bid, "test_analysis")
 
 
+def test_analyze_rejects_wrong_shape_without_crashing(store, local_target):
+    """形状错误必须是结构化拒绝,不是崩溃(2026-08-28 U6 复验实测)。
+
+    模型把 example_map 包成 {story, rules:[...]} 对象时,旧代码在 row.get 上炸成
+    'str' object has no attribute 'get',经 MCP 包装呈现为 E_MCP_UNAVAILABLE——
+    模型将其读成连接问题去重试,而不是改参数形状。拒绝里必须带正确形状示例。
+    """
+    bid = do_ingest(store, local_target)["batch_id"]
+    clarify.clarify(bid, rules=[{"rule_id": "R1", "statement": "s",
+                                "source_quote": "q"}],
+                    confirmed_facts_md=GOOD_FACTS)
+    r = analyze.analyze(bid, example_map={"story": "x", "rules": []},
+                        analysis_md=GOOD_ANALYSIS)
+    assert not r["ok"]
+    assert any("必须是数组" in p and "rule_id" in p for p in r["problems"])
+    assert not store.has_artifact(bid, "test_analysis")
+    r2 = analyze.analyze(bid, example_map=["R1"], analysis_md=GOOD_ANALYSIS)
+    assert not r2["ok"] and any("必须是对象" in p for p in r2["problems"])
+
+
 def test_analyze_rejects_unknown_rule(store, local_target):
     bid = do_ingest(store, local_target)["batch_id"]
     clarify.clarify(bid, rules=[{"rule_id": "R1", "statement": "s",

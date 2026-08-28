@@ -24,6 +24,25 @@ def analyze(batch_id: str, *, example_map: list[dict[str, Any]],
     frame = artifacts.load_artifact(batch_id, "business_frame")
     known_rules = {r["rule_id"] for r in frame["rules"]}
     problems: list[str] = []
+    # 形状闸先行（2026-08-28 实测）：模型把 example_map 包成 {story, rules:[...]}
+    # 对象时，下面的 row.get 会直接炸成 'str' object has no attribute 'get'，
+    # 经 MCP 包装后呈现为 E_MCP_UNAVAILABLE——模型会把它读成**连接问题**去重试，
+    # 而不是改参数形状。形状错误必须是结构化拒绝 + 正确形状示例，不是崩溃。
+    if not isinstance(example_map, list):
+        return {"ok": False, "problems": [
+            f"example_map 必须是数组，收到 {type(example_map).__name__}。"
+            "每个元素：{\"rule_id\": \"R1\", \"charter\": \"...\", "
+            "\"examples\": [{\"id\": \"E1\", \"desc\": \"...\", \"kind\": \"happy\"}]}"
+            "——不要包一层 {story, rules} 对象，也不要改键名。"],
+            "downstream_gate": {"verdict": "REJECT", "problems": [],
+                                "stats": {}, "warns": []}}
+    bad_rows = [i for i, row in enumerate(example_map) if not isinstance(row, dict)]
+    if bad_rows:
+        return {"ok": False, "problems": [
+            f"example_map[{i}] 必须是对象（{{rule_id, charter, examples}}），"
+            f"收到 {type(example_map[i]).__name__}" for i in bad_rows],
+            "downstream_gate": {"verdict": "REJECT", "problems": [],
+                                "stats": {}, "warns": []}}
     if not example_map:
         problems.append("example_map 为空——分析产物必须逐规则给判别 Example")
     for i, row in enumerate(example_map or []):
