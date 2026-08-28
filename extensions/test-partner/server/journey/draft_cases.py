@@ -188,6 +188,12 @@ def draft(batch_id: str, *, cases: list[dict[str, Any]],
         cases, analysis["example_map"], uncovered_rules, rule_probing)
     if not result["ok"]:
         return {"ok": False, **result}
+    # 落盘前把校验期的 draft_id 缺省值**固化**进产物(2026-08-28 U6 复验实锤):
+    # validate_draft 对缺 draft_id 的用例用 d{i+1} 顶着校验,但旧实现原样落盘
+    # None——于是 adopt 的 selected_draft_ids 无论传什么都匹配不上,一份校验
+    # 通过的草稿在构造上**永远无法被采纳**。校验用什么名,落盘就存什么名。
+    cases = [dict(c, draft_id=str(c.get("draft_id") or f"d{i + 1}"))
+             for i, c in enumerate(cases)]
     art = artifacts.save_artifact(batch_id, "case_draft", {
         "cases": cases,
         "uncovered_rules": uncovered_rules or [],

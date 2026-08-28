@@ -420,8 +420,12 @@ def adopt_selection(case_draft: dict[str, Any],
     for draft_id in dict.fromkeys(str(d or "") for d in selected_draft_ids or []):
         case = by_id.get(draft_id)
         if case is None:
+            # 报"不在"必须同时给"有什么"——否则调用方只能穷举乱猜
+            # (2026-08-28 U6 复验:模型先猜 d1 再猜 case_id,两发全脱靶)。
+            available = sorted(x for x in by_id if x)
             raise DecisionAuthError(
-                f"采纳集里的 draft_id 不在当前草稿中：{draft_id}")
+                f"采纳集里的 draft_id 不在当前草稿中：{draft_id}。"
+                f"当前草稿可选的 draft_id：{available or '（草稿里没有任何 draft_id）'}")
         picked.append(case)
     if not picked:
         raise DecisionAuthError("采纳集为空，没有可确认的内容")

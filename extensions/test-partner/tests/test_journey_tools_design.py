@@ -468,3 +468,29 @@ def test_case_id_rejection_states_the_expected_shape(store, local_target):
     assert not r["ok"]
     s13 = [e for e in r["errors"] if e["code"] == "S13"]
     assert s13 and "R[0-9]+-C[0-9]{3}" in s13[0]["problem"], s13
+
+
+def test_draft_persists_defaulted_draft_ids_so_adoption_can_reference_them(
+        store, local_target):
+    """校验用什么 draft_id,落盘就存什么(BB-687/2026-08-28 U6 复验实锤)。
+
+    旧实现:validate_draft 对缺 draft_id 的用例用 d{i+1} 顶着校验,落盘却存 None
+    ——一份校验通过的草稿在构造上**永远无法被采纳**(adopt 按 draft_id 匹配,
+    None 化成空串,传什么都不在草稿中)。
+    """
+    from server.journey import decision_auth
+    bid = chain_to_analyze(store, local_target)
+    case = make_case("dtmp")
+    case.pop("draft_id")           # 模型常见形态:只给 case_id 不给 draft_id
+    case["case_id"] = "byh/R1-C001"
+    case["case_version"] = 1
+    r = draft_cases.draft(bid, cases=[case])
+    assert r["ok"], r
+    saved = store.load_artifact(bid, "case_draft")
+    assert saved["cases"][0]["draft_id"] == "d1"
+    picked = decision_auth.adopt_selection(saved, ["d1"])
+    assert picked and picked[0]["case_id"] == "byh/R1-C001"
+    # 报"不在"必须同时给"有什么"
+    with pytest.raises(decision_auth.DecisionAuthError) as exc:
+        decision_auth.adopt_selection(saved, ["nope"])
+    assert "d1" in str(exc.value)
