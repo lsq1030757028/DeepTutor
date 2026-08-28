@@ -150,6 +150,28 @@ def test_trusted_owner_lets_ingest_through(store, monkeypatch):
     assert any(e.get("caller_surface") for e in events if e["type"] == "tool_call")
 
 
+def test_get_batch_returns_requirement_text(store, monkeypatch):
+    """批次详情必须带需求正文（BB-672 补口）。
+
+    TAPD 路径下正文由宿主取数冻结,模型全程没见过;而 clarify 的非探测规则
+    要求带正文引句。get_batch 不给正文,模型只能去打登录墙后的 tapd.cn,
+    然后回头请用户手贴——等于把自动取数的收益原地丢掉(2026-08-28 实测)。
+    """
+    from server.journey import ingest as ingest_mod
+    monkeypatch.setattr(ingest_mod, "probe_target", lambda url, timeout_s=10: {
+        "reachable": True, "status": 200, "page_title": "",
+        "body_head_sha256": "a" * 64})
+    body = "【需求背景】设备已支持端侧 MCP,现需补充屏幕亮度调节能力。"
+    r = tools.ingest(title="亮度调节", base_url="http://127.0.0.1:8047",
+                     owner=TRUSTED_OWNER, source_kind="doc",
+                     source_ref="local", requirement_text=body,
+                     tier="standard", tier_confirmed_via="test")
+    assert r["ok"] is True, r
+    detail = tools.get_batch(batch_id=r["batch_id"], owner=TRUSTED_OWNER)
+    assert detail["ok"] is True
+    assert detail["requirement_text"] == body
+
+
 def test_injected_root_reaches_legacy_downstream_modules(tmp_path, monkeypatch):
     """Facade 的 root 要贯穿到仍使用 artifacts 默认参数的旧九原子实现。"""
     default_root = tmp_path / "default"

@@ -1096,8 +1096,19 @@ def get_batch(*, batch_id: str, caller_surface: str = "unknown",
         for verdict in row["verdicts"]:
             verdict["trace_rel"] = _trace_handle(rd, verdict)
         runs.append(row)
+    # 需求正文随批次详情一起给（BB-672 修复后的补口）：TAPD 路径下正文由宿主取数
+    # 并冻结在 requirement.txt / oracle 快照里，模型侧全程没见过它——而 clarify
+    # 的每条非探测规则都要求带正文引句（source_quote），拿不到正文这条路就死在
+    # 澄清上（2026-08-28 实测:模型只能去打登录墙后的 tapd.cn,然后回头请用户手贴）。
+    # 粘贴路径下模型本来就有正文,多返回一份不构成新的暴露面。
+    requirement_text = ""
+    req_path = os.path.join(artifacts.batch_dir(batch_id, root=root),
+                            "requirement.txt")
+    if os.path.isfile(req_path):
+        with open(req_path, encoding="utf-8") as fh:
+            requirement_text = fh.read()
     return _ok(batch=meta, stepper=steps, stepper_definition=stepper_definition(),
-               artifacts=payload, runs=runs,
+               artifacts=payload, runs=runs, requirement_text=requirement_text,
                events=artifacts.read_events(batch_id, root=root))
 
 
