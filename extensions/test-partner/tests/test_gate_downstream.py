@@ -228,3 +228,38 @@ def test_assert_paren_stage_by_lead_label():
     r = dg.check(PAREN_STAGE, None)
     obj = next(iter(r["objects"].values()))
     assert len(obj["stages"]) == len(dg.STAGES) and not obj["extra"]
+
+
+# ── BB-673 同病(2026-08-28 U6 复验):非表格内容被说成"节是空的" ─────────────
+
+NON_TABLE_CONTENT = """## 下游消费面盘点
+
+### 对话模式设置
+- 获得/产生:由模式切换 MCP 写入,判别用例 TC001
+- 使用/消费:设备读取当前模式决定交互方式,判别用例 TC002
+
+### 亮度设置
+1. 获得:亮度调节 MCP 写入(TC003)
+2. 使用:显示层读取生效值(TC004)
+"""
+
+
+def test_non_table_content_is_not_called_empty():
+    """模型用列表/小节写盘点时,拒绝理由必须说"闸读不到、请改写成表格"并给表头形状。
+
+    U6 复验实录:模型连换 5 种非表格排版,每次都被告知"节是空的"——它明明写了
+    半页内容,于是继续换排版而不是改成表格,5 连拒后放弃。误导性文案是循环的根因。
+    """
+    r = dg.check(NON_TABLE_CONTENT, None)
+    assert r["verdict"] == "REJECT"
+    joined = " ".join(r["problems"])
+    assert "节是空的" not in joined
+    assert "闸读不到" in joined and "表格" in joined
+    assert "业务对象" in joined and "生命周期环节" in joined  # 表头形状逐字在场
+
+
+def test_truly_empty_section_message_carries_the_shape():
+    r = dg.check("## 下游消费面盘点\n\n", None)
+    assert r["verdict"] == "REJECT"
+    joined = " ".join(r["problems"])
+    assert "是空的" in joined and "业务对象" in joined and "表头行" in joined

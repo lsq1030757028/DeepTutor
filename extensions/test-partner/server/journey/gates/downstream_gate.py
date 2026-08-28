@@ -96,9 +96,14 @@ def _section(text: str) -> dict[str, Any] | None:
         near = next((l for l in lines
                      if _HEAD_LINE.match(l) and SECTION_NEAR.search(_head_text(l))), None)
         return {"head_shape": str(near).strip()[:40]} if near else None
+    # 节的边界只认**同级或更高级**标题(## 停在下一个 ##,不停在自己的 ###)。
+    # 2026-08-28 U6 复验实录:模型在盘点节里用 ### 按对象分小节,旧实现在第一个
+    # ### 处截断,半页内容被判"节是空的"——与 sot_gate 的 BB-673 第二击同一个坑。
+    level = len(re.match(r"^#+", lines[start]).group(0))
     body = []
     for l in lines[start + 1:]:
-        if _HEAD_LINE.match(l):
+        m = re.match(r"^(#{2,4})\s+\S", l)
+        if m and len(m.group(1)) <= level:
             break
         body.append(l)
     return {"head": lines[start], "body": body}
@@ -260,9 +265,22 @@ def check(text: str, case_ids: set[str] | None = None) -> dict[str, Any]:
                 "盘点为空但有\"本次不产出可被下游消费的业务对象\"的显式声明 —— 准入,"
                 "声明的准确性由评审判")
             return out
-        out["problems"].append(
-            "「下游消费面盘点」节是空的 —— 要么逐个对象列环节,要么显式声明"
-            "\"本次不产出可被下游消费的业务对象\"并说明理由")
+        # 「有内容但不是表格」与「真空」必须分开说(0021 红线六,BB-673 同病):
+        # 本闸只解析 markdown 表格行,模型用列表/小节/段落写的盘点在这里一个字都
+        # 读不到。2026-08-28 U6 复验实录:模型连换 5 种非表格排版,每次都被告知
+        # "节是空的"——对着自己明明写了半页内容的模型,这句话是误导,它只会
+        # 继续换排版而不是改成表格。
+        shapes = ("本闸只认两种形状:1) markdown 表格,表头行形如\n       "
+                  + TABLE_SHAPE + "\n       每行 = 一个业务对象 × 一个生命周期环节;"
+                  "2) 显式声明句「本次不产出可被下游消费的业务对象,因为<理由>」。")
+        if len(re.sub(r"\s", "", body_text)) >= 20:
+            out["problems"].append(
+                "「下游消费面盘点」有内容但闸读不到(不是内容缺失)——"
+                "列表/小节/段落形式的盘点本闸不解析,请改写成表格。" + shapes)
+        else:
+            out["problems"].append(
+                "「下游消费面盘点」节是空的 —— 要么逐个对象列环节,要么显式声明"
+                "\"本次不产出可被下游消费的业务对象\"并说明理由。" + shapes)
         out["verdict"] = "REJECT"
         return out
     for r in rows:
