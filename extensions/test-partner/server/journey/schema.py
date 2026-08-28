@@ -84,7 +84,13 @@ def validate_case(case: Any, index: int) -> list[dict[str, Any]]:
     if extra:
         _err(errors, "S12", label, f"未知字段：{sorted(extra)}")
 
-    _need_str(errors, "S13", f"{label}.case_id", cid, CASE_ID_RE)
+    if not _need_str(errors, "S13", f"{label}.case_id", cid, CASE_ID_RE) \
+            and isinstance(cid, str) and cid.strip():
+        # 报"形态非法"却不给期望形态,模型只能烧轮次盲猜(2026-08-28 U6 复验实录:
+        # 模型自述"没确认过合法 case_id 格式,继续盲猜会像调分析闸那样烧轮子")。
+        errors[-1]["problem"] += (
+            "。期望形态:<小写slug>/R<规则号>-C<三位序号>,"
+            "如 mcp-caps/R1-C001(正则 ^[a-z0-9-]+/R[0-9]+-C[0-9]{3}$)")
     if not isinstance(case.get("case_version"), int) or isinstance(
             case.get("case_version"), bool) or case.get("case_version", 0) < 1:
         _err(errors, "S14", f"{label}.case_version", "必须是 >=1 的整数")

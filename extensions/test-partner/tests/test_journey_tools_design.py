@@ -456,3 +456,15 @@ def test_chat_ask_user_is_an_approved_human_gate(store, local_target):
         confirmed_by="turn-answer",
     )
     assert result["ok"], result
+
+
+def test_case_id_rejection_states_the_expected_shape(store, local_target):
+    """S13 报"形态非法"必须同时给期望形态——只报错不给形状 = 让模型烧轮次盲猜。"""
+    bid = chain_to_analyze(store, local_target)
+    r = draft_cases.draft(bid, cases=[{
+        "case_id": "TC005", "title": "t",
+        "source_anchor": {"rule_id": "R1"},
+        "preconditions": [], "steps": ["s"], "expected": "e"}])
+    assert not r["ok"]
+    s13 = [e for e in r["errors"] if e["code"] == "S13"]
+    assert s13 and "R[0-9]+-C[0-9]{3}" in s13[0]["problem"], s13
