@@ -112,8 +112,48 @@ def _ok(code: str = "OK", **rest: Any) -> dict[str, Any]:
     return {"ok": True, "code": code, **rest}
 
 
-def _err(code: str, message: str, **rest: Any) -> dict[str, Any]:
-    return {"ok": False, "code": code, "message": message, **rest}
+def _err(code: str, message: str, *, machine: str = "", **rest: Any) -> dict[str, Any]:
+    """拒绝信封。**`message` 给人看，`machine` 给模型看。**
+
+    2026-08-29 UAT 实测（V5）：6 条拒绝原样出现在用户对话区，其中包含
+    `<urlopen error [WinError 10054] 远程主机强迫关闭了一个现有的连接。>` 这种
+    Python 异常串，以及「请按提示修正后，用同一 batch_id 重新提交 journey_clarify」
+    这种**写给模型的整改指令**。用户既看不懂，也不该看到——他没有 batch_id，
+    也不会去调 journey_clarify。
+
+    BB-685（0828）把 message 从行话短语改成了完整句子，方向对但没走完：完整的
+    中文句子仍然可以是**说给模型听的**。这一层把两个读者拆开：
+
+    * `message`：一句人话状态——出了什么事 + 我正在怎么办。会被聊天层渲染。
+    * `machine`：怎么修、调哪个工具、参数长什么样。模型读，不许念给用户。
+
+    `machine` 为空时不进信封：没有机器指令的拒绝（如权限类）不该多一个空字段。
+    """
+    out: dict[str, Any] = {"ok": False, "code": code, "message": message, **rest}
+    if str(machine or "").strip():
+        out["machine"] = machine
+    return out
+
+
+#: 探活失败原因 → 人话归因。原始串（含 Python 异常）留在 `machine` 与 `detail`。
+#:
+#: 三种原因三条不同的下一步（AC3 的本意），但 AC3 被实现成了「把原始 reason 拼进
+#: message」——于是用户读到的是 WinError。归因分类由这里做，原文留给模型。
+_PROBE_REASON_HUMAN = (
+    ("重定向", "这个地址会跳转到另一个站点"),
+    ("http(s)", "这个地址不是合法的 http/https 地址"),
+    ("格式非法", "这个地址格式不对"),
+    ("用户名或密码", "这个地址里嵌了账号密码，不能用"),
+    ("query", "这个地址带了查询参数，不能用"),
+)
+
+
+def _humanize_probe_reason(reason: str) -> str:
+    text = str(reason or "")
+    for needle, human in _PROBE_REASON_HUMAN:
+        if needle in text:
+            return human
+    return "这个地址连不上（网络不通，或者服务没起来）"
 
 
 def _requires_trusted_owner(fn):
@@ -177,6 +217,30 @@ def _guarded(batch_id: str, tool: str, caller_surface: str,
         return _err(check["code"], check["message"])
     _log_call(batch_id, tool, caller_surface, root)
     return None
+
+
+def _environment_pending(batch_id: str, root: str | None) -> dict[str, Any] | None:
+    """执行前的环境闸。**这是探活闸下移之后的落点**（2026-08-29 闸位重定标）。
+
+    接入阶段允许 `environment_status="pending"`：澄清、分析、用例草稿都是对着需求
+    正文做的，不需要环境。真要打被测系统那一刻才必须有真地址——闸放在这里，
+    「环境还没好」就有一条诚实的路可走，模型不必编一个地址去骗过接入闸。
+    """
+    try:
+        profile = artifacts.load_artifact(batch_id, "intake_profile", root=root)
+    except artifacts.ArtifactError:
+        return None
+    if str(profile.get("environment_status") or "") != "pending":
+        return None
+    return _err(
+        "E_ENVIRONMENT_PENDING",
+        "这个批次的测试环境地址还没定，所以不能真跑。用例都在，补上地址就能执行。",
+        machine="intake_profile.environment_status=pending。补真实地址的办法："
+                "用真实 base_url 重开一个批次（带 supersedes 指向本批次），"
+                "已确认的澄清项可以复用。在那之前不要调 journey_execute，"
+                "也不要编一个占位地址。",
+        detail={"environment_status": "pending",
+                "environment_note": _ingest.ENVIRONMENT_PENDING_NOTE})
 
 
 def _batch_partition(batch_id: str, root: str | None) -> str:
@@ -256,7 +320,7 @@ def _recover_completed_execute(batch_id: str, intent: dict[str, Any], *,
 
 @_requires_trusted_owner
 def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
-           source_ref: str = "",
+           source_ref: str = "", environment_status: str = "",
            workspace_id: str = "", story_id: str = "",
            requirement_text: str = "", environment_ref: str = "",
            tier: str = "", tier_confirmed_via: str = "", owner: str = "",
@@ -283,6 +347,7 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
         "workspace_id": workspace_id, "story_id": story_id,
         "requirement_text": requirement_text, "source_kind": source_kind,
         "source_ref": source_ref, "environment_ref": environment_ref,
+        "environment_status": environment_status,
         "tier": tier, "tier_confirmed_via": tier_confirmed_via,
         "requirement_entity": requirement_entity,
         "requirement_entity_confirmed_via": requirement_entity_confirmed_via,
@@ -327,7 +392,9 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
                 "E_USER_DECISION_INVALID",
                 "冻结需求实体卡时不得提前填写实体或复用旧的上下文。",
             )
-        validated_target = _ingest.redlines.safe_target_url(base_url)
+        pending_env = str(environment_status or "").strip().lower() == "pending"
+        validated_target = ({"ok": True, "url": ""} if pending_env
+                            else _ingest.redlines.safe_target_url(base_url))
         if not validated_target["ok"]:
             return _err("E_INGEST_REJECTED", validated_target["error"])
         if tier not in _ingest.TIERS:
@@ -340,15 +407,19 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
                     "E_INGEST_REJECTED",
                     f"{label} 疑似包含凭据，未生成用户确认卡。",
                 )
-        probe = _ingest.probe_target(validated_target["url"])
-        if not probe.get("reachable"):
+        probe = ({"reachable": False, "skipped": True}
+                 if pending_env else _ingest.probe_target(validated_target["url"]))
+        if not probe.get("reachable") and not pending_env:
             # 失败原因必须带出去（AC3）。「接入终点不可达」这五个字对用户没有
             # 任何行动价值：域名解析不了、被重定向到别的站、协议不对——
             # 三种原因三条不同的下一步，糊成一句等于让用户自己猜。
             reason = str(probe.get("error") or "").strip() or "未知原因"
             return _err("E_INGEST_REJECTED",
-                        f"接入终点不可达，未生成用户确认卡。地址={validated_target['url']}；"
-                        f"探活失败原因：{reason}",
+                        f"{_humanize_probe_reason(reason)}："
+                        f"{validated_target['url']}，所以还没开始接入。",
+                        machine=f"探活失败原文：{reason}。要么换一个真实可达的地址，"
+                                "要么传 environment_status=\"pending\" 且不传 base_url，"
+                                "先出用例（推荐，用户不必现在去配环境）。",
                         detail={"base_url": validated_target["url"],
                                 "probe_error": reason})
         try:
@@ -403,7 +474,8 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
                                 f"tapd:{workspace_id}/{story_id}"
                                 if story_id else ""),
                             requirement_text=text,
-                            environment_ref=environment_ref, tier=tier,
+                            environment_ref=environment_ref,
+                            environment_status=environment_status, tier=tier,
                             tier_confirmed_via=tier_confirmed_via,
                             requirement_entity=requirement_entity,
                             requirement_entity_confirmed_via=(
@@ -425,8 +497,17 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
             return _ok("NEEDS_GATE", needs_gate="stage_tier", probe=result["probe"],
                        card=result["card"], proposed_tier=result["proposed_tier"],
                        score=result["score"], reasons=result["reasons"])
-        return _err(str(result.get("code") or "E_INGEST_REJECTED"),
-                    str(result.get("error") or "接入被拒"),
+        raw = str(result.get("error") or "接入被拒")
+        if "接入终点不可达" in raw:
+            reason = str((result.get("probe") or {}).get("error") or "").strip()
+            return _err(
+                "E_INGEST_REJECTED",
+                f"{_humanize_probe_reason(reason)}，所以还没开始接入。",
+                machine=f"探活失败原文：{reason or '未知原因'}。要么换一个真实可达的"
+                        "地址，要么传 environment_status=\"pending\" 且不传 base_url，"
+                        "先出用例（推荐，用户不必现在去配环境）。",
+                detail=result)
+        return _err(str(result.get("code") or "E_INGEST_REJECTED"), raw,
                     detail=result)
 
     bid = result["batch_id"]
@@ -463,9 +544,13 @@ def clarify(*, batch_id: str, rules: list[dict[str, Any]],
     # 完整句子，不是给模型看的行话。错误码保留作溯源。
     return _ok(business_frame=r["business_frame"]) if r.get("ok") else \
         _err("E_CLARIFY_REJECTED",
-             "澄清产物没有通过服务端校验：detail 里逐条列出了缺哪一节、哪一栏不达标"
-             "以及可照抄的形状。请按提示修改后，用同一 batch_id 重新提交 "
-             "journey_clarify，已确认的内容不会丢失。", detail=r)
+             "澄清材料还有几处没达标，我按提示改一版再提交，你不用操作。",
+             machine="detail 逐条列出缺哪一节、哪一栏不达标以及可照抄的形状；"
+                     "confirmed_facts_md 的合法骨架见 journey_clarify 工具描述里的"
+                     "可照抄示例。修正后用同一 batch_id 重新调用 journey_clarify，"
+                     "已确认的内容不会丢失。",
+             detail=r, fix_example=_clarify.CONFIRMED_FACTS_EXAMPLE,
+             clarification_example=_clarify.CLARIFICATION_EXAMPLE)
 
 
 @_requires_trusted_owner
@@ -479,9 +564,13 @@ def analyze(*, batch_id: str, example_map: list[dict[str, Any]],
     r = _analyze.analyze(batch_id, example_map=example_map, analysis_md=analysis_md)
     return _ok(test_analysis=r["test_analysis"]) if r.get("ok") else \
         _err("E_ANALYZE_REJECTED",
-             "分析产物没有通过服务端校验：detail.problems 逐条说明了问题所在"
-             "（引用了未知规则、规则缺 Example，或 analysis_md 缺「下游消费面盘点」节）。"
-             "请按提示修正后，用同一 batch_id 重新提交 journey_analyze。", detail=r)
+             "分析材料还有几处没达标，我按提示改一版再提交，你不用操作。",
+             machine="detail.problems 逐条说明问题（引用了未知规则、规则缺 Example，"
+                     "或 analysis_md 缺「下游消费面盘点」节）；analysis_md 的合法骨架"
+                     "见 journey_analyze 工具描述里的可照抄示例。修正后用同一 batch_id "
+                     "重新调用 journey_analyze。",
+             detail=r, fix_example=_analyze.ANALYSIS_MD_EXAMPLE,
+             example_map_example=_analyze.EXAMPLE_MAP_EXAMPLE)
 
 
 @_requires_trusted_owner
@@ -501,10 +590,11 @@ def draft_cases(*, batch_id: str, cases: list[dict[str, Any]],
         # 模型照抄形状即可，不必再逐字段试错。
         return _err(
             "E_DRAFT_REJECTED",
-            f"用例草稿没有通过服务端校验，共 {n} 处问题：detail.errors 逐条给了"
-            "位置（where）和原因（problem）；fix_example 是一条可直接照抄的最小"
-            "合法用例形状，uncovered_example 是不覆盖声明的合法形状。请按提示修正后，"
-            "用同一 batch_id 重新提交 journey_draft_cases，不需要从头开始。",
+            f"用例草稿有 {n} 处不达标，我按提示改一版再提交，你不用操作。",
+            machine="detail.errors 逐条给了位置（where）与原因（problem）；"
+                    "fix_example 是可直接照抄的最小合法用例，uncovered_example 是"
+                    "不覆盖声明的合法形状。修正后用同一 batch_id 重新调用 "
+                    "journey_draft_cases，不需要从头开始。",
             detail=r,
             fix_example=_draft.MINIMAL_CASE_EXAMPLE,
             uncovered_example=_draft.UNCOVERED_EXAMPLE)
@@ -672,9 +762,10 @@ def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "
                          confirmed_by=confirmed_by)
         if not r.get("ok"):
             return _err("E_ADOPT_REJECTED",
-                        "采纳没有通过 cases_gate 校验：detail 里说明了哪些用例"
-                        "不达标。请先用 journey_draft_cases 修正用例草稿，"
-                        "再重新发起采纳。", detail=r)
+                        "有用例没达到采纳标准，我先把它们修好再重新发起采纳。",
+                        machine="detail 说明哪些用例不达标；先用 journey_draft_cases "
+                                "修正用例草稿，再重新发起采纳。",
+                        detail=r)
         # The bundle is a pure derivative of the approved caseset.  Keeping an
         # older bundle after re-adoption would let execute run the previous
         # cases while the UI shows the new frozen set.
@@ -915,8 +1006,10 @@ def compile_bundle(*, batch_id: str, idempotency_key: str = "",
         r = _compile.compile_bundle(batch_id)
         if not r.get("ok"):
             return _err("E_COMPILE_REJECTED",
-                        "编译没有通过 compile-gate：detail 里说明了哪些用例无法"
-                        "编译成可执行配方。请修正对应用例后重新编译。", detail=r)
+                        "有用例还不能转成可自动执行的形式，我先修正它们再编一次。",
+                        machine="detail 说明哪些用例无法编译成可执行配方；"
+                                "修正对应用例后重新调用 journey_compile。",
+                        detail=r)
         out = _ok(bundle=r, idempotency_key=key)
         idempotency.record(batch_id, key, "compile", out, params=params,
                            owner=owner, root=root)
@@ -948,6 +1041,9 @@ def execute(*, batch_id: str, variables: dict[str, Any] | None = None,
     blocked = _guarded(batch_id, "execute", caller_surface, root)
     if blocked:
         return blocked
+    pending = _environment_pending(batch_id, root)
+    if pending:
+        return pending
     owner = _batch_partition(batch_id, root)
     write_decision = _execute.write_authorization(
         batch_id, owner=owner, root=root
@@ -1065,8 +1161,9 @@ def coverage(*, batch_id: str, run_id: str = "", caller_surface: str = "unknown"
     r = _coverage.build_coverage(batch_id, run_id)
     if not r.get("ok"):
         return _err("E_COVERAGE_NOT_DONE",
-                    "覆盖收口未完成：仍有规则的覆盖缺口没有解释。detail 里列出了"
-                    "缺口清单，请逐条补充判别用例或带「谁覆盖+后果」的不覆盖声明。",
+                    "还有几条规则没说清是怎么覆盖的，我补齐之后再收口。",
+                    machine="detail 列出缺口清单；逐条补判别用例，或补一条带"
+                            "「谁覆盖+不覆盖的后果」的不覆盖声明。",
                     detail=r)
     return _ok(**{k: v for k, v in r.items() if k != "ok"})
 

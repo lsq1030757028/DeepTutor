@@ -21,6 +21,25 @@ from server.journey.digest import text_digest
 
 TIERS = ("checklist", "standard", "deep")
 
+#: 环境状态。`ready` = 有真实可达地址（默认）；`pending` = **环境还没好，用户明说了
+#: 先出用例**。
+#:
+#: 为什么要有 pending（2026-08-29 UAT 实测，V5）：探活闸原本是接入的硬前置，
+#: 于是"环境没好"这件本该如实说出口的事，在闸面前只剩两条路——停摆，或**编一个
+#: 地址骗过闸**。模型选了后者：先编 `https://tbd-pending-environment.invalid`
+#: 被自己的闸拦下，再换一个"能连通的占位主机"绕过去。
+#: **闸把诚实变成了死路，模型就只能不诚实**，这不是模型的毛病，是闸的位置错了。
+#:
+#: 按 2026-08-29「闸位重定标」决策（防编造闸从拦入口移到拦断言与写入出口）：
+#: 出用例根本不需要环境——澄清、分析、用例草稿全是对着需求正文做的。所以探活闸
+#: 下移到**真要执行**那一刻（`tools.execute`），接入阶段允许显式挂起。
+#: 显式挂起与"忘了填"必须可分：pending 是用户拍板的状态，会写进 intake_profile
+#: 并在产物上留标注，不是默认值。
+ENVIRONMENT_STATUSES = ("ready", "pending")
+
+#: 挂起批次在产物上的标注。执行闸按这条拒绝，用户在工作台也看得见。
+ENVIRONMENT_PENDING_NOTE = "环境待定，执行前必须补真实地址"
+
 #: 风险×复杂度机械启发式的词表（可解释，不是判官）
 _WRITE_HINTS = re.compile(r"(新增|创建|删除|修改|编辑|下单|支付|退款|提交|审批|导入|上传)")
 _ROLE_HINTS = re.compile(r"(角色|权限|管理员|销售员|操作员|普通用户)")
@@ -135,14 +154,42 @@ def ingest(title: str, base_url: str, *, source_kind: str, source_ref: str,
            requirement_entity_confirmed_via: str = "",
            requirement_entity_decision: dict[str, Any] | None = None,
            before_create: Callable[[], dict[str, Any] | None] | None = None,
-           supersedes: str = "", owner: str = "") -> dict[str, Any]:
+           supersedes: str = "", owner: str = "",
+           environment_status: str = "") -> dict[str, Any]:
     """建批次 + 落 intake_profile。tier 未给时只回确认卡数据（不落产物——
-    档位是 intake_profile 的必备字段，人闸没走完就没有这个产物）。"""
-    validated = redlines.safe_target_url(base_url)
-    if not validated["ok"]:
-        return {"ok": False, "error": validated["error"]}
-    safe_base_url = validated["url"]
-    probe = probe_target(safe_base_url)
+    档位是 intake_profile 的必备字段，人闸没走完就没有这个产物）。
+
+    `environment_status="pending"` 走诚实挂起：不探活、不要地址，批次照建，
+    产物标 `ENVIRONMENT_PENDING_NOTE`，执行闸在 `tools.execute` 拦。
+    """
+    environment_status = str(environment_status or "").strip().lower()
+    if environment_status and environment_status not in ENVIRONMENT_STATUSES:
+        return {"ok": False,
+                "error": f"environment_status 只能是 {ENVIRONMENT_STATUSES} 之一，"
+                         f"实为 {environment_status!r}"}
+    pending_env = environment_status == "pending"
+    if pending_env:
+        # 挂起就不许再带地址：带了说明它不是真的挂起，而是**编了一个占位地址**
+        # 想两头讨好——那正是本条要根治的行为。
+        if str(base_url or "").strip():
+            return {"ok": False,
+                    "error": "环境待定时不要传 base_url。占位地址、.invalid 域名、"
+                             "随手找的可连通主机都不行——挂起就如实挂起，"
+                             "真地址拿到之后再开批次或补录。"}
+        safe_base_url = ""
+        probe = {"reachable": False, "skipped": True,
+                 "error": ENVIRONMENT_PENDING_NOTE}
+    else:
+        if not str(base_url or "").strip():
+            return {"ok": False,
+                    "error": "没有被测环境地址。环境还没好就传 "
+                             "environment_status=\"pending\" 先出用例（推荐），"
+                             "不要编一个占位地址。"}
+        validated = redlines.safe_target_url(base_url)
+        if not validated["ok"]:
+            return {"ok": False, "error": validated["error"]}
+        safe_base_url = validated["url"]
+        probe = probe_target(safe_base_url)
     proposal = propose_tier(requirement_text)
     if not tier:
         return {"ok": False, "need": "tier_confirmation",
@@ -171,7 +218,7 @@ def ingest(title: str, base_url: str, *, source_kind: str, source_ref: str,
             return {"ok": False, "code": "E_NO_BATCH",
                     "error": f"要替代的批次不存在：{supersedes}。"
                              "替代关系必须指向真实批次，否则账本里会出现悬空指针。"}
-    if not probe.get("reachable"):
+    if not probe.get("reachable") and not pending_env:
         # 溯源/能力锁：终点不可达 = 不建批次（fail-closed，不能对空气接单）
         #
         # 原因必须进 error 本身，不能只留在 probe 里（AC3）：调用方拿到的是这个
@@ -211,6 +258,8 @@ def ingest(title: str, base_url: str, *, source_kind: str, source_ref: str,
     profile = artifacts.save_artifact(bid, "intake_profile", {
         "base_url": safe_base_url,
         "environment_ref": environment_ref,
+        "environment_status": "pending" if pending_env else "ready",
+        "environment_note": ENVIRONMENT_PENDING_NOTE if pending_env else "",
         "source": {"kind": source_kind, "ref": source_ref,
                    "content_digest": (text_digest(requirement_text)
                                       if requirement_text else "")},

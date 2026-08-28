@@ -20,6 +20,35 @@ from server.journey.gates import sot_gate
 #: `skipped=true` 区分「用户看过并跳过」与「用户没答」——两者在账本上必须可分）。
 CLARIFICATION_STATUSES = ("answered", "assumed")
 
+#: `confirmed_facts_md` 的**可照抄最小合法骨架**（BB-688 同族，2026-08-29）。
+#:
+#: 2026-08-29 UAT 实测（V5）：clarify 连被拒 3 次。契约不在模型窗口里——工具描述
+#: 只说了 rules 的形状，而真正卡住的是 `confirmed_facts_md` 要过 sot_gate：
+#: 两个具名小节 + 非 DONE 的栏必须在降级声明里交出「谁来补」与「真后果」。
+#: 模型看不见这个要求，只能被拒之后逐条学，一次 24 分钟。
+#:
+#: 与 draft 的 MINIMAL_CASE_EXAMPLE 同一形态：**示例自身走真实闸验证合法**
+#: （`tests/test_journey_tools_design.py`）。教错格式的示例比没有示例更糟。
+CONFIRMED_FACTS_EXAMPLE = """# SOT
+## 被测构建
+实例指纹=<GET / 的状态码与标题> · 一致?是 · 指纹在 intake_profile.target_probe
+## doc×code 对齐
+未执行。黑盒线不读被测源码。
+## 零access降级声明
+| 缺栏 | 谁来补 | 补不到的后果 |
+| doc×code 对齐 | 黑盒线不补;转白盒时由开发侧负责 | 补不到 → 代码做了文档没说的分支查不出来,漏需求风险留在黑盒线之外 |
+"""
+
+#: `clarifications` 每条的可照抄形状。status=assumed 时 answer 必须等于 recommended。
+CLARIFICATION_EXAMPLE = {
+    "question_id": "Q1",
+    "question": "边界值含不含 0？",
+    "recommended": "含 0",
+    "status": "assumed",
+    "answer": "含 0",
+    "skipped": False,
+}
+
 
 def _check_clarifications(
     items: list[dict[str, Any]],

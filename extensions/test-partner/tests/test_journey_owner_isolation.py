@@ -52,6 +52,7 @@ def _ingest_args(title: str) -> dict:
         "source_kind": "doc",
         "source_ref": "local",
         "environment_ref": "",
+        "environment_status": "",
         "tier": "standard",
         "tier_confirmed_via": "test",
         "requirement_entity": "",

@@ -16,6 +16,37 @@ from typing import Any
 from server.journey import artifacts
 from server.journey.gates import downstream_gate
 
+#: `analysis_md` 的**可照抄最小合法骨架**（BB-688 同族，2026-08-29）。
+#:
+#: 2026-08-29 UAT 实测（V5）：analyze 连被拒 5 次，单轮 24 分钟。0828 已经把契约
+#: 写进工具描述了，但**描述里只有散文式的规则、没有一份能照抄的东西**——盘点表
+#: 要六档齐、每行要么给判别用例要么给「谁覆盖+后果」，这两条在散文里各是一句话，
+#: 在骨架里是六行可复制的表格。draft 那条修好之后没再反复被拒，形态照它抄。
+#:
+#: 示例自身过真实 downstream_gate（`tests/test_journey_tools_design.py` 钉住）。
+ANALYSIS_MD_EXAMPLE = """# test_analysis
+## Example Map
+| R点 | Charter |
+|---|---|
+| R1 | <这条规则要验什么> |
+## 下游消费面盘点
+| 业务对象 | 生命周期环节 | 判别用例 | 不覆盖声明(谁覆盖·后果) |
+|---|---|---|---|
+| <业务对象> | 获得 | d1 | — |
+| 同上 | 使用 | d2 | — |
+| 同上 | 同类共存 | — | 不覆盖:由并发专项负责 · 后果=并发下的错序本轮查不出,风险留档 |
+| 同上 | 计量结算 | — | 不覆盖:无计费面,由需求方确认 · 后果=如有隐藏计费则漏测,风险已上浮 |
+| 同上 | 撤销退回 | — | 不覆盖:无撤销面,由需求方确认 · 后果=如有撤销逻辑则漏测,风险已上浮 |
+| 同上 | 记账对账 | — | 不覆盖:无台账面,由需求方确认 · 后果=如有台账则漏测,风险已上浮 |
+"""
+
+#: `example_map` 一条的可照抄形状。rule_id 必须来自 business_frame。
+EXAMPLE_MAP_EXAMPLE = [{
+    "rule_id": "R1",
+    "charter": "<这条规则要探的方向>",
+    "examples": [{"id": "E1", "desc": "<一个具体判别场景>", "kind": "happy"}],
+}]
+
 
 def analyze(batch_id: str, *, example_map: list[dict[str, Any]],
             analysis_md: str) -> dict[str, Any]:

@@ -31,6 +31,7 @@ def _args(entity: str = "custom_character") -> dict:
         "source_kind": "doc",
         "source_ref": "local",
         "environment_ref": "",
+        "environment_status": "",
         "tier": "standard",
         "tier_confirmed_via": "chat_ask_user",
         "requirement_entity": entity,

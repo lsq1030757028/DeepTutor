@@ -222,6 +222,56 @@ _ANSWER_ANCHORS = {
     ),
 }
 
+#: 第二轮 UAT（2026-08-29 VERIFY-REPORT）新增的四组锚。
+#:
+#: 每组对着一条**实测发生过**的行为，不是对着一条设计意图：
+#: 栏位不稳（V1 只有三列 / V2·V3 四列）、中文提问英文作答、行话翻成英文照样泄漏、
+#: 原始错误码与写给模型的指令直出界面。
+_UAT2_ANCHORS = {
+    "zh": (
+        # 清单四列钉死（V1 缺"处理人"列）
+        "标题 / 状态 / 处理人 / 链接 四列缺一不可",
+        "不是把整列删掉",
+        # 回复语言跟随用户（中文提问英文作答）
+        "用用户最后一条消息的语言作答",
+        # 中英双语禁词表（英文行话是等价泄漏）
+        "禁词表（两种语言各一份）",
+        "baseline-confirmed",
+        "status taxonomy",
+        "字段基线",
+        # 原始错误码禁直出
+        "原始错误串禁止出现在回复正文",
+        "`machine` 字段是**写给你的操作指令**",
+    ),
+    "en": (
+        "title / status / assignee / link are all four",
+        "a missing column reads as",
+        "Answer in the language of the user's last message",
+        "Banned vocabulary, in both languages",
+        "baseline-confirmed",
+        "status taxonomy",
+        "字段基线",
+        "Raw error strings never appear in a reply",
+        "`machine` field is **an instruction to you**",
+    ),
+}
+
+#: 环境挂起那条诚实出口的锚（V5：闸把诚实变成死路，模型编了个假地址）。
+_ENV_PENDING_ANCHORS = {
+    "zh": (
+        "出用例**不需要环境**",
+        "环境还没好，先出用例（推荐）",
+        'environment_status="pending"',
+        "绝不编造地址",
+    ),
+    "en": (
+        "does not need an environment",
+        "draft the cases first",
+        'environment_status="pending"',
+        "Never invent an address",
+    ),
+}
+
 
 @pytest.mark.parametrize("language", ["zh", "en"])
 def test_the_answer_discipline_reaches_the_rendered_system_prompt(language: str) -> None:
@@ -246,4 +296,45 @@ def test_plain_chat_does_not_carry_the_answer_discipline(language: str) -> None:
     context = UnifiedContext(session_id="s-answer", user_message="hi")
     rendered = AgenticChatPipeline(language=language)._build_system_prompt([], context)
     for anchor in _ANSWER_ANCHORS[language]:
+        assert anchor not in rendered
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_second_uat_round_fixes_reach_the_rendered_system_prompt(language: str) -> None:
+    """V1 FAIL 与 V5 PARTIAL 的四条提示词半边，断渲染产物。
+
+    锚全部取**行为禁令**而不是段落标题：文案怎么润色它们都在，
+    真被删掉说明对应缺陷可以原样复发。
+    """
+    from deeptutor.agents.test.pipeline import TestJourneyPipeline
+
+    context = UnifiedContext(session_id="s-uat2", user_message="帮我拉一下TAPD的需求")
+    rendered = TestJourneyPipeline(language=language)._build_system_prompt([], context)
+    for anchor in _UAT2_ANCHORS[language]:
+        assert anchor in rendered, f"{language} 缺锚：{anchor}"
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_the_environment_pending_road_is_prompted(language: str) -> None:
+    """环境未就绪时有一条诚实的路，且编地址被明令禁止。
+
+    这一条与 gateway 侧的 `environment_status="pending"` 是同一道闸的两半：
+    服务端开了路，提示词不说，模型仍然只会在"停摆"和"编地址"之间二选一。
+    """
+    from deeptutor.agents.test.pipeline import TestJourneyPipeline
+
+    context = UnifiedContext(session_id="s-env", user_message="我要正式测这个需求")
+    rendered = TestJourneyPipeline(language=language)._build_system_prompt([], context)
+    for anchor in _ENV_PENDING_ANCHORS[language]:
+        assert anchor in rendered, f"{language} 缺环境挂起锚：{anchor}"
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_plain_chat_carries_none_of_the_second_round_rules(language: str) -> None:
+    """作用域边界照旧：这些纪律只作用到「测试」模式。"""
+    from deeptutor.agents.chat.agentic_pipeline import AgenticChatPipeline
+
+    context = UnifiedContext(session_id="s-uat2", user_message="hi")
+    rendered = AgenticChatPipeline(language=language)._build_system_prompt([], context)
+    for anchor in _UAT2_ANCHORS[language] + _ENV_PENDING_ANCHORS[language]:
         assert anchor not in rendered

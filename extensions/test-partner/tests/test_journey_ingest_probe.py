@@ -144,7 +144,13 @@ def test_probe_failure_tells_the_user_why_and_which_address(tmp_path, monkeypatc
     assert not out["ok"]
     assert out["code"] == "E_INGEST_REJECTED"
     assert "127.0.0.1:9" in out["message"], f"没说清是哪个地址：{out['message']}"
-    assert "重定向落点越出等价类" in out["message"], f"没说清失败原因：{out['message']}"
+    # 2026-08-29 判据有意翻面：AC3 要保的是「三种原因三条不同的下一步」，
+    # 原实现把它落成「把 probe 的原始串拼进 message」，于是用户在界面上读到
+    # `<urlopen error [WinError 10054] …>`（V5 实测 6 条）。归因分类留在 message，
+    # 原始串搬去 machine——**可区分性没丢，泄漏没了**。
+    assert "跳转" in out["message"], f"没说清失败原因：{out['message']}"
+    assert "重定向落点越出等价类" not in out["message"], "原始探活串不该进用户可见文案"
+    assert "重定向落点越出等价类" in out["machine"], "原始归因必须留给模型"
     assert out["detail"]["probe_error"]
 
 

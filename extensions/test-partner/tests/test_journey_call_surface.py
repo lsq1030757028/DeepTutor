@@ -696,13 +696,36 @@ def test_analyze_tool_description_carries_shape_contract():
         assert token in doc, f"analyze 工具描述缺契约要点：{token}"
 
 
-# ── BB-685：拒绝 message 是给用户看的完整句子,不是行话短语 ──────────────────
+# ── BB-685 → 2026-08-29 判据有意翻面：message 给人,machine 给模型 ──────────
+#
+# 0828 的判据要求 message 里出现「重新」——那时的目标是「拒绝要给出下一步动作」。
+# 0829 UAT 实测暴露了它的副作用：那个「下一步动作」是**说给模型的**
+# （"用同一 batch_id 重新提交 journey_clarify"），而 message 会被聊天层原样渲染
+# 进用户对话区。用户没有 batch_id，也不会去调 journey_clarify——6 条这样的句子
+# 挂在界面上，是 V5 判 PARTIAL 的直接原因。
+#
+# 所以判据按真实读者拆成两半，**不是放宽**：
+#   · message：完整人话句、说清出了什么事 + 我在怎么办，且**不许**带工具名、
+#     batch_id、错误码这类只有模型用得上的东西；
+#   · machine：整改指令必须在场（原来 message 里那半，搬家而不是删掉）。
+
+
+#: 只有模型用得上的词。出现在 message 里就是泄漏给用户。
+_MACHINE_ONLY_TOKENS = ("batch_id", "journey_", "E_", "detail.", "fix_example",
+                        "urlopen", "WinError", "Traceback")
 
 
 def _assert_plain_sentence(msg: str) -> None:
     assert msg.endswith("。"), f"message 不是完整句子：{msg!r}"
-    assert len(msg) >= 30, f"message 过短,信息量不足：{msg!r}"
-    assert "重新" in msg, f"message 没给下一步动作：{msg!r}"
+    assert len(msg) >= 20, f"message 过短,信息量不足：{msg!r}"
+    for token in _MACHINE_ONLY_TOKENS:
+        assert token not in msg, f"message 里混进了只给模型看的 {token!r}：{msg!r}"
+
+
+def _assert_machine_instruction(payload: dict) -> None:
+    machine = str(payload.get("machine") or "")
+    assert machine.strip(), f"拒绝信封缺 machine（整改指令没地方放）：{payload!r}"
+    assert "重新" in machine, f"machine 没给下一步动作：{machine!r}"
 
 
 def test_draft_rejection_carries_example_and_plain_sentence(store, monkeypatch):
@@ -714,6 +737,7 @@ def test_draft_rejection_carries_example_and_plain_sentence(store, monkeypatch):
     r = tools.draft_cases(batch_id="b-x", owner=TRUSTED_OWNER, cases=[])
     assert r["ok"] is False and r["code"] == "E_DRAFT_REJECTED"
     _assert_plain_sentence(r["message"])
+    _assert_machine_instruction(r)
     assert "1 处" in r["message"]
     assert r["fix_example"] == draft_mod.MINIMAL_CASE_EXAMPLE
     assert r["uncovered_example"] == draft_mod.UNCOVERED_EXAMPLE
@@ -729,6 +753,10 @@ def test_clarify_rejection_message_is_plain_sentence(store, monkeypatch):
     assert r["ok"] is False and r["code"] == "E_CLARIFY_REJECTED"
     assert r["message"] != "澄清产物没过牙"
     _assert_plain_sentence(r["message"])
+    _assert_machine_instruction(r)
+    # 契约进窗口那一半（BB-688 同族）：拒绝随手带上可照抄的合法骨架。
+    assert r["fix_example"] == clarify_mod.CONFIRMED_FACTS_EXAMPLE
+    assert r["clarification_example"] == clarify_mod.CLARIFICATION_EXAMPLE
 
 
 def test_analyze_rejection_message_is_plain_sentence(store, monkeypatch):
@@ -741,3 +769,6 @@ def test_analyze_rejection_message_is_plain_sentence(store, monkeypatch):
     assert r["ok"] is False and r["code"] == "E_ANALYZE_REJECTED"
     assert r["message"] != "分析产物没过牙"
     _assert_plain_sentence(r["message"])
+    _assert_machine_instruction(r)
+    assert r["fix_example"] == analyze_mod.ANALYSIS_MD_EXAMPLE
+    assert r["example_map_example"] == analyze_mod.EXAMPLE_MAP_EXAMPLE

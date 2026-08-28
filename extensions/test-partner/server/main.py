@@ -295,7 +295,8 @@ def _journey_bridge(tool: str, bridge_context: Any,
 
 
 @mcp.tool()
-def journey_ingest(title: str, base_url: str,
+def journey_ingest(title: str, base_url: str = "",
+                   environment_status: str = "",
                    workspace_id: str = "", story_id: str = "",
                    requirement_text: str = "", source_kind: str = "tapd",
                    source_ref: str = "", environment_ref: str = "",
@@ -313,12 +314,20 @@ def journey_ingest(title: str, base_url: str,
     oracle 二选一：给 TAPD 需求号（workspace_id + story_id，服务端直接取原文并冻结
     快照 + digest），或给本地需求正文 requirement_text。两个都不给不建批次。
     tier 不给时只回档位确认卡数据（人闸未走完就没有这个产物）。
+
+    **环境还没好怎么办**：传 `environment_status="pending"` 且**不传 base_url**，
+    批次照建，澄清/分析/用例草稿照走，产物上标「环境待定，执行前必须补真实地址」。
+    这是环境未就绪时的推荐路径——出用例不需要环境。真要执行时 journey_execute
+    会拒（E_ENVIRONMENT_PENDING），那时再补真实地址。
+    **绝不要编一个占位地址**（`.invalid` 域名、随手找的可连通主机都算编）：
+    挂起有正路，编地址会让后面所有产物锚在一个假环境上。
     """
     effective = {
         "title": title, "base_url": base_url, "workspace_id": workspace_id,
         "story_id": story_id, "requirement_text": requirement_text,
         "source_kind": source_kind, "source_ref": source_ref,
-        "environment_ref": environment_ref, "tier": tier,
+        "environment_ref": environment_ref,
+        "environment_status": environment_status, "tier": tier,
         "tier_confirmed_via": tier_confirmed_via,
         "requirement_entity": requirement_entity,
         "requirement_entity_confirmed_via": requirement_entity_confirmed_via,
@@ -332,6 +341,7 @@ def journey_ingest(title: str, base_url: str,
     from server.journey import tools as _jt
     return _jt.ingest(title=title, base_url=base_url, source_kind=source_kind,
                       source_ref=source_ref,
+                      environment_status=environment_status,
                       workspace_id=workspace_id, story_id=story_id,
                       requirement_text=requirement_text,
                       environment_ref=environment_ref, tier=tier,
@@ -356,8 +366,33 @@ def journey_clarify(batch_id: str, rules: Any, confirmed_facts_md: str,
                     bridge_context: str = "") -> dict[str, Any]:
     """澄清：落 business_frame（R 规则 + confirmed_facts，过 sot_gate）。
 
-    rules 每条 {rule_id, statement, source_quote?, probing?}。非探测性规则必须带
-    source_quote（需求原文引句）——需求正文撑不住的预期标 probing=true，不进 PASS 判据。
+    首次提交就按下面的机械契约写，不要等被拒再逐字段学（BB-688 同族）：
+
+    rules 每条 `{"rule_id": "R1", "statement": "…", "source_quote": "…",
+    "probing": false}`。非探测性规则必须带 source_quote（需求原文引句）——
+    需求正文撑不住的预期标 probing=true，不进 PASS 判据。rule_id 同批次内不重复。
+
+    clarifications 每条 `{"question_id": "Q1", "question": "疑点原文",
+    "recommended": "你的推荐答案", "status": "answered"|"assumed",
+    "answer": "…", "skipped": false}`。status=answered 必须带用户真实答案且
+    skipped 必须为 false；status=assumed 的 answer **必须逐字等于 recommended**
+    （assumed 的含义就是「按推荐处理」）。上一版澄清里出现过的 question_id
+    这次必须全部带上（原状态照抄即可），静默丢项会被拒。
+
+    **confirmed_facts_md 是最容易被拒的一项**，它要过 sot_gate：必须有
+    `## 被测构建` 与 `## doc×code 对齐` 两个小节；任何一栏没做完（写了「未执行」
+    「待确认」这类词），就必须在 `## 零access降级声明` 段里为该栏交出
+    **谁来补** + **补不到的后果**，后果要是真后果（≥10 字、说清漏了会怎样），
+    「待补」「N/A」这类占位词一律判不过。可直接照抄的最小合法骨架：
+
+        # SOT
+        ## 被测构建
+        实例指纹=<GET / 的状态码与标题> · 一致?是 · 指纹在 intake_profile.target_probe
+        ## doc×code 对齐
+        未执行。黑盒线不读被测源码。
+        ## 零access降级声明
+        | 缺栏 | 谁来补 | 补不到的后果 |
+        | doc×code 对齐 | 黑盒线不补;转白盒时由开发侧负责 | 补不到 → 代码做了文档没说的分支查不出来,漏需求风险留在黑盒线之外 |
     """
     effective = {"batch_id": batch_id, "rules": rules,
                  "confirmed_facts_md": confirmed_facts_md,
@@ -390,6 +425,23 @@ def journey_analyze(batch_id: str, example_map: Any, analysis_md: str,
     （列名可换同义词）。每个业务对象 × 生命周期六档
     （获得/使用/同类共存/计量结算/撤销退回/记账对账，「同类共存」必答）逐行盘点，
     每行要么给判别用例，要么给带「谁来覆盖+不覆盖的后果」的显式声明。
+
+    可直接照抄的 analysis_md 最小合法骨架（六档齐，后两列各示范一种合法写法）：
+
+        # test_analysis
+        ## Example Map
+        | R点 | Charter |
+        |---|---|
+        | R1 | <这条规则要验什么> |
+        ## 下游消费面盘点
+        | 业务对象 | 生命周期环节 | 判别用例 | 不覆盖声明(谁覆盖·后果) |
+        |---|---|---|---|
+        | <业务对象> | 获得 | d1 | — |
+        | 同上 | 使用 | d2 | — |
+        | 同上 | 同类共存 | — | 不覆盖:由并发专项负责 · 后果=并发下的错序本轮查不出,风险留档 |
+        | 同上 | 计量结算 | — | 不覆盖:无计费面,由需求方确认 · 后果=如有隐藏计费则漏测,风险已上浮 |
+        | 同上 | 撤销退回 | — | 不覆盖:无撤销面,由需求方确认 · 后果=如有撤销逻辑则漏测,风险已上浮 |
+        | 同上 | 记账对账 | — | 不覆盖:无台账面,由需求方确认 · 后果=如有台账则漏测,风险已上浮 |
     """
     effective = {"batch_id": batch_id, "example_map": example_map,
                  "analysis_md": analysis_md}
