@@ -376,7 +376,21 @@ def journey_clarify(batch_id: str, rules: Any, confirmed_facts_md: str,
 def journey_analyze(batch_id: str, example_map: Any, analysis_md: str,
                     owner: str = "", caller_surface: str = "unknown",
                     bridge_context: str = "") -> dict[str, Any]:
-    """分析：落 test_analysis（Example Map + 消费面盘点，过 downstream_gate）。"""
+    """分析：落 test_analysis（Example Map + 消费面盘点，过 downstream_gate）。
+
+    首次提交就按下面的机械契约写，不要等被拒再逐字段学（BB-688）：
+
+    example_map 是数组，每条
+    `{"rule_id": "R1", "charter": "…", "examples": [{"id": "E1", "desc": "…",
+    "kind": "happy"}]}`（kind ∈ happy/boundary/negative/coexist…，组织标签不设闸）。
+    rule_id 必须来自 business_frame 已有规则；不要包一层 {story, rules} 外壳。
+
+    analysis_md 必须含「下游消费面盘点」一节，用表格盘点：表头
+    `| 业务对象 | 生命周期环节 | 判别用例 | 不覆盖声明(谁覆盖·后果) |`
+    （列名可换同义词）。每个业务对象 × 生命周期六档
+    （获得/使用/同类共存/计量结算/撤销退回/记账对账，「同类共存」必答）逐行盘点，
+    每行要么给判别用例，要么给带「谁来覆盖+不覆盖的后果」的显式声明。
+    """
     effective = {"batch_id": batch_id, "example_map": example_map,
                  "analysis_md": analysis_md}
     trusted = _journey_bridge("journey_analyze", bridge_context, effective)
@@ -392,7 +406,45 @@ def journey_analyze(batch_id: str, example_map: Any, analysis_md: str,
 def journey_draft_cases(batch_id: str, cases: Any, uncovered_rules: Any = None,
                         owner: str = "", caller_surface: str = "unknown",
                         bridge_context: str = "") -> dict[str, Any]:
-    """用例草稿：落 case_draft。未覆盖的规则要在 uncovered_rules 里显式声明原因。"""
+    """用例草稿：落 case_draft。未覆盖的规则要在 uncovered_rules 里显式声明原因。
+
+    cases 每条用例的机械契约——首次提交就按这个写，不要等被拒再逐字段学（BB-688）：
+
+    - draft_id: 可选字符串（缺省自动编 d1..dN），采纳时按它选用例；
+      kind / title: 可选组织标签。
+    - source_anchor: 对象 `{"rule_id": "R1", "probing": false}`——rule_id 必须在
+      test_analysis 的 example_map 里；probing 必须与 business_frame 该规则一致，
+      不许把正式规则自行降级成探测规则。不要写成数组或裸字符串。
+    - preconditions: 数组（可为空），每条
+      `{"statement": "…", "checkable": true, "check_hint"?: "…"}`。
+    - steps: 非空字符串数组（业务语义步骤）。
+    - expected / failure_criteria: 均为非空字符串。
+    - assertion_layers: 对象，键只能是 ui/api/db 且 ui、api 至少一层在场；每层
+      `{"assertions": ["非空断言…"], "required_evidence": ["…"]}`。
+      required_evidence 词表（只能取这些）：playwright_trace / screenshot /
+      http_transcript / db_snapshot / console_log；api 层不要 playwright_trace
+      与 screenshot（API 轨产不出这两类证据）。
+    - automation: `{"admissible": bool}`。admissible=true 必须带
+      recipe = `{"track": "ui"|"api", "actions": [{"op": "…", …}]}` 且至少
+      一个 expect_* 断言 op；admissible=false 必须带非空 exclusion_reason。
+      op 词表——ui 轨: goto / fill / click / wait_load / expect_title_contains /
+      expect_url_contains / expect_text / expect_visible / expect_hidden；
+      api 轨: request（参数 path/method/body_json/headers）/ expect_status /
+      expect_json_path；数据层（两轨通用）: db_query / db_snapshot /
+      expect_db_rows / expect_db_value / expect_db_delta。词表外的 op 一律拒。
+    - side_effects: `{"writes": bool}`；writes=true 必须带非空 cleanup 与
+      authorization（可选 write_scope / environment_ref）。
+    - open_items: 对象，键只能是 unknowns / assumptions / manual_touchpoints，
+      值均为字符串数组（可为空数组，但对象本身必须在场）。
+    - **不要提供** case_id / case_version / source_case_digest / oracle_digest
+      ——这四个字段由服务端盖章。
+    - 以上未列出的字段一律拒（未知字段不放行）。
+
+    uncovered_rules 每条 `{"rule_id": "R2", "reason": "…"}`；reason 必须同时
+    说清「谁来覆盖」（如 由人工/开发/下一轮负责）与「不覆盖的后果」
+    （如 漏测则…风险/查不出…）。example_map 里每条规则要么有用例覆盖，
+    要么在这里显式声明。
+    """
     effective = {"batch_id": batch_id, "cases": cases,
                  "uncovered_rules": uncovered_rules}
     trusted = _journey_bridge("journey_draft_cases", bridge_context, effective)

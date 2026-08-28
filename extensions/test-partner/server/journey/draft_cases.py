@@ -42,6 +42,40 @@ _VOCAB = _track_purity.UI_OPS | _track_purity.API_OPS | _track_purity.DATA_OPS
 #: 光靠前缀约定，一个忘了记断言的 `expect_x` 会让「无断言不算过」形同虚设。
 ASSERT_OPS = frozenset(op for op in _VOCAB if op.startswith("expect_"))
 ACTION_OPS = frozenset(_VOCAB)
+#: BB-688：schema 契约必须进模型窗口。拒绝返回里带一条**可直接照抄**的最小合法
+#: 用例——模型不用再靠被拒逐字段学格式（U6 复验实录：draft 被拒 23 轮）。
+#: 这条示例自身必须过 schema.validate_case + recipe 校验
+#: （test_draft_fix_example_is_itself_valid 钉住）——示例教错格式比没有示例更糟。
+MINIMAL_CASE_EXAMPLE: dict[str, Any] = {
+    "draft_id": "d1",
+    "kind": "happy",
+    "title": "示例：接口返回成功（把内容换成你的业务，形状照抄）",
+    "source_anchor": {"rule_id": "R1", "probing": False},
+    "preconditions": [{"statement": "测试环境可访问", "checkable": True}],
+    "steps": ["调用目标接口", "检查返回"],
+    "expected": "接口返回 200 且业务字段正确",
+    "failure_criteria": "非 200 或业务字段缺失",
+    "assertion_layers": {
+        "api": {"assertions": ["响应状态码为 200"],
+                "required_evidence": ["http_transcript"]},
+    },
+    "automation": {"admissible": True, "recipe": {
+        "track": "api",
+        "actions": [
+            {"op": "request", "path": "/api/health", "method": "GET"},
+            {"op": "expect_status", "status": 200},
+        ],
+    }},
+    "side_effects": {"writes": False},
+    "open_items": {"unknowns": [], "assumptions": [], "manual_touchpoints": []},
+}
+
+#: 不覆盖声明的最小合法形状（reason 必须同时含「谁来覆盖」与「不覆盖的后果」）。
+UNCOVERED_EXAMPLE: dict[str, Any] = {
+    "rule_id": "R2",
+    "reason": "设备联调环境未开放，由人工在联调开放后覆盖；不覆盖则该规则缺陷会漏到线上才暴露。",
+}
+
 _UNCOVERED_OWNER = re.compile(r"(由|负责|owner|人工|开发|产品|测试|运维|用户|下一轮|后续|提测方|我)", re.I)
 _UNCOVERED_CONSEQ = re.compile(
     r"(不作数|不担保|不保证|封顶|风险|导致|无法|漏|错|查不出|发现不了|留在|逃逸|无人接|才暴露)", re.I)

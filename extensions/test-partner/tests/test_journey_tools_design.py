@@ -494,3 +494,23 @@ def test_draft_persists_defaulted_draft_ids_so_adoption_can_reference_them(
     with pytest.raises(decision_auth.DecisionAuthError) as exc:
         decision_auth.adopt_selection(saved, ["nope"])
     assert "d1" in str(exc.value)
+
+
+# ── BB-688b：拒绝返回里的可照抄示例必须真的合法 ─────────────────────────────
+
+def test_draft_fix_example_passes_the_real_gate(store, local_target):
+    """拒绝时给的 fix_example 必须能原样过闸——示例教错格式比没有示例更糟。
+
+    走真实链路(chain_to_analyze 的 example_map 恰有 R1)而不是只跑 validate_case:
+    示例若与 E16/E17/E18 任何一族冲突,这里会红。
+    """
+    bid = chain_to_analyze(store, local_target)
+    r = draft_cases.draft(bid, cases=[dict(draft_cases.MINIMAL_CASE_EXAMPLE)])
+    assert r["ok"], r.get("errors")
+
+
+def test_draft_uncovered_example_passes_the_declaration_check():
+    """UNCOVERED_EXAMPLE 的 reason 必须同时过「谁覆盖」与「后果」两个机械判。"""
+    reason = draft_cases.UNCOVERED_EXAMPLE["reason"]
+    assert draft_cases._UNCOVERED_OWNER.search(reason)
+    assert draft_cases._UNCOVERED_CONSEQ.search(reason)
