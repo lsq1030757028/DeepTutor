@@ -459,8 +459,13 @@ def clarify(*, batch_id: str, rules: list[dict[str, Any]],
         return blocked
     r = _clarify.clarify(batch_id, rules=rules, clarifications=clarifications,
                          confirmed_facts_md=confirmed_facts_md)
+    # BB-685：message 会被原样渲染进用户对话区——必须是说清「哪里不对+下一步」的
+    # 完整句子，不是给模型看的行话。错误码保留作溯源。
     return _ok(business_frame=r["business_frame"]) if r.get("ok") else \
-        _err("E_CLARIFY_REJECTED", "澄清产物没过牙", detail=r)
+        _err("E_CLARIFY_REJECTED",
+             "澄清产物没有通过服务端校验：detail 里逐条列出了缺哪一节、哪一栏不达标"
+             "以及可照抄的形状。请按提示修改后，用同一 batch_id 重新提交 "
+             "journey_clarify，已确认的内容不会丢失。", detail=r)
 
 
 @_requires_trusted_owner
@@ -473,7 +478,10 @@ def analyze(*, batch_id: str, example_map: list[dict[str, Any]],
         return blocked
     r = _analyze.analyze(batch_id, example_map=example_map, analysis_md=analysis_md)
     return _ok(test_analysis=r["test_analysis"]) if r.get("ok") else \
-        _err("E_ANALYZE_REJECTED", "分析产物没过牙", detail=r)
+        _err("E_ANALYZE_REJECTED",
+             "分析产物没有通过服务端校验：detail.problems 逐条说明了问题所在"
+             "（引用了未知规则、规则缺 Example，或 analysis_md 缺「下游消费面盘点」节）。"
+             "请按提示修正后，用同一 batch_id 重新提交 journey_analyze。", detail=r)
 
 
 @_requires_trusted_owner
@@ -487,7 +495,19 @@ def draft_cases(*, batch_id: str, cases: list[dict[str, Any]],
         return blocked
     r = _draft.draft(batch_id, cases=cases, uncovered_rules=uncovered_rules)
     if not r.get("ok"):
-        return _err("E_DRAFT_REJECTED", "用例草稿没过校验", detail=r)
+        n = len(r.get("errors") or [])
+        # BB-685（人话 message）+ BB-688b（拒绝返回带可照抄示例）：
+        # fix_example / uncovered_example 与 schema 校验同源、被单测钉住合法，
+        # 模型照抄形状即可，不必再逐字段试错。
+        return _err(
+            "E_DRAFT_REJECTED",
+            f"用例草稿没有通过服务端校验，共 {n} 处问题：detail.errors 逐条给了"
+            "位置（where）和原因（problem）；fix_example 是一条可直接照抄的最小"
+            "合法用例形状，uncovered_example 是不覆盖声明的合法形状。请按提示修正后，"
+            "用同一 batch_id 重新提交 journey_draft_cases，不需要从头开始。",
+            detail=r,
+            fix_example=_draft.MINIMAL_CASE_EXAMPLE,
+            uncovered_example=_draft.UNCOVERED_EXAMPLE)
     return _ok(case_draft=r["case_draft"], coverage=r.get("coverage"),
                warnings=r.get("warnings"))
 
@@ -651,7 +671,10 @@ def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "
                          caseset_slug=caseset_slug, adopted_via=adopted_via,
                          confirmed_by=confirmed_by)
         if not r.get("ok"):
-            return _err("E_ADOPT_REJECTED", "采纳没过 cases_gate", detail=r)
+            return _err("E_ADOPT_REJECTED",
+                        "采纳没有通过 cases_gate 校验：detail 里说明了哪些用例"
+                        "不达标。请先用 journey_draft_cases 修正用例草稿，"
+                        "再重新发起采纳。", detail=r)
         # The bundle is a pure derivative of the approved caseset.  Keeping an
         # older bundle after re-adoption would let execute run the previous
         # cases while the UI shows the new frozen set.
@@ -891,7 +914,9 @@ def compile_bundle(*, batch_id: str, idempotency_key: str = "",
             return replay
         r = _compile.compile_bundle(batch_id)
         if not r.get("ok"):
-            return _err("E_COMPILE_REJECTED", "编译没过 compile-gate", detail=r)
+            return _err("E_COMPILE_REJECTED",
+                        "编译没有通过 compile-gate：detail 里说明了哪些用例无法"
+                        "编译成可执行配方。请修正对应用例后重新编译。", detail=r)
         out = _ok(bundle=r, idempotency_key=key)
         idempotency.record(batch_id, key, "compile", out, params=params,
                            owner=owner, root=root)
@@ -1039,7 +1064,10 @@ def coverage(*, batch_id: str, run_id: str = "", caller_surface: str = "unknown"
         return blocked
     r = _coverage.build_coverage(batch_id, run_id)
     if not r.get("ok"):
-        return _err("E_COVERAGE_NOT_DONE", "覆盖收口没过（有 gap 未解释）", detail=r)
+        return _err("E_COVERAGE_NOT_DONE",
+                    "覆盖收口未完成：仍有规则的覆盖缺口没有解释。detail 里列出了"
+                    "缺口清单，请逐条补充判别用例或带「谁覆盖+后果」的不覆盖声明。",
+                    detail=r)
     return _ok(**{k: v for k, v in r.items() if k != "ok"})
 
 

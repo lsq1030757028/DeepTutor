@@ -666,3 +666,78 @@ def test_explicit_key_with_different_input_is_a_conflict(store):
         assert replay is not None
         assert replay["ok"] is False
         assert replay["code"] == "E_IDEMPOTENCY_CONFLICT"
+
+
+# ── BB-688a：schema 契约进模型窗口的落点是工具描述 ──────────────────────────
+
+
+def _tool_doc(name: str) -> str:
+    import server.main as main_mod
+    obj = getattr(main_mod, name)
+    return getattr(obj, "__doc__", None) or getattr(obj, "description", "") or ""
+
+
+def test_draft_tool_description_carries_schema_contract():
+    """journey_draft_cases 的描述必须承载用例机械契约——工具面文本本来就进
+    模型窗口,契约不在这里,闸就成了唯一的 schema 文档(BB-688 根因)。"""
+    doc = _tool_doc("journey_draft_cases")
+    for token in ("source_anchor", "rule_id", "assertion_layers",
+                  "required_evidence", "http_transcript", "playwright_trace",
+                  "admissible", "exclusion_reason", "expect_status",
+                  "side_effects", "open_items", "uncovered_rules",
+                  "服务端盖章", "谁来覆盖"):
+        assert token in doc, f"draft 工具描述缺契约要点：{token}"
+
+
+def test_analyze_tool_description_carries_shape_contract():
+    doc = _tool_doc("journey_analyze")
+    for token in ("rule_id", "charter", "examples", "下游消费面盘点",
+                  "同类共存", "业务对象"):
+        assert token in doc, f"analyze 工具描述缺契约要点：{token}"
+
+
+# ── BB-685：拒绝 message 是给用户看的完整句子,不是行话短语 ──────────────────
+
+
+def _assert_plain_sentence(msg: str) -> None:
+    assert msg.endswith("。"), f"message 不是完整句子：{msg!r}"
+    assert len(msg) >= 30, f"message 过短,信息量不足：{msg!r}"
+    assert "重新" in msg, f"message 没给下一步动作：{msg!r}"
+
+
+def test_draft_rejection_carries_example_and_plain_sentence(store, monkeypatch):
+    from server.journey import draft_cases as draft_mod
+    monkeypatch.setattr(tools, "_guarded", lambda *a, **k: None)
+    monkeypatch.setattr(draft_mod, "draft", lambda *a, **k: {
+        "ok": False, "errors": [{"code": "S11", "where": "d1", "problem": "x"}],
+        "warnings": [], "coverage": {}})
+    r = tools.draft_cases(batch_id="b-x", owner=TRUSTED_OWNER, cases=[])
+    assert r["ok"] is False and r["code"] == "E_DRAFT_REJECTED"
+    _assert_plain_sentence(r["message"])
+    assert "1 处" in r["message"]
+    assert r["fix_example"] == draft_mod.MINIMAL_CASE_EXAMPLE
+    assert r["uncovered_example"] == draft_mod.UNCOVERED_EXAMPLE
+
+
+def test_clarify_rejection_message_is_plain_sentence(store, monkeypatch):
+    from server.journey import clarify as clarify_mod
+    monkeypatch.setattr(tools, "_guarded", lambda *a, **k: None)
+    monkeypatch.setattr(clarify_mod, "clarify",
+                        lambda *a, **k: {"ok": False, "problems": ["p"]})
+    r = tools.clarify(batch_id="b-x", owner=TRUSTED_OWNER, rules=[],
+                      confirmed_facts_md="x")
+    assert r["ok"] is False and r["code"] == "E_CLARIFY_REJECTED"
+    assert r["message"] != "澄清产物没过牙"
+    _assert_plain_sentence(r["message"])
+
+
+def test_analyze_rejection_message_is_plain_sentence(store, monkeypatch):
+    from server.journey import analyze as analyze_mod
+    monkeypatch.setattr(tools, "_guarded", lambda *a, **k: None)
+    monkeypatch.setattr(analyze_mod, "analyze",
+                        lambda *a, **k: {"ok": False, "problems": ["p"]})
+    r = tools.analyze(batch_id="b-x", owner=TRUSTED_OWNER, example_map=[],
+                      analysis_md="x")
+    assert r["ok"] is False and r["code"] == "E_ANALYZE_REJECTED"
+    assert r["message"] != "分析产物没过牙"
+    _assert_plain_sentence(r["message"])
