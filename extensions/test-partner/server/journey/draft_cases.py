@@ -76,6 +76,21 @@ def validate_draft(cases: list[dict[str, Any]],
                    ) -> dict[str, Any]:
     errors: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
+    # 形状闸先行（与 analyze 的同族修，2026-08-28 实测）：模型把 source_anchor 写成
+    # `["R1"]` 数组时，旧代码在 .get("rule_id") 上炸 'list' object has no attribute
+    # 'get'，经 MCP 包装呈现为 E_MCP_UNAVAILABLE——模型将其读成连接问题去重试。
+    # 形状错误必须是带正确形状示例的结构化拒绝，不是崩溃。
+    if not isinstance(cases, list):
+        return {"ok": False, "errors": [{
+            "code": "E17", "where": "cases",
+            "problem": f"cases 必须是数组，收到 {type(cases).__name__}"}],
+            "warnings": [], "coverage": {}}
+    bad = [i for i, c in enumerate(cases) if not isinstance(c, dict)]
+    if bad:
+        return {"ok": False, "errors": [{
+            "code": "E17", "where": f"cases[{i}]",
+            "problem": f"每个用例必须是对象，收到 {type(cases[i]).__name__}"}
+            for i in bad], "warnings": [], "coverage": {}}
     known_rules = [row.get("rule_id") for row in example_map]
     seen_draft: set[str] = set()
     covered: dict[str, list[str]] = {}
@@ -84,15 +99,24 @@ def validate_draft(cases: list[dict[str, Any]],
         if did in seen_draft:
             errors.append({"code": "E17", "where": did, "problem": "draft_id 重复"})
         seen_draft.add(did)
-        rid = (c.get("source_anchor") or {}).get("rule_id")
+        anchor = c.get("source_anchor")
+        if not isinstance(anchor, dict):
+            errors.append({
+                "code": "E17", "where": f"{did}.source_anchor",
+                "problem": (
+                    "source_anchor 必须是对象 "
+                    "{\"rule_id\": \"R1\", \"probing\": false}，收到 "
+                    f"{type(anchor).__name__}：{str(anchor)[:40]!r}"
+                    "——不要写成数组或裸字符串")})
+            anchor = {}
+        rid = anchor.get("rule_id")
         if rid not in known_rules:
             errors.append({"code": "E17", "where": did,
                            "problem": f"引用未知 rule_id：{rid!r}（example_map 里没有）"})
         else:
             covered.setdefault(rid, []).append(did)
             if rule_probing is not None:
-                declared_probing = bool(
-                    (c.get("source_anchor") or {}).get("probing"))
+                declared_probing = bool(anchor.get("probing"))
                 authoritative_probing = bool(rule_probing.get(rid, False))
                 if declared_probing != authoritative_probing:
                     errors.append({
@@ -115,10 +139,17 @@ def validate_draft(cases: list[dict[str, Any]],
             e["where"] = f"{did}:{e['where']}"
             errors.append(e)
         auto = c.get("automation") or {}
+        if not isinstance(auto, dict):
+            errors.append({
+                "code": "E18", "where": f"{did}.automation",
+                "problem": ("automation 必须是对象 {\"admissible\": true, "
+                            f"\"recipe\": {{...}}}}，收到 {type(auto).__name__}")})
+            auto = {}
         if auto.get("admissible") is True:
             _check_recipe(auto.get("recipe"), f"{did}.automation.recipe", errors)
-    # E16 覆盖缺口
-    decl_by_rule = {d.get("rule_id"): d for d in (uncovered_rules or [])}
+    # E16 覆盖缺口（uncovered_rules 的非对象元素同样只拒不炸）
+    decl_by_rule = {d.get("rule_id"): d for d in (uncovered_rules or [])
+                    if isinstance(d, dict)}
     for rid in known_rules:
         if covered.get(rid):
             continue
@@ -129,7 +160,8 @@ def validate_draft(cases: list[dict[str, Any]],
             errors.append({"code": "E16", "where": rid,
                            "problem": "规则无用例覆盖，且无带「谁覆盖+后果」的不覆盖声明"})
     probing = [c.get("draft_id") for c in cases
-               if (c.get("source_anchor") or {}).get("probing")]
+               if isinstance(c.get("source_anchor"), dict)
+               and c["source_anchor"].get("probing")]
     if probing:
         warnings.append({"code": "W06", "where": ",".join(map(str, probing)),
                          "problem": f"{len(probing)} 条探测性用例——不进 PASS 判据,执行按探测层记录"})

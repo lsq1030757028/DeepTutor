@@ -270,6 +270,38 @@ def test_analyze_rejects_unknown_rule(store, local_target):
     assert not r["ok"] and any("R99" in p for p in r["problems"])
 
 
+def test_draft_rejects_wrong_shapes_without_crashing(store, local_target):
+    """draft 的形状错误必须是结构化拒绝,不是崩溃(与 analyze 同族,2026-08-28 实测)。
+
+    模型把 source_anchor 写成 ["R1"] 数组时,旧代码在 .get("rule_id") 上炸
+    'list' object has no attribute 'get'(draft_cases.py:87),经 MCP 包装呈现为
+    E_MCP_UNAVAILABLE——模型读成连接问题去重试(U6 复验实录:同一形状连崩 3 次)。
+    """
+    bid = chain_to_analyze(store, local_target)
+    base = {"case_id": "draft/R1-C001", "title": "t",
+            "preconditions": [], "steps": ["s"], "expected": "e"}
+    # source_anchor 是数组 → 结构化 E17,并给出正确形状
+    r = draft_cases.draft(bid, cases=[dict(base, source_anchor=["R1"])])
+    assert not r["ok"]
+    assert any(e["code"] == "E17" and "source_anchor 必须是对象" in e["problem"]
+               and "rule_id" in e["problem"] for e in r["errors"]), r["errors"]
+    # automation 是数组 → 结构化 E18
+    r2 = draft_cases.draft(bid, cases=[dict(
+        base, source_anchor={"rule_id": "R1"}, automation=["api"])])
+    assert not r2["ok"]
+    assert any(e["code"] == "E18" and "automation 必须是对象" in e["problem"]
+               for e in r2["errors"]), r2["errors"]
+    # cases 顶层不是数组 / 元素不是对象 → 同样只拒不炸
+    r3 = draft_cases.draft(bid, cases={"cases": []})
+    assert not r3["ok"] and any("必须是数组" in e["problem"] for e in r3["errors"])
+    r4 = draft_cases.draft(bid, cases=["case_001"])
+    assert not r4["ok"] and any("必须是对象" in e["problem"] for e in r4["errors"])
+    # uncovered_rules 元素是字符串 → 不炸(声明按缺失处理,E16 照拦)
+    r5 = draft_cases.draft(bid, cases=[], uncovered_rules=["R1"])
+    assert not r5["ok"]
+    assert not store.has_artifact(bid, "case_draft")
+
+
 # ── draft（覆盖族 E16-E18/W06-W07）────────────────────────────────────────
 
 def test_draft_coverage_gap_e16(store, local_target):
