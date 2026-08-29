@@ -408,3 +408,19 @@ def test_plain_chat_carries_none_of_the_third_round_rules(language: str) -> None
     rendered = AgenticChatPipeline(language=language)._build_system_prompt([], context)
     for anchor in _UAT3_ANCHORS[language]:
         assert anchor not in rendered
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_the_bare_baseline_term_is_banned_too(language: str) -> None:
+    """终轮：BB-706 修了复合词之后，裸词「基线」漏网（「还是草稿基线」上屏）。
+
+    同一形状第三次发作：Round 1 禁「栏位口径」→ Round 2 出「口径说明」；
+    Round 2 禁「口径」全族 → Round 3 出「草稿基线」。
+    **按见过的词形补禁词表，就只能守住见过的那几种。**这次连替换词一起给，
+    并把「基线」与「口径」一样按词族列。
+    """
+    from deeptutor.agents.test.pipeline import journey_system_block
+
+    block = journey_system_block(language)
+    assert "草稿基线" in block, f"{language} 没把裸「基线」的变体列进禁词表"
+    assert "字段核对状态" in block, f"{language} 禁了词但没给替换说法"

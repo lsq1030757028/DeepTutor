@@ -171,6 +171,17 @@ def _requires_trusted_owner(fn):
         try:
             with artifacts.trusted_owner(raw_owner, root=kwargs.get("root")):
                 return fn(*args, **kwargs)
+        except artifacts.CredentialSuspectedError as exc:
+            # 凭据误判不是权限问题。分开报，用户与模型才知道该做什么
+            # （2026-08-29 Round 3：它一直显示成 E_OWNER_REQUIRED）。
+            previews = [str(row.get("token_preview") or "") for row in exc.findings]
+            return _err(
+                "E_CREDENTIAL_SUSPECTED",
+                "有一段内容被误判成了密码或密钥，我换个写法重来一次，你不用操作。",
+                machine=f"{exc} 被判为凭据的片段：{previews or '（未记录）'}。"
+                        "确认不是凭据就改写该处措辞后重提；真是凭据则改成 "
+                        "{{变量名}} 占位符,绝不要把凭据原值写进产物。",
+                detail={"findings": exc.findings})
         except artifacts.ArtifactError as exc:
             return _err("E_OWNER_REQUIRED", str(exc))
     return wrapped

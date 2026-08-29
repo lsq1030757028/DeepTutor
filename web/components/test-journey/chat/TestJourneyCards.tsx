@@ -496,10 +496,14 @@ function ErrorCard({ state }: { state: JourneyState }) {
         {state.errors.map((err, index) => (
           <li
             key={`${err.tool}-${err.code}-${index}`}
+            // 工具名与错误码移出可见行，留在 title 里（悬停可看，排查不丢）。
+            // 2026-08-29 终验：9 条 `journey_xxx E_XXX_REJECTED` 顶在每句人话
+            // 前面，用户读到的第一样东西是他看不懂也不该管的内部编号。
+            // 服务端已经把 message 写成了人话（"我按提示改一版再提交，你不用
+            // 操作"），前缀是这一层自己加上去的。
+            title={`journey_${err.tool} ${err.code}`}
             className="py-0.5 text-[12px] text-[var(--muted-foreground)]"
           >
-            <span className="font-mono text-[11px]">{`journey_${err.tool}`}</span>{" "}
-            <span className="font-mono text-[11px]">{err.code}</span>{" "}
             {err.message || C.common.errorUnavailable}
           </li>
         ))}

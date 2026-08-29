@@ -132,6 +132,25 @@ class ArtifactError(ValueError):
     """产物读写与校验错误（信息可直接回给调用方）。"""
 
 
+class CredentialSuspectedError(ArtifactError):
+    """落盘前凭据闸拒绝。**单列一个类型，是为了让它别再被报成权限问题。**
+
+    2026-08-29 Round 3 实测：这条拒绝在用户界面上显示成
+    `journey_clarify E_OWNER_REQUIRED business_frame.json 疑似包含凭据` ——
+    因为 `tools._requires_trusted_owner` 把所有 ArtifactError 一律映射成
+    `E_OWNER_REQUIRED`。用户读到的是「权限有问题」，实际是「内容被误判成凭据」，
+    **两种完全不同的处置被显示成同一件事**。
+
+    `findings` 带上被判为凭据的 token 预览：闸拒绝了什么，得说得出来，
+    否则下一次分析这类误报只能靠猜（这次就是——被拒的载荷不落盘、不入日志，
+    真实误拦样本已不可复原）。
+    """
+
+    def __init__(self, message: str, findings: list[dict[str, Any]] | None = None):
+        super().__init__(message)
+        self.findings = list(findings or [])
+
+
 def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
 
@@ -346,8 +365,9 @@ def _assert_batch_payload_safe(data: dict[str, Any], label: str) -> None:
     encoded = json.dumps(data, ensure_ascii=False, sort_keys=True)
     report = credential_scan.scan_text_content(encoded, label=label)
     if not report["ok"]:
-        raise ArtifactError(
-            f"{label} 疑似包含凭据，已在落盘前拒绝；请移除或变量化后重试")
+        raise CredentialSuspectedError(
+            f"{label} 疑似包含凭据，已在落盘前拒绝；请移除或变量化后重试",
+            report["entropy_hits"])
 
 
 @contextmanager
