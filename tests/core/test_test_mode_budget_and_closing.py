@@ -338,3 +338,73 @@ def test_plain_chat_carries_none_of_the_second_round_rules(language: str) -> Non
     rendered = AgenticChatPipeline(language=language)._build_system_prompt([], context)
     for anchor in _UAT2_ANCHORS[language] + _ENV_PENDING_ANCHORS[language]:
         assert anchor not in rendered
+
+
+#: 第三轮 UAT（2026-08-29 Round 2 复验）新增的三组锚。
+#:
+#: 每组对着一条实测：中文「口径」×3 上屏、推荐档误判后模型不再顶回、
+#: 升档时要用户手工粘贴他刚看过的正文。
+_UAT3_ANCHORS = {
+    "zh": (
+        # 「口径」本词进禁词表 + 逐词替换说法
+        "口径」→ **筛选条件**",
+        "口径说明",
+        # 工具返回的字段名不是自己的用词
+        "工具返回里的字段名不是你的用词",
+        # 推荐档不是判决,读过正文就该顶回去
+        "推荐档是机械启发式的结果，不是判决",
+        "你读过正文，启发式没读过",
+        # 要正文之前先查历史批次
+        "需求正文永远不许张口就要",
+        "让用户手工粘贴他刚看你引用过的东西",
+    ),
+    "en": (
+        "口径 → **筛选条件**",
+        "口径说明",
+        "A field name in a tool's response is not your vocabulary",
+        "mechanical heuristic's output, not a verdict",
+        "You read the requirement; the heuristic did not",
+        "Never open by asking for the requirement text",
+        "indefensible interruption on this whole chain",
+    ),
+}
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_third_round_fixes_reach_the_rendered_system_prompt(language: str) -> None:
+    """Round 2 复验剩下的三条提示词半边。
+
+    锚仍取行为禁令与判断口令，不取标题：文案怎么润色它们都在。
+    """
+    from deeptutor.agents.test.pipeline import TestJourneyPipeline
+
+    context = UnifiedContext(session_id="s-uat3", user_message="正式测一下这条需求")
+    rendered = TestJourneyPipeline(language=language)._build_system_prompt([], context)
+    for anchor in _UAT3_ANCHORS[language]:
+        assert anchor in rendered, f"{language} 缺锚：{anchor}"
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_the_banned_word_list_covers_the_bare_chinese_term(language: str) -> None:
+    """「口径」本词必须在禁词表里，不能只禁「栏位口径」这种复合形态。
+
+    Round 1 禁的是「栏位口径」，Round 2 上屏的是「口径说明」「口径未锁定」
+    「换个筛选口径」——**按复合词禁，换个前缀就绕过去了**，与「按词形禁行话、
+    翻成英文即失效」是同一个形状的第二次发作。
+    """
+    from deeptutor.agents.test.pipeline import journey_system_block
+
+    block = journey_system_block(language)
+    assert "口径未锁定" in block, f"{language} 没把裸「口径」的变体列进禁词表"
+    assert "换个口径" in block
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_plain_chat_carries_none_of_the_third_round_rules(language: str) -> None:
+    """作用域边界照旧。"""
+    from deeptutor.agents.chat.agentic_pipeline import AgenticChatPipeline
+
+    context = UnifiedContext(session_id="s-uat3", user_message="hi")
+    rendered = AgenticChatPipeline(language=language)._build_system_prompt([], context)
+    for anchor in _UAT3_ANCHORS[language]:
+        assert anchor not in rendered

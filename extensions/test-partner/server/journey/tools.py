@@ -318,6 +318,35 @@ def _recover_completed_execute(batch_id: str, intent: dict[str, Any], *,
 # ── 1. ingest（唯一能创建批次；fail-closed 于可信 bridge）───────────────────
 
 
+def _inherited_requirement(batch_id: str, root: str | None) -> dict[str, Any]:
+    """从既存批次接需求正文与出处。查不到就如实说查不到，不编。
+
+    正文冻在批次目录的 `requirement.txt`（`ingest` 落的快照），出处在
+    `intake_profile.source`。两者一起接，接过来的 digest 由 `ingest` 重算，
+    所以不存在"接了正文但锚不上"的中间态。
+    """
+    try:
+        path = os.path.join(artifacts.batch_dir(batch_id, root=root),
+                            "requirement.txt")
+        if not os.path.isfile(path):
+            return {"ok": False}
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        if not text.strip():
+            return {"ok": False}
+        source: dict[str, Any] = {}
+        try:
+            profile = artifacts.load_artifact(batch_id, "intake_profile", root=root)
+            source = dict(profile.get("source") or {})
+        except artifacts.ArtifactError:
+            source = {}
+        return {"ok": True, "requirement_text": text,
+                "source_kind": str(source.get("kind") or ""),
+                "source_ref": str(source.get("ref") or "")}
+    except (artifacts.ArtifactError, OSError):
+        return {"ok": False}
+
+
 @_requires_trusted_owner
 def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
            source_ref: str = "", environment_status: str = "",
@@ -371,10 +400,31 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
         text = oracle.plain_text(str(story.get("description") or ""))
         oracle_source = {"_story": story, "_workspace_id": workspace_id,
                          "_story_id": story_id}
+    elif not text and supersedes:
+        # 升档/换档要开新批次时，正文从被替代的那个批次继承（2026-08-29 Round 2
+        # 卡点 B）：实测模型在同一会话里先按原文列了 10 条规则，开新批次时却说
+        # 「我没有渠道拿到需求正文，请你粘贴」——正文明明就冻在上一个批次目录里。
+        # 让用户去 TAPD 复制粘贴他刚看过的东西,是这条链上最没道理的一次打断。
+        inherited = _inherited_requirement(supersedes, root)
+        if inherited["ok"]:
+            text = inherited["requirement_text"]
+            source_kind = source_kind or inherited["source_kind"]
+            source_ref = source_ref or inherited["source_ref"]
+        else:
+            return _err("E_ORACLE_NOT_FOUND",
+                        "我手上没有这条需求的正文，也没能从上一个批次接过来。",
+                        machine=f"supersedes={supersedes} 的批次里没有 "
+                                "requirement.txt。给 workspace_id + story_id 让服务端"
+                                "取数,或传 requirement_text;先用 journey_list_batches "
+                                "/ journey_get_batch 查同需求的历史批次,"
+                                "get_batch 的返回体里就有 requirement_text。")
     elif not text:
         return _err("E_ORACLE_NOT_FOUND",
-                    "既没给 TAPD 需求号（workspace_id + story_id），也没给本地需求正文。"
-                    "oracle 缺失时不建批次——对空气接单是 M1 就定下的红线。")
+                    "我还没拿到这条需求的正文，先取到正文再开始。",
+                    machine="既没给 workspace_id + story_id,也没给 requirement_text。"
+                            "先用 journey_list_batches / journey_get_batch 查同一需求"
+                            "有没有历史批次——get_batch 的返回体里带 requirement_text,"
+                            "能接就接,别让用户手工粘贴。都没有再向用户要。")
 
     owner_partition = artifacts.current_trusted_owner() or ""
     if _bridge_claims is None or str(
@@ -508,7 +558,7 @@ def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
                         "先出用例（推荐，用户不必现在去配环境）。",
                 detail=result)
         return _err(str(result.get("code") or "E_INGEST_REJECTED"), raw,
-                    detail=result)
+                    machine=str(result.get("machine") or ""), detail=result)
 
     bid = result["batch_id"]
     _log_call(bid, "ingest", caller_surface, root)
@@ -622,6 +672,9 @@ def _adopt_write_disclosure(case_draft: dict[str, Any],
         rows.append({
             "draft_id": str(case.get("draft_id") or ""),
             "title": str(case.get("title") or ""),
+            # 逐条内容摘要从卡面搬到这里（2026-08-29）：模型仍拿得到，
+            # 用户不必在授权卡上逐行读 64 位十六进制。
+            "content_digest": decision_auth.adopt_draft_digest(case),
             "cleanup": str(side.get("cleanup") or ""),
             "authorization": str(side.get("authorization") or ""),
             "write_scope": str(side.get("write_scope") or ""),
@@ -683,11 +736,13 @@ def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "
             card = decision_auth.expected_adopt_question(
                 batch_id, case_draft, selected_draft_ids)
         except decision_auth.DecisionAuthError as exc:
-            if "at most" in str(exc):
-                return _err("E_TOO_MANY_WRITE_CASES",
-                            f"{exc}。一张采纳卡最多披露 "
-                            f"{decision_auth.MAX_WRITE_CHOICES} 条写用例——"
-                            "把采纳集拆成多个批次分别采纳，不要减少披露。")
+            if "最多能披露" in str(exc):
+                return _err(
+                    "E_TOO_MANY_WRITE_CASES",
+                    f"会写数据的用例超过一张卡能放下的数量（上限 "
+                    f"{decision_auth.MAX_WRITE_CHOICES} 条），我分两批请你确认。",
+                    machine=f"{exc} 把采纳集拆成多个批次分别采纳,"
+                            "每批写用例不超过上限;不要为了塞进一张卡而减少披露。")
             return _err("E_USER_DECISION_INVALID", str(exc))
         return _ok("NEEDS_GATE", needs_gate="adoption", card=card,
                    disclosure=_adopt_write_disclosure(
@@ -872,13 +927,15 @@ def write_confirm(*, batch_id: str, case_ids: list[str] | None = None,
     unknown = [c for c in requested if c not in by_id]
     if unknown:
         return _err("E_UNKNOWN_CASE",
-                    f"这些 case_id 不在当前采纳集里：{unknown}。"
-                    f"静默忽略会变成「我明明点了允许它还是跳过」，所以这里判红。")
+                    "有几条用例不在这次的采纳集里，我核对一下再来。",
+                    machine=f"这些 case_id 不在当前采纳集里：{unknown}。"
+                            "静默忽略会变成「我明明点了允许它还是跳过」,所以判红。")
     non_write = [c for c in requested if c not in write_ids]
     if non_write:
         return _err("E_NOT_A_WRITE_CASE",
-                    f"这些用例不写数据，给它们写授权没有意义：{non_write}。"
-                    f"通常是卡上勾错了行，或 side_effects.writes 标错了。")
+                    "有几条用例根本不写数据，不需要你给写授权，我把它们去掉。",
+                    machine=f"这些用例不写数据,给写授权没有意义：{non_write}。"
+                            "通常是卡上勾错了行,或 side_effects.writes 标错了。")
 
     if _bridge_claims is None:
         return _err("E_USER_DECISION_REQUIRED",
@@ -1032,12 +1089,15 @@ def execute(*, batch_id: str, variables: dict[str, Any] | None = None,
         normalized_timeout = int(timeout_s)
     except (TypeError, ValueError):
         return _err("E_INVALID_TIMEOUT",
-                    f"timeout_s 必须是 {_execute.MIN_TIMEOUT_S}.."
-                    f"{_execute.MAX_TIMEOUT_S} 的整数")
+                    "执行超时设置不是个有效的秒数，我改回默认值再跑。",
+                    machine=f"timeout_s 必须是 {_execute.MIN_TIMEOUT_S}.."
+                            f"{_execute.MAX_TIMEOUT_S} 的整数。")
     if not _execute.MIN_TIMEOUT_S <= normalized_timeout <= _execute.MAX_TIMEOUT_S:
         return _err("E_INVALID_TIMEOUT",
-                    f"timeout_s 必须在 {_execute.MIN_TIMEOUT_S}.."
-                    f"{_execute.MAX_TIMEOUT_S} 秒")
+                    f"执行超时只能设在 {_execute.MIN_TIMEOUT_S} 到 "
+                    f"{_execute.MAX_TIMEOUT_S} 秒之间，我调进范围再跑。",
+                    machine=f"timeout_s 超出 {_execute.MIN_TIMEOUT_S}.."
+                            f"{_execute.MAX_TIMEOUT_S} 秒。")
     blocked = _guarded(batch_id, "execute", caller_surface, root)
     if blocked:
         return blocked
@@ -1128,7 +1188,10 @@ def project(*, run_id: str, caller_surface: str = "unknown",
             root: str | None = None) -> dict[str, Any]:
     r = _project.project(run_id)
     if not r.get("ok"):
-        return _err("E_PROJECT_REJECTED", "投影没过 evidence_gate/mechanical_check",
+        return _err("E_PROJECT_REJECTED",
+                    "这一趟的结论还立不住：证据或机械校验没过，我查一下缺什么。",
+                    machine="投影没过 evidence_gate / mechanical_check;"
+                            "detail 里是逐条问题。",
                     detail=r)
     return _ok(**{k: v for k, v in r.items() if k != "ok"})
 

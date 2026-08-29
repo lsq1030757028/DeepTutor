@@ -72,8 +72,10 @@ def test_pending_refuses_to_take_a_placeholder_address(store):
                           tier_confirmed_via="test",
                           environment_status="pending", owner=TRUSTED_OWNER)
     assert r["ok"] is False
-    assert "不要传 base_url" in r["error"]
-    assert ".invalid" in r["error"]
+    # 2026-08-29 Round 2 复验：参数名从 error（会被渲染给用户）搬到 machine。
+    assert "不要再给地址" in r["error"]
+    assert "base_url" not in r["error"], "参数名不该出现在用户可见文案里"
+    assert "base_url" in r["machine"] and ".invalid" in r["machine"]
 
 
 def test_missing_address_points_at_the_pending_road_not_a_dead_end(store):
@@ -89,8 +91,10 @@ def test_missing_address_points_at_the_pending_road_not_a_dead_end(store):
                           tier="standard", tier_confirmed_via="test",
                           owner=TRUSTED_OWNER)
     assert r["ok"] is False
-    assert 'environment_status="pending"' in r["error"]
-    assert "不要编一个占位地址" in r["error"]
+    assert "环境没好也能先把用例出出来" in r["error"], "人话里要给出活路"
+    assert "environment_status" not in r["error"], "参数名不该出现在用户可见文案里"
+    assert 'environment_status="pending"' in r["machine"]
+    assert "不要编一个占位地址" in r["machine"]
 
 
 def test_environment_status_only_accepts_the_declared_values(store):

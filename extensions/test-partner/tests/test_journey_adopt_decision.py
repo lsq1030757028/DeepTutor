@@ -129,9 +129,18 @@ def test_adopt_card_binds_the_write_case_digest_set(store, target):
     # 只读用例不上授权行——给不写数据的用例授权没有意义（沿用 write_confirm 取舍 2）
     assert [o["label"] for o in card["options"]] == ["dw1", "dw2"]
     by_id = {c["draft_id"]: c for c in draft["cases"]}
+    # 2026-08-29 判据翻面：**卡面描述不再挂逐条摘要**。原来每行开头是
+    # `sha256:<64 hex>`，用户在授权卡上读到的第一样东西是他完全用不上的串
+    # （Round 2 复验第 13 条）。绑定没削弱——卡 id 由 adopt_set_digest 派生，
+    # 覆盖采纳集里每一条草稿的内容摘要，改一个字 id 就对不上（下一条测试守）；
+    # 逐条摘要搬进了 tools 的 disclosure，模型仍拿得到。
     for option in card["options"]:
-        assert option["description"].startswith(
-            digest.draft_case_digest(by_id[option["label"]]))
+        assert "sha256:" not in option["description"]
+        assert option["description"] == by_id[option["label"]].get("title", "")
+    assert card["id"].endswith(
+        decision_auth.adopt_set_digest(
+            decision_auth.adopt_selection(draft, selected)
+        ).removeprefix("sha256:")[:24])
 
     token, claims = adopt_decision(bid, draft, selected, ["dw1"])
     decision = _verify(bid, draft, selected, ["dw1"], token, claims)

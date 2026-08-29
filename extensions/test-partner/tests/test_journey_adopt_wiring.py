@@ -134,7 +134,11 @@ def test_too_many_write_cases_get_a_split_instruction_not_a_wall(store, target):
                       _bridge_claims=trusted_claims("journey_adopt", owner=OWNER),
                       caller_surface="capability")
     assert not out["ok"] and out["code"] == "E_TOO_MANY_WRITE_CASES"
-    assert "拆成多个批次" in out["message"]
+    # 2026-08-29：拆批指令是**给模型的操作**，从 message 搬到 machine。
+    # message 只告诉用户「超了，我分两批请你确认」——他不需要知道怎么拆。
+    assert "拆成多个批次" in out["machine"]
+    assert "分两批" in out["message"]
+    assert "E_" not in out["message"] and "_" not in out["message"]
 
 
 # ── 采纳 + 派生写授权（AC7/AC8）────────────────────────────────────────────

@@ -443,11 +443,24 @@ def expected_adopt_question(batch_id: str, case_draft: dict[str, Any],
     write_cases = [case for case in selection if _effective_write(case)]
     if len(write_cases) > MAX_WRITE_CHOICES:
         raise DecisionAuthError(
-            f"adoption card supports at most {MAX_WRITE_CHOICES} write cases")
+            f"一张采纳卡最多能披露 {MAX_WRITE_CHOICES} 条会写数据的用例，这次超了。")
 
     def description(case: dict[str, Any]) -> str:
-        value = f"{adopt_draft_digest(case)} | {case.get('title', '')}"
-        return value if len(value) <= 200 else value[:200].rstrip() + "…"
+        """卡面上这一行**只放人读得懂的内容**（2026-08-29 Round 2 第 13 条）。
+
+        原来这里是 `sha256:<64 hex> | 标题`，一条 64 位十六进制串占满整行，
+        用户在授权卡上逐条读的时候，先读到的是他完全用不上的东西。
+
+        **拿掉它不削弱绑定**：卡 id 是 `adopt_set_digest`（覆盖采纳集里每一条
+        草稿的内容摘要）的前 24 位十六进制，任何一条用例内容变了 id 就对不上；
+        `verify_adopt_context` 又会用**当前**草稿重算 `write_digests` 落账。
+        逐条摘要出现在描述里，对这两道绑定是冗余的。
+
+        摘要仍在信封内，只是搬到了模型读得到、用户读不到的地方
+        （`tools.adopt` 的 `disclosure`）。
+        """
+        title = str(case.get("title") or case.get("draft_id") or "").strip()
+        return title if len(title) <= 200 else title[:200].rstrip() + "…"
 
     set_digest = adopt_set_digest(selection)
     return {

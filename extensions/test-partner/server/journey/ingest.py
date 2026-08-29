@@ -41,8 +41,25 @@ ENVIRONMENT_STATUSES = ("ready", "pending")
 ENVIRONMENT_PENDING_NOTE = "环境待定，执行前必须补真实地址"
 
 #: 风险×复杂度机械启发式的词表（可解释，不是判官）
-_WRITE_HINTS = re.compile(r"(新增|创建|删除|修改|编辑|下单|支付|退款|提交|审批|导入|上传)")
+#:
+#: 2026-08-29 复验（Round 2 卡点 A）补设备控制族。原词表只覆盖**表单/交易**语义
+#: （新增/创建/下单/支付/审批…），而被测需求是「切换对话模式、调亮度、进待机」这类
+#: **设备状态写入**，一个词都不命中，于是 560 字、13 条写用例的需求被判成
+#: 「0 write verbs」→ 推荐 checklist → 用户按推荐走就永远到不了用例库。
+#:
+#: 词表按**动作族**扩，不按单个需求补：改/调/切/设/开关/下发/控制 是一族，
+#: 绑定/解绑/重置/清除/取消 是一族。宁可多命中——多命中只会把档位推高，
+#: 而档位推高的代价是多花时间，档位推低的代价是用户以为测过了。
+_WRITE_HINTS = re.compile(
+    r"(新增|创建|新建|删除|移除|修改|编辑|更新|保存|提交|审批|导入|上传|下单|支付|退款"
+    r"|切换|设置|设定|配置|开启|关闭|打开|启用|停用|下发|控制|调节|调整|调高|调低"
+    r"|绑定|解绑|重置|清除|清空|取消|恢复|唤醒|待机|重启|升级|同步|发送|推送|播放|暂停)")
 _ROLE_HINTS = re.compile(r"(角色|权限|管理员|销售员|操作员|普通用户)")
+
+#: 「没检测到写动词」到「确实没有写操作」之间隔着一整个词表的覆盖面。
+#: 正文长到这个数还一个写动词都不命中时，判为**写意图未知**而不是「无写操作」，
+#: 推荐档下限抬到 standard。理由见 `propose_tier`。
+_WRITE_UNKNOWN_MIN_CHARS = 200
 
 
 class _NoAutomaticRedirect(HTTPRedirectHandler):
@@ -121,27 +138,60 @@ def _service_banner(headers: dict[str, str]) -> str | None:
 
 
 def propose_tier(requirement_text: str, writes_expected: bool | None = None) -> dict[str, Any]:
-    """机械定档建议：风险×复杂度 → checklist / standard / deep + 可解释理由。"""
+    """机械定档建议：风险×复杂度 → checklist / standard / deep + 可解释理由。
+
+    ## checklist 只在「确知没有写操作」时才推荐（2026-08-29 复验后加）
+
+    原实现里 checklist 是**分数低的默认落点**，而分数低有两种完全不同的成因：
+    需求真的小，或者**词表没覆盖到这个领域的写动词**。两者在分数上不可区分，
+    于是后者被当成前者：13 条写设备状态的需求拿到「0 write verbs」+ checklist 推荐，
+    而 checklist 明说不建用例库——用户按推荐走，拿到一份检查清单就以为测完了。
+
+    所以「没检测到」不再等价于「没有」：正文有一定长度却零命中时判为
+    **写意图未知**，推荐下限抬到 standard。要落回 checklist，得由调用方
+    显式传 `writes_expected=False`——那是一句有主体的断言，不是一次匹配失败。
+
+    抬高档位的代价是多花时间，压低档位的代价是用户以为测过了。不对称，所以偏严。
+    """
     text = requirement_text or ""
     plain = re.sub(r"\s", "", text)
     n_chars = len(plain)
     n_writes = len(_WRITE_HINTS.findall(text))
     n_roles = len(set(_ROLE_HINTS.findall(text)))
-    reasons = [f"需求正文 {n_chars} 字", f"写操作动词 {n_writes} 处", f"角色词 {n_roles} 类"]
+    write_unknown = (n_writes == 0 and writes_expected is None
+                     and n_chars >= _WRITE_UNKNOWN_MIN_CHARS)
+    # 理由栏如实写「未检测到」而不是「0 处写操作」：后者是业务结论，而这里
+    # 只做了一次词表匹配。模型会照着理由栏对用户说话（Round 2 的「0 write verbs」
+    # 就是这么上屏的）。
+    reasons = [f"需求正文 {n_chars} 字",
+               ("未检测到写动词（词表未必覆盖本领域，不等于没有写操作）"
+                if n_writes == 0 else f"写操作动词 {n_writes} 处"),
+               f"角色词 {n_roles} 类"]
     if writes_expected is not None:
         reasons.append(f"调用方声明含写操作={writes_expected}")
-    score = (2 if n_chars >= 1500 else 1 if n_chars >= 300 else 0) \
-        + (2 if n_writes >= 8 else 1 if n_writes >= 2 else 0) \
-        + (1 if n_roles >= 2 else 0) \
-        + (1 if writes_expected else 0)
+    score = ((2 if n_chars >= 1500 else 1 if n_chars >= 300 else 0)
+             + (2 if n_writes >= 8 else 1 if n_writes >= 2 else 0)
+             + (1 if n_roles >= 2 else 0)
+             + (1 if writes_expected else 0))
     tier = "checklist" if score <= 1 else ("standard" if score <= 4 else "deep")
+    if write_unknown and tier == "checklist":
+        tier = "standard"
+        reasons.append("写意图未确认，推荐档下限抬到 standard——checklist 不建用例库，"
+                       "万一有写操作就等于漏测")
     return {"proposed_tier": tier, "score": score, "reasons": reasons,
+            "write_intent": ("detected" if n_writes else
+                             "unknown" if write_unknown else "declared_none"),
             "card": {
                 "question": "本批次按哪个档位走？",
                 "options": [
-                    {"value": "checklist", "label": "checklist：小需求 → R 规则+checklist,人勾完成,不建用例库"},
-                    {"value": "standard", "label": "standard：完整链(澄清→分析→用例→采纳→编译→执行→覆盖图)"},
-                    {"value": "deep", "label": "deep：标准链+全量故障注入与双趟复执行"},
+                    {"value": "checklist",
+                     "label": "checklist：只出一份检查清单供人工勾选，"
+                              "不建用例库、不能执行；需要用例库请选 standard"},
+                    {"value": "standard",
+                     "label": "standard：完整链（澄清→分析→用例库→采纳→执行），"
+                              "「正式测一条需求」要的就是这一档"},
+                    {"value": "deep",
+                     "label": "deep：标准链 + 全量故障注入与双趟复执行"},
                 ],
                 "recommended": tier,
             }}
@@ -172,19 +222,25 @@ def ingest(title: str, base_url: str, *, source_kind: str, source_ref: str,
         # 挂起就不许再带地址：带了说明它不是真的挂起，而是**编了一个占位地址**
         # 想两头讨好——那正是本条要根治的行为。
         if str(base_url or "").strip():
+            # error 会被上层当 message 渲染给用户，所以它只说人话；
+            # 参数名与照做步骤走 machine（2026-08-29 Round 2 复验：
+            # `environment_status="pending"` 直接怼到了用户脸上）。
             return {"ok": False,
-                    "error": "环境待定时不要传 base_url。占位地址、.invalid 域名、"
-                             "随手找的可连通主机都不行——挂起就如实挂起，"
-                             "真地址拿到之后再开批次或补录。"}
+                    "error": "说了环境待定就不要再给地址了，我先按待定往下走。",
+                    "machine": "环境挂起时禁止同时传 base_url：占位地址、.invalid "
+                               "域名、随手找的可连通主机都算编造。重调时清空 "
+                               "base_url,真地址拿到后再开新批次或补录。"}
         safe_base_url = ""
         probe = {"reachable": False, "skipped": True,
                  "error": ENVIRONMENT_PENDING_NOTE}
     else:
         if not str(base_url or "").strip():
             return {"ok": False,
-                    "error": "没有被测环境地址。环境还没好就传 "
-                             "environment_status=\"pending\" 先出用例（推荐），"
-                             "不要编一个占位地址。"}
+                    "error": "还没有测试环境地址。环境没好也能先把用例出出来，"
+                             "我按这条走；等地址有了再补。",
+                    "machine": "没有 base_url。环境未就绪时改传 "
+                               "environment_status=\"pending\" 且不传 base_url,"
+                               "照常走到用例草稿;绝不要编一个占位地址。"}
         validated = redlines.safe_target_url(base_url)
         if not validated["ok"]:
             return {"ok": False, "error": validated["error"]}
