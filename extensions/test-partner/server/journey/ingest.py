@@ -183,15 +183,18 @@ def propose_tier(requirement_text: str, writes_expected: bool | None = None) -> 
                              "unknown" if write_unknown else "declared_none"),
             "card": {
                 "question": "本批次按哪个档位走？",
+                # label 是给人看的，中文在前；value 才是服务端枚举
+                # （2026-09-05 UAT 判据 4：档位卡选项落到用户面前是裸英文
+                # standard/checklist/deep）。
                 "options": [
                     {"value": "checklist",
-                     "label": "checklist：只出一份检查清单供人工勾选，"
-                              "不建用例库、不能执行；需要用例库请选 standard"},
+                     "label": "清单（checklist）：只出一份检查清单供人工勾选，"
+                              "不建用例库、不能执行；需要用例库请选「标准（standard）」"},
                     {"value": "standard",
-                     "label": "standard：完整链（澄清→分析→用例库→采纳→执行），"
+                     "label": "标准（standard）：完整链（澄清→分析→用例库→采纳→执行），"
                               "「正式测一条需求」要的就是这一档"},
                     {"value": "deep",
-                     "label": "deep：标准链 + 全量故障注入与双趟复执行"},
+                     "label": "深度（deep）：标准链 + 全量故障注入与双趟复执行"},
                 ],
                 "recommended": tier,
             }}

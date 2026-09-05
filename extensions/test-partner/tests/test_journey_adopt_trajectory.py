@@ -117,3 +117,20 @@ def test_prepare_disclosure_text_is_complete_and_untruncated(store, target):
     assert "dw1" in md and "dr1" in md
     assert "凭什么授权：events#write_confirm" in md
     assert "写什么：测试面" in md
+
+
+def test_prepare_disclosure_never_leaves_a_line_blank():
+    """BB-715 补修：老批次里写用例可能没填 write_scope（闸收紧之前起草的），
+    披露文本三行必须仍然齐全，空值要在卡上看得见是空的，而不是一行空白。"""
+    md = tools._render_adopt_disclosure_md(
+        {"cases": [{"draft_id": "d3", "title": "自助开台页下单"}]},
+        ["d3"],
+        [{"draft_id": "d3", "title": "自助开台页下单", "write_scope": "",
+          "cleanup": "测试环境下单后作废", "authorization": "仅限测试环境"}],
+    )
+    lines = md.splitlines()
+    assert lines[0] == "- d3 自助开台页下单：**会写数据**"
+    assert lines[1].startswith("  - 写什么：") and lines[1] != "  - 写什么："
+    assert tools.BLANK_DISCLOSURE_FIELD in lines[1]
+    assert lines[2] == "  - 怎么清理：测试环境下单后作废"
+    assert lines[3] == "  - 凭什么授权：仅限测试环境"

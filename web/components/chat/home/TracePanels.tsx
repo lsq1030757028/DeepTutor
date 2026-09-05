@@ -12,6 +12,13 @@ import {
 import { ChevronDown, Loader2, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import MarkdownRenderer from "@/components/common/MarkdownRenderer";
+// [fork] 进度徽标（Tool Calling… / Exploring… / Asking you / Using test-partner /
+// Done）按本轮语种取文案（BB-698 判据 4 补修，2026-09-05）：测试轮的事件流带
+// turn_language，中文提问、界面 en 时这些外壳不能再是英文；普通聊天没有这条
+// 事件，useTurnT(null) 等价于界面语言的 t，零变化。
+import { useTurnT } from "@/hooks/useTurnT";
+import type { AppLanguage } from "@/i18n/init";
+import { turnLanguageOf } from "@/lib/turn-language";
 import { formatTurnDuration, getTurnDurationSeconds } from "@/lib/trace-timing";
 import {
   describeProviderTool,
@@ -1248,12 +1255,15 @@ function TraceRowItem({
   trace,
   active,
   nested,
+  language,
 }: {
   trace: TraceItem;
   active: boolean;
   nested: boolean;
+  /** Turn language announced by the server (Test mode); null = UI language. */
+  language?: AppLanguage | null;
 }) {
-  const { t } = useTranslation();
+  const t = useTurnT(language);
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
 
   const { callId, events: callEvents } = trace;
@@ -1507,7 +1517,8 @@ export function CallTracePanel({
   // rows are inline either way, ``nested`` only affects sub-row layout.
   nested?: boolean;
 }) {
-  const { t } = useTranslation();
+  const language = useMemo(() => turnLanguageOf(events), [events]);
+  const t = useTurnT(language);
 
   const traceGroups = useMemo(() => {
     const groups: TraceItem[] = [];
@@ -1785,6 +1796,7 @@ export function CallTracePanel({
             trace={item.trace}
             active={active}
             nested={nested}
+            language={language}
           />
         );
       })}
@@ -2275,7 +2287,7 @@ export function StreamingStatus({
   // icons fighting on one line.
   showMark?: boolean;
 }) {
-  const { t } = useTranslation();
+  const t = useTurnT(useMemo(() => turnLanguageOf(events), [events]));
   const hasFinalContent = Boolean(content && content.trim().length > 0);
   const [nowSeconds, setNowSeconds] = useState(() => Date.now() / 1000);
   useEffect(() => {

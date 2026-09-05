@@ -150,3 +150,19 @@ def test_deep_copy_safety():
     snapshot = copy.deepcopy(doc)
     schema.validate_caseset(doc)
     assert doc == snapshot  # 校验器不改入参
+
+
+def test_write_case_requires_write_scope_as_well():
+    """BB-715 补修（2026-09-05）：采纳卡逐条披露"写什么 / 怎么清理 / 凭什么授权"，
+    三项都来自草稿的 side_effects；write_scope 不必填时模型给 d3~d8 只填后两项，
+    卡上那六条就没有"写什么"行。写用例三项缺一不可。"""
+    case = make_case(side_effects={
+        "writes": True,
+        "cleanup": "还原数据库基线 db-ori-1", "authorization": "events.jsonl#write_confirm"})
+    result = schema.validate_caseset(make_caseset(cases=[case]))
+    assert "S29" in codes(result)
+    assert any(e["where"].endswith("side_effects.write_scope") for e in result["errors"])
+    blank = make_case(side_effects={
+        "writes": True, "write_scope": "   ",
+        "cleanup": "还原数据库基线 db-ori-1", "authorization": "events.jsonl#write_confirm"})
+    assert "S29" in codes(schema.validate_caseset(make_caseset(cases=[blank])))

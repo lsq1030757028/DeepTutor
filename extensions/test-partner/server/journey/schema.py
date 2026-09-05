@@ -158,10 +158,15 @@ def validate_case(case: Any, index: int) -> list[dict[str, Any]]:
         if set(se) - allowed_se:
             _err(errors, "S28", f"{label}.side_effects", f"未知字段：{sorted(set(se) - allowed_se)}")
         if se.get("writes") is True:
-            for req_field in ("cleanup", "authorization"):
+            # 三字段都是采纳卡上逐条披露的「写什么 / 怎么清理 / 凭什么授权」
+            # （AC6）。2026-09-05 UAT：write_scope 不在必填里，模型给 d3~d8 只填了
+            # 后两项，采纳卡上那六条就没有"写什么"行——披露缺行不是渲染问题，
+            # 是草稿闸放过了空字段（BB-715 补修）。
+            for req_field in ("write_scope", "cleanup", "authorization"):
                 if not (isinstance(se.get(req_field), str) and se[req_field].strip()):
                     _err(errors, "S29", f"{label}.side_effects.{req_field}",
-                         "写用例必填（写确认授权/清理策略）")
+                         "写用例必填（写什么 write_scope / 怎么清理 cleanup / "
+                         "凭什么授权 authorization 三项都要）")
 
     oi = case.get("open_items")
     if not isinstance(oi, dict):

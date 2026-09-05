@@ -35,6 +35,10 @@ from typing import TYPE_CHECKING, Any
 from deeptutor.agents._shared.capability_result import emit_capability_result
 from deeptutor.agents.chat.context_budget import LLMRequestSnapshot
 from deeptutor.agents.chat.dsml_tool_calls import extract_dsml_tool_calls, has_dsml_tool_calls
+from deeptutor.agents.chat.text_tool_calls import (
+    extract_text_tool_calls,
+    has_text_tool_call_markup,
+)
 from deeptutor.core.agentic.messages import assistant_message_with_tool_calls
 from deeptutor.core.agentic.tool_dispatch import DispatchOutcome
 from deeptutor.core.agentic.usage import message_content_chars, record_streamed_usage
@@ -677,7 +681,10 @@ class AgentLoop:
                     # whether to render it as narration or as the answer.
                     # Inline <think> segments are split off to the thinking
                     # channel so the content stream stays user-facing.
-                    if not dsml_stream_active and has_dsml_tool_calls("".join(text_parts)):
+                    if not dsml_stream_active and (
+                        has_dsml_tool_calls("".join(text_parts))
+                        or has_text_tool_call_markup("".join(text_parts))
+                    ):
                         dsml_stream_active = True
                     segments = think_filter.feed(content)
                     if dsml_stream_active:
@@ -739,6 +746,15 @@ class AgentLoop:
             if dsml_calls:
                 tool_calls = dsml_calls
                 text = cleaned_text
+        # Same shape for the text-protocol ``<tool_call>`` block a text-only
+        # relay asks the model to write (BB-717): parsed into tool calls when
+        # well-formed or mechanically repairable; otherwise stripped, so raw
+        # protocol JSON never becomes the answer and an empty round gets the
+        # loop's normal nudge instead.
+        if not tool_calls and has_text_tool_call_markup(text):
+            text_calls, cleaned_text = extract_text_tool_calls(text)
+            tool_calls = text_calls
+            text = cleaned_text
 
         step_outcome = self._step_outcome(
             tool_calls=tool_calls,

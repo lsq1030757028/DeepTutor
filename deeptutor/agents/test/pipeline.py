@@ -34,6 +34,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import copy
+import json
 import os
 import re
 from typing import Any
@@ -231,6 +233,53 @@ def journey_loop_prompt(key: str, language: str = "zh") -> str:
     if not isinstance(section, dict):
         return ""
     return str(section.get(key) or "").strip()
+
+
+def enforce_adoption_card(
+    args: dict[str, Any],
+    cards: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """把模型的 ask_user 参数按服务端签发的采纳卡校回（BB-715 补修）。
+
+    纯函数。`cards` 是本轮 journey_prepare_adoption 返回的 `card`/`disclosure_md`，
+    按卡 id 索引。对 `questions` 里 id 命中的问题：选项、多选、自由文本三项以卡为
+    准（卡内容服务端验签，改了采纳就对不上）；intro 必须以 `disclosure_md` 原文
+    打头——模型自己写的导语保留在披露之后，不命中任何卡时原样返回。
+    """
+    questions = args.get("questions")
+    if not isinstance(questions, list) or not cards:
+        return args
+    matched_disclosures: list[str] = []
+    new_questions: list[Any] = []
+    for question in questions:
+        if not isinstance(question, dict):
+            new_questions.append(question)
+            continue
+        issued = cards.get(str(question.get("id") or "").strip())
+        if not issued:
+            new_questions.append(question)
+            continue
+        card = issued.get("card") or {}
+        fixed = dict(question)
+        if isinstance(card.get("options"), list):
+            fixed["options"] = copy.deepcopy(card["options"])
+        fixed["multi_select"] = bool(card.get("multi_select", True))
+        fixed["allow_free_text"] = bool(card.get("allow_free_text", False))
+        fixed.pop("multiSelect", None)
+        new_questions.append(fixed)
+        disclosure = str(issued.get("disclosure_md") or "").strip()
+        if disclosure and disclosure not in matched_disclosures:
+            matched_disclosures.append(disclosure)
+    if new_questions == questions and not matched_disclosures:
+        return args
+    fixed_args = dict(args)
+    fixed_args["questions"] = new_questions
+    if matched_disclosures:
+        own_intro = str(args.get("intro") or "").strip()
+        required = "\n\n".join(matched_disclosures)
+        if required not in own_intro:
+            fixed_args["intro"] = required + ("\n\n" + own_intro if own_intro else "")
+    return fixed_args
 
 
 class TestJourneyPipeline(AgenticChatPipeline):
@@ -599,6 +648,69 @@ class TestJourneyPipeline(AgenticChatPipeline):
             "returned_count": len(outcome.stories),
         }
         return render_business_outcome(outcome, language=context.language)
+
+    # ---- 采纳卡：导语与选项以服务端签发为准（BB-715 补修，2026-09-05） ----------
+    #
+    # 采纳卡由 journey_prepare_adoption 签发：`card`（id/选项/多选/禁自由文本）
+    # 和 `disclosure_md`（逐条 写什么/怎么清理/凭什么授权）。提示词要求模型把卡
+    # 原样传给 ask_user、intro 用 disclosure_md 原文——UAT 实测模型照贴时顺手删掉了
+    # 值为空的行，卡上 d3~d8 就没有"写什么"。**用户看到的披露不能取决于模型抄得
+    # 认不认真**：宿主记住本轮签发过的卡，模型调 ask_user 时把命中的问题按卡
+    # 校回、intro 以 disclosure_md 原文打头。模型自己的话保留在披露之后。
+
+    _adoption_cards: dict[str, dict[str, Any]] | None = None
+
+    def _remember_adoption_cards(self, tool_messages: list[dict[str, Any]]) -> None:
+        for message in tool_messages or []:
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, str) or "disclosure_md" not in content:
+                continue
+            start = content.find("{")
+            if start < 0:
+                continue
+            try:
+                data = json.loads(content[start:])
+            except ValueError:
+                continue
+            card = data.get("card") if isinstance(data, dict) else None
+            if not isinstance(card, dict) or not str(card.get("id") or "").strip():
+                continue
+            if self._adoption_cards is None:
+                self._adoption_cards = {}
+            self._adoption_cards[str(card["id"])] = {
+                "card": copy.deepcopy(card),
+                "disclosure_md": str(data.get("disclosure_md") or ""),
+            }
+
+    async def _dispatch_tool_calls(
+        self,
+        *,
+        tool_calls: list[dict[str, Any]],
+        context: UnifiedContext,
+        stream: StreamBus,
+        iteration_index: int,
+        stage: str = "exploring",
+    ) -> Any:
+        outcome = await super()._dispatch_tool_calls(
+            tool_calls=tool_calls,
+            context=context,
+            stream=stream,
+            iteration_index=iteration_index,
+            stage=stage,
+        )
+        self._remember_adoption_cards(list(getattr(outcome, "tool_messages", []) or []))
+        return outcome
+
+    def _augment_tool_kwargs(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        context: UnifiedContext,
+    ) -> dict[str, Any]:
+        kwargs = super()._augment_tool_kwargs(tool_name, args, context)
+        if tool_name == "ask_user" and self._adoption_cards:
+            kwargs = enforce_adoption_card(kwargs, self._adoption_cards)
+        return kwargs
 
     async def _await_user_reply_and_resolve(
         self,

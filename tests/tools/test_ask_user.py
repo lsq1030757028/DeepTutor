@@ -55,13 +55,25 @@ def test_legacy_options_strip_and_dedupe() -> None:
     assert _labels(payload.questions[0]) == ("A", "B", "C")
 
 
-def test_legacy_caps_option_count() -> None:
-    payload, _ = build_ask_user_payload(
+def test_too_many_options_are_refused_never_truncated() -> None:
+    """BB-715 (2026-09-05): the write-authorization card lost draft d8 because
+    the model put a "no authorization" row before 8 write cases and the 9th
+    option was cut silently. Over the cap is an error the model can act on."""
+    payload, err = build_ask_user_payload(
         question="Pick",
         options=[f"opt-{i}" for i in range(MAX_OPTIONS + 5)],
     )
-    assert payload is not None
-    assert len(payload.questions[0].options) == MAX_OPTIONS
+    assert payload is None
+    assert err is not None and "exceed" in err and str(MAX_OPTIONS) in err
+
+
+def test_a_gate_card_with_eight_drafts_plus_a_none_row_keeps_every_option() -> None:
+    options = ["全部不授权（推荐）"] + [f"d{i}" for i in range(1, 9)]
+    payload, err = build_ask_user_payload(
+        questions=[{"id": "write_authorization", "prompt": "授权哪些？", "options": options}]
+    )
+    assert err is None and payload is not None
+    assert _labels(payload.questions[0]) == tuple(options)
 
 
 def test_legacy_clips_oversized_question() -> None:

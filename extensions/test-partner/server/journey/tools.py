@@ -700,6 +700,10 @@ def _adopt_write_disclosure(case_draft: dict[str, Any],
     return rows
 
 
+#: 披露字段为空时卡上显示的占位（只可能出现在闸收紧之前起草的老批次上）。
+BLANK_DISCLOSURE_FIELD = "（草稿未填写——采纳前请让我补齐）"
+
+
 def _render_adopt_disclosure_md(case_draft: dict[str, Any],
                                 selected_draft_ids: list[str],
                                 disclosure: list[dict[str, Any]]) -> str:
@@ -721,9 +725,12 @@ def _render_adopt_disclosure_md(case_draft: dict[str, Any],
             lines.append(f"- {draft_id} {title}：只读，不写数据")
             continue
         lines.append(f"- {draft_id} {title}：**会写数据**")
-        lines.append(f"  - 写什么：{row['write_scope']}")
-        lines.append(f"  - 怎么清理：{row['cleanup']}")
-        lines.append(f"  - 凭什么授权：{row['authorization']}")
+        # 三行永远齐（BB-715 补修，2026-09-05）：草稿闸现在三字段都必填；
+        # 老批次里仍可能有空值，空值要在卡上**看得见**是空的，而不是一行空白
+        # 让模型顺手删掉——那正是 d3~d8 缺"写什么"行的来路。
+        lines.append(f"  - 写什么：{row['write_scope'] or BLANK_DISCLOSURE_FIELD}")
+        lines.append(f"  - 怎么清理：{row['cleanup'] or BLANK_DISCLOSURE_FIELD}")
+        lines.append(f"  - 凭什么授权：{row['authorization'] or BLANK_DISCLOSURE_FIELD}")
     return "\n".join(lines)
 
 
