@@ -674,3 +674,148 @@ async def test_existing_ask_user_resume_resolves_business_name_into_session_proj
     assert session.preferences["tapd_context"]["project"] == {"id": "2", "name": "Mengban Web"}
     assert "internal workspace_id=2" in dispatch.tool_messages[0]["content"]
     assert all(call[0] != "tapd_context_save" for call in pipeline.registry.calls)
+
+
+# ── BB-716（2026-09-05）：冷会话里档案默认要让用户看见，不许静默沿用 ───────────
+#
+# UAT 判据 2 残留 2：用户冷启动说"帮我拉一下TAPD的需求"，没出任何确认卡，直接查了
+# 共享档案里 0828 存下的默认项目（用户早已不做的那个）。档案默认是**上一次**的选择，
+# 这一次用不用，得让他看一眼——确认卡不算追问（用户 2026-09-05 拍板）。
+
+
+def _cold_saved_default_pipeline(projects=("DeepTutor", "Mengban Web")):
+    return _pipeline(
+        {
+            "tapd_context_status": _ready_status(projects=projects),
+            "tapd_context_resolve": [
+                _resolved("1", "DeepTutor", "saved_default"),
+                _resolved(
+                    "1",
+                    "DeepTutor",
+                    "explicit",
+                    session_claim="tapdsc1.confirmed.signature",
+                ),
+            ],
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_cold_session_with_a_saved_default_asks_before_using_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _SessionStore()
+    monkeypatch.setattr("deeptutor.services.session.get_session_store", lambda: session)
+    pipeline = _cold_saved_default_pipeline()
+
+    context = UnifiedContext(session_id="cold", user_message="帮我拉一下TAPD的需求", language="zh")
+    briefing = await pipeline._tapd_context_briefing(context)
+
+    # 不是"上下文已齐"，是一张卡：档案默认放第一个并标明来源，其余项目跟在后面。
+    assert "上下文已齐" not in briefing
+    assert briefing.count("只调用一次 ask_user") == 1
+    assert "tapd_context_project:" in briefing
+    assert "选项=DeepTutor / Mengban Web" in briefing
+    assert "档案里已保存的默认" in briefing
+    assert "workspace_id" not in briefing
+    # 身份与角色档案里有，卡上不该再问。
+    assert "tapd_context_identity" not in briefing
+    assert "tapd_context_role" not in briefing
+    assert context.metadata["tapd_context"]["status"] == "needs_input"
+    assert context.metadata["tapd_context"]["project_source"] == "saved_default"
+    # 还没确认，宿主不许把档案默认写成会话项目。
+    assert "tapd_context" not in session.preferences
+
+    # 用户点了推荐项（沿用档案默认）：宿主拿档案里的身份/角色去换会话上下文并落会话。
+    selected = await pipeline._persist_tapd_answers(
+        context,
+        {
+            "answers": [
+                {"questionId": "tapd_context_project", "text": "DeepTutor"},
+                {"questionId": "tapd_context_remember_project", "text": "仅本次"},
+            ]
+        },
+    )
+    assert selected == TapdProject("1", "DeepTutor")
+    assert pipeline.registry.calls[-1] == (
+        "tapd_context_resolve",
+        {"project_hint": "DeepTutor", "tapd_identity": "张三", "business_role": "QA 负责人"},
+    )
+    assert session.preferences["tapd_context"]["project"] == {"id": "1", "name": "DeepTutor"}
+    assert session.preferences["tapd_context"]["session_context"] == "tapdsc1.confirmed.signature"
+    assert all(call[0] != "tapd_context_save" for call in pipeline.registry.calls)
+
+
+@pytest.mark.asyncio
+async def test_a_confirmed_project_stays_silent_for_the_rest_of_the_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """确认卡只弹一次：同一会话后续轮次带着会话项目走 explicit，不再问。"""
+    session = _SessionStore()
+    session.preferences["tapd_context"] = {
+        "project": {"id": "1", "name": "DeepTutor"},
+        "tapd_identity": "张三",
+        "business_role": "QA 负责人",
+        "session_context": "tapdsc1.confirmed.signature",
+        "session_context_expires_at": "2026-08-14T08:15:00Z",
+    }
+    monkeypatch.setattr("deeptutor.services.session.get_session_store", lambda: session)
+    pipeline = _pipeline(
+        {
+            "tapd_context_status": _ready_status(projects=("DeepTutor", "Mengban Web")),
+            "tapd_context_resolve": _resolved("1", "DeepTutor", "explicit"),
+        }
+    )
+    context = UnifiedContext(session_id="warm", user_message="看看 TAPD 里已提测的", language="zh")
+    briefing = await pipeline._tapd_context_briefing(context)
+    assert "上下文已齐" in briefing
+    assert "tapd_context_project:" not in briefing
+    assert pipeline.registry.calls[-1][1]["project_hint"] == "DeepTutor"
+
+
+@pytest.mark.asyncio
+async def test_a_single_accessible_project_needs_no_card(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """只有一个项目可选时没有第二个选项，卡片就是噪音——照旧静默继续。"""
+    session = _SessionStore()
+    monkeypatch.setattr("deeptutor.services.session.get_session_store", lambda: session)
+    pipeline = _cold_saved_default_pipeline(projects=("DeepTutor",))
+    briefing = await pipeline._tapd_context_briefing(
+        UnifiedContext(session_id="cold-1", user_message="帮我拉一下TAPD的需求", language="zh")
+    )
+    assert "上下文已齐" in briefing
+    assert "tapd_context_project:" not in briefing
+
+
+def test_require_visible_project_confirmation_is_a_pure_gate() -> None:
+    from dataclasses import replace
+
+    from deeptutor.services.tapd_context import (
+        TapdContextResolution,
+        TapdSessionContext,
+        require_visible_project_confirmation,
+    )
+
+    ready = TapdContextResolution(
+        status="ready",
+        selected_project=TapdProject("1", "DeepTutor"),
+        project_source="saved_default",
+        tapd_identity="张三",
+        role="QA 负责人",
+        project_options=("DeepTutor", "Mengban Web"),
+    )
+    gated = require_visible_project_confirmation(ready)
+    assert gated.status == "needs_input"
+    assert gated.missing == ("project",)
+    assert gated.selected_project == TapdProject("1", "DeepTutor")
+    assert gated.project_source == "saved_default"
+    # 显式点名 / 唯一可访问 / 会话里已有项目 / 只有一个选项：四种情况都不降级。
+    explicit = replace(ready, project_source="explicit")
+    assert require_visible_project_confirmation(explicit) is explicit
+    unique = replace(ready, project_source="unique_accessible")
+    assert require_visible_project_confirmation(unique) is unique
+    warm = TapdSessionContext(project=TapdProject("1", "DeepTutor"))
+    assert require_visible_project_confirmation(ready, session=warm) is ready
+    single = replace(ready, project_options=("DeepTutor",))
+    assert require_visible_project_confirmation(single) is single

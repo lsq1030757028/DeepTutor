@@ -89,7 +89,14 @@ TOOL_NAMES: tuple[str, ...] = JUDGEMENT_TOOLS + MECHANICAL_TOOLS + READ_TOOLS
 #: `change_tier` 同理：改档是轻确认（ADR-3），不是旅程业务工序。
 #: `collect_defects` 是执行后的缺陷汇集出口（ADR-4）：机械派生 + 一次性上浮，
 #: 不是第十道工序（没有失败用例的 run 根本不该有这一步）。
-GATE_TOOLS: tuple[str, ...] = ("write_confirm", "change_tier", "collect_defects")
+#: `prepare_adoption`（2026-09-05，BB-714）：采纳卡的**签发**从 `adopt` 里拆出来。
+#: 此前采纳卡由 `journey_adopt(prepare_adoption=true)` 签发，于是轨迹里在采纳卡
+#: 出现之前必然先出现一次 `journey_adopt`——用户看到的是「还没勾选就调了采纳」，
+#: 而"这次是空调用"只有读服务端参数才知道。拆开之后 `journey_adopt` 只剩一条路：
+#: 带经验签的用户决定落账；采纳卡出现之前，任何 `journey_adopt` 调用都被拒。
+GATE_TOOLS: tuple[str, ...] = (
+    "write_confirm", "change_tier", "collect_defects", "prepare_adoption",
+)
 
 #: 自由能力面（批次 7 / spec Delta AC25-AC29）：**不依附任何批次**的只读排查动作。
 #: 它们既不是九原子，也不是人闸——不建批次、不写 events.jsonl、不产九格产物，
@@ -693,12 +700,83 @@ def _adopt_write_disclosure(case_draft: dict[str, Any],
     return rows
 
 
+def _render_adopt_disclosure_md(case_draft: dict[str, Any],
+                                selected_draft_ids: list[str],
+                                disclosure: list[dict[str, Any]]) -> str:
+    """采纳卡导语的**完整**披露文本（BB-715）。
+
+    2026-09-05 UAT：d6/d8 的写入/清理披露在采纳卡上被截断成「…」——模型把三字段
+    改写进 `ask_user` 的 intro，而 intro 曾有 400 字上限。这里由服务端把披露渲染
+    成一段可原样贴进 intro 的 markdown：每条写用例三行（写什么 / 怎么清理 / 凭什么），
+    一字不截。模型照贴即可，不需要自己"概括"。
+    """
+    by_id = {str(c.get("draft_id") or ""): c for c in case_draft.get("cases") or []}
+    rows_by_id = {str(r.get("draft_id") or ""): r for r in disclosure}
+    lines: list[str] = []
+    for draft_id in dict.fromkeys(str(d or "") for d in selected_draft_ids or []):
+        case = by_id.get(draft_id) or {}
+        title = str(case.get("title") or draft_id)
+        row = rows_by_id.get(draft_id)
+        if row is None:
+            lines.append(f"- {draft_id} {title}：只读，不写数据")
+            continue
+        lines.append(f"- {draft_id} {title}：**会写数据**")
+        lines.append(f"  - 写什么：{row['write_scope']}")
+        lines.append(f"  - 怎么清理：{row['cleanup']}")
+        lines.append(f"  - 凭什么授权：{row['authorization']}")
+    return "\n".join(lines)
+
+
+@_requires_trusted_owner
+def prepare_adoption(*, batch_id: str, selected_draft_ids: list[str],
+                     _bridge_claims: Any = None,
+                     caller_surface: str = "unknown",
+                     root: str | None = None) -> dict[str, Any]:
+    """签发采纳卡（硬闸的第一步，BB-714 拆分）。**不落任何产物，不进 adopt 幂等账。**
+
+    服务端算出可信采纳卡（`card`）+ 写用例披露（`disclosure`，AC6 三字段）+
+    可原样贴进 `ask_user` intro 的完整披露文本（`disclosure_md`）。
+    模型把卡传给 `ask_user`，用户答复后才调 `journey_adopt`。
+
+    只在可信 Test 会话内可用：工作台面没有采纳卡（写授权走独立写确认卡）。
+    """
+    blocked = _guarded(batch_id, "prepare_adoption", caller_surface, root)
+    if blocked:
+        return blocked
+    if _bridge_claims is None:
+        return _err("E_USER_DECISION_REQUIRED",
+                    "采纳卡准备只在可信 Test 会话内进行。")
+    owner = _batch_partition(batch_id, root)
+    if str(getattr(_bridge_claims, "owner", "") or "") != owner:
+        return _err("E_USER_DECISION_INVALID", "用户决定不属于当前批次 owner。")
+    if not artifacts.has_artifact(batch_id, "case_draft", root=root):
+        return _err("E_NO_CASE_DRAFT",
+                    "还没有用例草稿，采纳无从谈起——先起草再采纳。")
+    case_draft = artifacts.load_artifact(batch_id, "case_draft", root=root)
+    try:
+        card = decision_auth.expected_adopt_question(
+            batch_id, case_draft, selected_draft_ids)
+    except decision_auth.DecisionAuthError as exc:
+        if "最多能披露" in str(exc):
+            return _err(
+                "E_TOO_MANY_WRITE_CASES",
+                f"会写数据的用例超过一张卡能放下的数量（上限 "
+                f"{decision_auth.MAX_WRITE_CHOICES} 条），我分两批请你确认。",
+                machine=f"{exc} 把采纳集拆成多个批次分别采纳,"
+                        "每批写用例不超过上限;不要为了塞进一张卡而减少披露。")
+        return _err("E_USER_DECISION_INVALID", str(exc))
+    disclosure = _adopt_write_disclosure(case_draft, selected_draft_ids)
+    return _ok("NEEDS_GATE", needs_gate="adoption", card=card,
+               disclosure=disclosure,
+               disclosure_md=_render_adopt_disclosure_md(
+                   case_draft, selected_draft_ids, disclosure))
+
+
 @_requires_trusted_owner
 @_serializes_batch_mutation
 def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "",
           adopted_via: str = "workbench_selection", confirmed_by: str = "",
           idempotency_key: str = "", skip_drift_check: bool = False,
-          prepare_adoption: bool = False,
           authorized_write_draft_ids: list[str] | None = None,
           decision_context: str = "", _bridge_claims: Any = None,
           _decision_arguments: dict[str, Any] | None = None,
@@ -709,14 +787,18 @@ def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "
 
     经可信桥接（capability 面）调用时，采纳必须携带经 `decision_auth` 验签的
     用户决定：卡 id 绑整个采纳集的内容摘要、选项逐条绑写用例摘要、jti 防重放。
-    两步走（与 `journey_ingest` 的实体卡同构）：
+    两步走（与 `journey_ingest` 的实体卡同构），**两步是两个工具**（BB-714）：
 
-    1. `prepare_adoption=true`：服务端算出可信采纳卡 + 写用例披露
+    1. `journey_prepare_adoption`：服务端算出可信采纳卡 + 写用例披露
        （AC6 三字段），不落任何产物；
     2. 模型把卡传给 `ask_user`，用户答复后带 `decision_context` +
-       `authorized_write_draft_ids` 再调一次——采纳与写授权一口气落账，
+       `authorized_write_draft_ids` 调本工具——采纳与写授权一口气落账，
        派生 `write_confirm` 事件（`via="adopt_card"`，2026-08-19 Delta 裁决
        复用事件类型），`execute_run.write_authorization` 的取数口零改动。
+
+    可信 Test 会话里**没有决定就没有采纳**：`decision_context` 为空直接拒
+    （E_USER_DECISION_REQUIRED），不落账、不起草。采纳卡出现之前本工具没有任何
+    合法调用路径，轨迹里在卡之前出现 `journey_adopt` 即是异常。
 
     工作台面（无桥接声明）保持既有语义：采纳照旧、写授权走独立
     `journey_write_confirm` 卡——两面各自完整，互不留洞。
@@ -724,40 +806,29 @@ def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "
     `skip_drift_check` 只服务单测与离线回放，**不是给调用方的绕过开关**：
     MCP 工具面不暴露这个参数（见 `main.py` 的签名），所以从 DT 侧调不到它。
     """
+    requested_writes = list(dict.fromkeys(
+        str(d or "") for d in authorized_write_draft_ids or []))
+    capability_call = _bridge_claims is not None
+    if capability_call and not str(decision_context or "").strip():
+        # 在 _guarded 之前拒：没有决定的采纳连 tool_call 事件都不该留——
+        # 那条事件正是 BB-714 里用户看到的「采纳前调了采纳」。
+        check = gate.require_batch(batch_id, root=root)
+        if not check["ok"]:
+            return _err(check["code"], check["message"])
+        return _err(
+            "E_USER_DECISION_REQUIRED",
+            "采纳必须先经过你在采纳卡上的确认，我先把采纳卡发给你。",
+            machine="先调 journey_prepare_adoption 取采纳卡与披露，把 card 原样传给 "
+                    "ask_user；用户答复后再调 journey_adopt（selected_draft_ids 不变，"
+                    "authorized_write_draft_ids 用用户勾选的写用例草稿号）。")
+
     blocked = _guarded(batch_id, "adopt", caller_surface, root)
     if blocked:
         return blocked
 
-    requested_writes = list(dict.fromkeys(
-        str(d or "") for d in authorized_write_draft_ids or []))
-    capability_call = _bridge_claims is not None
     owner = _batch_partition(batch_id, root)
     if capability_call and str(getattr(_bridge_claims, "owner", "") or "") != owner:
         return _err("E_USER_DECISION_INVALID", "用户决定不属于当前批次 owner。")
-
-    if prepare_adoption:
-        if not capability_call:
-            return _err("E_USER_DECISION_REQUIRED",
-                        "采纳卡准备只在可信 Test 会话内进行。")
-        if not artifacts.has_artifact(batch_id, "case_draft", root=root):
-            return _err("E_NO_CASE_DRAFT",
-                        "还没有用例草稿，采纳无从谈起——先起草再采纳。")
-        case_draft = artifacts.load_artifact(batch_id, "case_draft", root=root)
-        try:
-            card = decision_auth.expected_adopt_question(
-                batch_id, case_draft, selected_draft_ids)
-        except decision_auth.DecisionAuthError as exc:
-            if "最多能披露" in str(exc):
-                return _err(
-                    "E_TOO_MANY_WRITE_CASES",
-                    f"会写数据的用例超过一张卡能放下的数量（上限 "
-                    f"{decision_auth.MAX_WRITE_CHOICES} 条），我分两批请你确认。",
-                    machine=f"{exc} 把采纳集拆成多个批次分别采纳,"
-                            "每批写用例不超过上限;不要为了塞进一张卡而减少披露。")
-            return _err("E_USER_DECISION_INVALID", str(exc))
-        return _ok("NEEDS_GATE", needs_gate="adoption", card=card,
-                   disclosure=_adopt_write_disclosure(
-                       case_draft, selected_draft_ids))
 
     decision: dict[str, Any] = {}
     if capability_call:
@@ -785,7 +856,6 @@ def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "
                     "adopted_via": adopted_via,
                     "confirmed_by": confirmed_by,
                     "idempotency_key": idempotency_key,
-                    "prepare_adoption": False,
                     "authorized_write_draft_ids": list(
                         authorized_write_draft_ids or []),
                 },

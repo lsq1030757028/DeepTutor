@@ -369,19 +369,54 @@ async def test_the_adoption_confirm_step_demands_a_decision_and_injects_it(monke
     assert decision_payload["args_sha256"] == bridge_payload["args_sha256"]
 
 
+def _prepare_adapter(manager: _Manager) -> MCPToolAdapter:
+    return MCPToolAdapter(
+        manager=manager,  # type: ignore[arg-type]
+        server_name="test-partner",
+        original_name="journey_prepare_adoption",
+        description="prepare adoption card",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "batch_id": {"type": "string"},
+                "selected_draft_ids": {"type": "array", "default": []},
+                "bridge_context": {"type": "string", "default": ""},
+            },
+        },
+        tool_timeout=5,
+    )
+
+
 @pytest.mark.asyncio
-async def test_the_prepare_step_is_exempt_or_the_gate_deadlocks_itself(monkeypatch) -> None:
-    """环节 3b：prepare 这一步就是「去拿卡」，它自己要卡就成了先有鸡还是先有蛋。"""
+async def test_the_card_issuing_tool_needs_no_decision_or_the_gate_deadlocks_itself(
+    monkeypatch,
+) -> None:
+    """环节 3b：「去拿卡」是另一个工具（BB-714），它自己要卡就成了先有鸡还是先有蛋。"""
+    monkeypatch.setenv("TEST_JOURNEY_BRIDGE_SECRET", SECRET)
+    manager = _Manager()
+    adapter = _prepare_adapter(manager)
+    trusted = TrustedJourneyContext("user-a", "session-a", "turn-a", "test", "capability")
+    with bind_trusted_journey_context(trusted):
+        prepared = await adapter.execute(batch_id=ADOPT_BATCH, selected_draft_ids=["d1"])
+    assert prepared.success is True and len(manager.calls) == 1
+    sent = manager.calls[0]["arguments"]
+    assert sent["bridge_context"]
+    assert not sent.get("decision_context"), "签卡步不该夹带写授权级别的用户决定"
+
+
+@pytest.mark.asyncio
+async def test_journey_adopt_has_no_prepare_exemption_anymore(monkeypatch) -> None:
+    """BB-714：`prepare_adoption=true` 不再是 journey_adopt 的免闸口——采纳卡出现之前
+    任何 journey_adopt 调用都不得派发到服务端（轨迹里也就不会出现它）。"""
     monkeypatch.setenv("TEST_JOURNEY_BRIDGE_SECRET", SECRET)
     manager = _Manager()
     adapter = _adopt_adapter(manager)
     trusted = TrustedJourneyContext("user-a", "session-a", "turn-a", "test", "capability")
     with bind_trusted_journey_context(trusted):
-        prepared = await adapter.execute(batch_id=ADOPT_BATCH, prepare_adoption=True)
-    assert prepared.success is True and len(manager.calls) == 1
-    sent = manager.calls[0]["arguments"]
-    assert sent["bridge_context"]
-    assert not sent.get("decision_context"), "prepare 步不该夹带写授权级别的用户决定"
+        refused = await adapter.execute(batch_id=ADOPT_BATCH, prepare_adoption=True)
+    assert refused.success is False
+    assert manager.calls == [], "无决定的 journey_adopt 被派发到了服务端"
+    assert "journey_prepare_adoption" in str(refused.content)
 
 
 @pytest.mark.asyncio

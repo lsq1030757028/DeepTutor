@@ -2,13 +2,25 @@
 
 import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
 
+import SimpleMarkdownRenderer from "@/components/common/SimpleMarkdownRenderer";
+import { useTurnT } from "@/hooks/useTurnT";
+import type { AppLanguage } from "@/i18n/init";
 import {
   collectNarrationCallIds,
   shouldAppendEventContent,
 } from "@/lib/stream";
 import type { StreamEvent } from "@/lib/unified-ws";
+
+// [fork] 卡上的文字按 markdown 渲染（BB-715）。intro / prompt / 选项说明都是模型
+// 或服务端写的，带 **加粗** 与列表是常态——采纳卡的写用例披露就是一段列表。
+// 之前当纯文本塞进 <div>，用户看到的是原样的星号。variant="trace" 是最紧凑的一档，
+// 段落间距 my-1，与卡片的 13px 行高相称。
+function CardText({ text, className }: { text: string; className?: string }) {
+  return (
+    <SimpleMarkdownRenderer content={text} variant="trace" className={className} />
+  );
+}
 
 /**
  * v3 ``ask_user`` payload. Mirrors ``deeptutor.tools.ask_user.AskUserPayload``.
@@ -413,6 +425,7 @@ export const AskUserOptions = memo(function AskUserOptions({
   onSubmit,
   collapsible,
   defaultCollapsed,
+  language,
 }: {
   data: AskUserCardData;
   onSubmit: (payload: {
@@ -427,6 +440,9 @@ export const AskUserOptions = memo(function AskUserOptions({
   collapsible?: boolean;
   /** Only honoured when ``collapsible`` is true. */
   defaultCollapsed?: boolean;
+  /** [fork] 本轮的回复语种（BB-698）。给了就按它取外壳文案（Pick an option /
+   * Next question / Submit…），不给跟界面语言——普通聊天零变化。 */
+  language?: AppLanguage | null;
 }) {
   if (data.resolved) {
     return (
@@ -435,10 +451,17 @@ export const AskUserOptions = memo(function AskUserOptions({
         answers={data.answers ?? []}
         collapsible={collapsible ?? true}
         defaultCollapsed={defaultCollapsed ?? true}
+        language={language}
       />
     );
   }
-  return <InteractiveAskUserCard payload={data.payload} onSubmit={onSubmit} />;
+  return (
+    <InteractiveAskUserCard
+      payload={data.payload}
+      onSubmit={onSubmit}
+      language={language}
+    />
+  );
 });
 AskUserOptions.displayName = "AskUserOptions";
 
@@ -447,14 +470,16 @@ AskUserOptions.displayName = "AskUserOptions";
 const InteractiveAskUserCard = memo(function InteractiveAskUserCard({
   payload,
   onSubmit,
+  language,
 }: {
   payload: AskUserPayload;
   onSubmit: (payload: {
     text?: string;
     answers?: Array<{ questionId: string; text: string }>;
   }) => void;
+  language?: AppLanguage | null;
 }) {
-  const { t } = useTranslation();
+  const t = useTurnT(language);
   const totalQuestions = payload.questions.length;
 
   // Picked option labels per question. Single-select questions hold at
@@ -574,7 +599,11 @@ const InteractiveAskUserCard = memo(function InteractiveAskUserCard({
         </div>
         <div className="flex-1">
           <div className="text-[13px] font-medium leading-snug text-[var(--foreground)]">
-            {payload.intro || t("Please answer to continue.")}
+            {payload.intro ? (
+              <CardText text={payload.intro} />
+            ) : (
+              t("Please answer to continue.")
+            )}
           </div>
           <div className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
             {submitted
@@ -636,6 +665,7 @@ const InteractiveAskUserCard = memo(function InteractiveAskUserCard({
         onPickOption={(label) => pickOption(activeQuestion, label)}
         onSelectCustom={() => selectCustom(activeQuestion)}
         onCustomTextChange={(text) => updateCustomText(activeQuestion.id, text)}
+        language={language}
       />
 
       <div className="mt-3 flex items-center justify-between gap-2 border-t border-[var(--border)]/60 pt-3">
@@ -695,6 +725,7 @@ const QuestionBody = memo(function QuestionBody({
   onPickOption,
   onSelectCustom,
   onCustomTextChange,
+  language,
 }: {
   question: AskUserQuestion;
   pickedLabels: string[];
@@ -704,8 +735,9 @@ const QuestionBody = memo(function QuestionBody({
   onPickOption: (label: string) => void;
   onSelectCustom: () => void;
   onCustomTextChange: (text: string) => void;
+  language?: AppLanguage | null;
 }) {
-  const { t } = useTranslation();
+  const t = useTurnT(language);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -717,7 +749,7 @@ const QuestionBody = memo(function QuestionBody({
   return (
     <>
       <div className="mt-3 text-[14px] font-medium leading-snug text-[var(--foreground)]">
-        {question.prompt}
+        <CardText text={question.prompt} />
         {question.multi_select ? (
           <span className="ml-1.5 text-[11px] font-normal text-[var(--muted-foreground)]">
             {t("Select all that apply.")}
@@ -762,7 +794,7 @@ const QuestionBody = memo(function QuestionBody({
                   </span>
                   {option.description ? (
                     <span className="mt-0.5 block text-[11.5px] leading-snug text-[var(--muted-foreground)]">
-                      {option.description}
+                      <CardText text={option.description} />
                     </span>
                   ) : null}
                 </span>
@@ -825,13 +857,15 @@ const ResolvedAskUserCard = memo(function ResolvedAskUserCard({
   answers,
   collapsible,
   defaultCollapsed,
+  language,
 }: {
   payload: AskUserPayload;
   answers: AskUserAnswer[];
   collapsible: boolean;
   defaultCollapsed: boolean;
+  language?: AppLanguage | null;
 }) {
-  const { t } = useTranslation();
+  const t = useTurnT(language);
   // Null means "follow defaultCollapsed"; once the user toggles, their
   // explicit choice wins across research-progress re-renders.
   const [manualCollapsed, setManualCollapsed] = useState<boolean | null>(null);
@@ -899,7 +933,7 @@ const ResolvedAskUserCard = memo(function ResolvedAskUserCard({
                 </span>
                 <div className="min-w-0 flex-1 space-y-0.5">
                   <div className="text-[12px] font-medium leading-snug text-[var(--foreground)]">
-                    {q.prompt}
+                    <CardText text={q.prompt} />
                   </div>
                   <div className="text-[11px] leading-snug text-[var(--muted-foreground)]/70">
                     {value ? (

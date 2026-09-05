@@ -27,7 +27,9 @@
 
 import type { TFunction } from "i18next";
 import { useMemo } from "react";
-import { useTranslation } from "react-i18next";
+
+import { useTurnT } from "@/hooks/useTurnT";
+import type { AppLanguage } from "@/i18n/init";
 
 /** 页脚那句边界说明是强制的（交互稿 §6f）。 */
 export function journeyCardCopy(t: TFunction) {
@@ -116,8 +118,9 @@ export function journeyCardCopy(t: TFunction) {
 
 export type JourneyCardCopy = ReturnType<typeof journeyCardCopy>;
 
-/** 组件侧入口。`t` 变了（切语言）才重算。 */
-export function useJourneyCardCopy(): JourneyCardCopy {
-  const { t } = useTranslation();
+/** 组件侧入口。`t` 变了（切语言 / 本轮语种到位）才重算。
+ *  `language` 是本轮的回复语种（BB-698）：给了就按它取文案，不给跟界面。 */
+export function useJourneyCardCopy(language?: AppLanguage | null): JourneyCardCopy {
+  const t = useTurnT(language);
   return useMemo(() => journeyCardCopy(t), [t]);
 }

@@ -315,6 +315,53 @@ def resolve_shared_context(
     )
 
 
+#: 共享档案里「已保存的默认项目」在冷会话里只是候选，不是决定（BB-716）。
+#: 2026-09-05 UAT：用户冷启动说"帮我拉一下TAPD的需求"，没有任何确认就查了
+#: 档案里 0828 存下的 小铁台球（用户早已不做），而他以为的默认是 AI手办。
+#: 档案默认是**上一次**的选择；这一次用不用，得让他看见。
+SILENT_PROJECT_SOURCES = frozenset({"explicit", "unique_accessible"})
+
+
+def require_visible_project_confirmation(
+    resolution: TapdContextResolution,
+    *,
+    session: TapdSessionContext = TapdSessionContext(),
+) -> TapdContextResolution:
+    """冷会话 + 非显式来源 + 多个可访问项目 → 把「就绪」降成「需确认项目」。
+
+    三个条件缺一不可：
+    - 本会话还没有项目上下文（`session.project` 为空）——同一会话里用户确认过
+      一次之后，后续轮次照旧静默继续；
+    - 来源不是 `explicit`（用户这句话点了名）也不是 `unique_accessible`
+      （只有一个项目可选，无所谓确认）；
+    - 可访问项目多于一个——否则卡上没有第二个选项。
+
+    降级后 `selected_project` 保留：它是卡上的推荐项，答复按名字匹配回来；
+    `project_source` 也保留，调用方能看出这条是"档案默认待确认"。
+    """
+    if resolution.status != "ready" or resolution.selected_project is None:
+        return resolution
+    if session.project is not None and session.project.name:
+        return resolution
+    if resolution.project_source in SILENT_PROJECT_SOURCES:
+        return resolution
+    if len(resolution.project_options) <= 1:
+        return resolution
+    return TapdContextResolution(
+        status="needs_input",
+        selected_project=resolution.selected_project,
+        project_source=resolution.project_source,
+        tapd_identity=resolution.tapd_identity,
+        role=resolution.role,
+        session_context=resolution.session_context,
+        session_context_expires_at=resolution.session_context_expires_at,
+        project_options=resolution.project_options,
+        missing=("project",) + tuple(m for m in resolution.missing if m != "project"),
+        error_code=resolution.error_code,
+        error=resolution.error,
+    )
+
+
 def render_context_briefing(resolution: TapdContextResolution, *, language: str) -> str:
     """Render host-verified context and one existing ``ask_user`` interaction."""
     zh = str(language or "").lower().startswith("zh")
@@ -374,12 +421,28 @@ def render_context_briefing(resolution: TapdContextResolution, *, language: str)
         else "Context is incomplete. Call ask_user once with one card showing only business names, identity, and role."
     )
     if "project" in resolution.missing:
-        names = " / ".join(resolution.project_options)
-        lines.append(
-            f"- tapd_context_project: 这次要验收哪个项目？选项={names}"
-            if zh
-            else f"- tapd_context_project: Which project are you testing? Options={names}"
-        )
+        recommended = project.name if project is not None else ""
+        ordered = [recommended] if recommended else []
+        ordered += [name for name in resolution.project_options if name != recommended]
+        names = " / ".join(ordered)
+        if recommended:
+            # 档案里的默认放第一个并标明来源：用户点一下就是"沿用"，看一眼就知道
+            # 上次存的是什么——BB-716 里他正是没看到这一眼。
+            lines.append(
+                f"- tapd_context_project: 这次要验收哪个项目？选项={names}；"
+                f"推荐第一个「{recommended}」（档案里已保存的默认，上次选的），"
+                "把它放在第一个选项并标（推荐）"
+                if zh
+                else f"- tapd_context_project: Which project are you testing? Options={names}; "
+                f"recommend the first one, '{recommended}' (the saved default from last time); "
+                "put it first and mark it (recommended)"
+            )
+        else:
+            lines.append(
+                f"- tapd_context_project: 这次要验收哪个项目？选项={names}"
+                if zh
+                else f"- tapd_context_project: Which project are you testing? Options={names}"
+            )
         lines.append(
             "- tapd_context_remember_project: 以后默认使用这次选择吗？选项=仅本次 / 设为默认"
             if zh
@@ -518,6 +581,7 @@ def _safe_context_reason(code: str, *, zh: bool) -> str:
 
 
 __all__ = [
+    "SILENT_PROJECT_SOURCES",
     "TapdContextResolution",
     "TapdProject",
     "TapdSessionContext",
@@ -528,6 +592,7 @@ __all__ = [
     "project_from_resolve_payload",
     "project_hint_from_message",
     "render_context_briefing",
+    "require_visible_project_confirmation",
     "resolve_shared_context",
     "validate_context_resolve_payload",
     "validate_context_save_payload",

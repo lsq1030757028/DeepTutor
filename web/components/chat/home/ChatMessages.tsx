@@ -50,6 +50,7 @@ import {
 import { extractVisualizeResult } from "@/lib/visualize-types";
 import type { StreamEvent } from "@/lib/unified-ws";
 import { hasVisibleMarkdownContent } from "@/lib/markdown-display";
+import { turnLanguageOf } from "@/lib/turn-language";
 import type { SelectedBookReference } from "@/lib/book-references";
 import { buildVisiblePath, type SiblingInfo } from "@/lib/message-branches";
 import { turnAnchorKey } from "@/lib/chat-outline";
@@ -408,6 +409,9 @@ const AssistantMessage = memo(function AssistantMessage({
     () => extractAskUserPayload(msg.events),
     [msg.events],
   );
+  // [fork] 本轮的回复语种（BB-698）：测试轮由服务端按用户的话判定并写进事件流，
+  // 人闸卡与四张富卡的外壳文案按它取；普通聊天没有这条事件，得到 null，照旧跟界面。
+  const turnLanguage = useMemo(() => turnLanguageOf(msg.events), [msg.events]);
 
   // Interleaved segments for the default chat surface — text emitted
   // before the ask_user call renders above the card; text emitted by
@@ -468,6 +472,7 @@ const AssistantMessage = memo(function AssistantMessage({
               }}
               collapsible={researchInProgress}
               defaultCollapsed={researchInProgress}
+              language={turnLanguage}
             />
           ) : null}
           <ResearchOutlineEditor
@@ -525,7 +530,7 @@ const AssistantMessage = memo(function AssistantMessage({
           {msg.content ? (
             <AssistantResponse content={msg.content} isStreaming={isStreaming} />
           ) : null}
-          <TestJourneyCards state={testJourney} />
+          <TestJourneyCards state={testJourney} language={turnLanguage} />
         </>
       ) : hasInlineAskUser ? (
         // Default chat surface with one or more ask_user calls: render
@@ -547,6 +552,7 @@ const AssistantMessage = memo(function AssistantMessage({
                 if (!onSubmitUserReply) return;
                 onSubmitUserReply(reply);
               }}
+              language={turnLanguage}
             />
           ),
         )
@@ -564,6 +570,7 @@ const AssistantMessage = memo(function AssistantMessage({
             if (!onSubmitUserReply) return;
             onSubmitUserReply(reply);
           }}
+          language={turnLanguage}
         />
       ) : null}
     </>

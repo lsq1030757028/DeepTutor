@@ -275,16 +275,20 @@ human_gates: |-
   - **默认一条写用例都不勾。**其余环节拍错了最多重来一遍，这一类拍错了会改动
     被测系统的数据，默认全选等于把"我没细看"变成"我同意"。
 
-  采纳走**两步**（与需求实体卡同构，卡由服务端签发，改了就对不上）：
+  采纳走**两步、两个工具**（与需求实体卡同构，卡由服务端签发，改了就对不上）：
 
-  1. 先按用户在聊天里确定的草稿集合，调 `journey_adopt` 且
-     `prepare_adoption=true`——服务端返回一张采纳卡（`card`）和写用例披露
-     （`disclosure`，逐条含 cleanup / authorization / write_scope）。
-  2. 把返回的 card **原样**传给 `ask_user`，intro 里把披露逐条讲清楚
-     （照抄三字段，不要润色成"会有少量数据变更"）。用户答复后再调
+  1. 先按用户在聊天里确定的草稿集合，调 `journey_prepare_adoption`
+     （`prepare_adoption` 这一步）——服务端返回一张采纳卡（`card`）、写用例披露
+     （`disclosure`，逐条含 cleanup / authorization / write_scope）和一段可原样
+     贴用的完整披露文本（`disclosure_md`）。**这一步不是采纳**，不落任何产物。
+  2. 把返回的 card **原样**传给 `ask_user`，intro 直接用 `disclosure_md` 原文
+     （一字不删，不要润色成"会有少量数据变更"，也不要自己概括）。用户答复后才调
      `journey_adopt`：`selected_draft_ids` 不变、
      `authorized_write_draft_ids` 用用户勾选的写用例草稿号（可为空）、
      `adopted_via="chat_ask_user"`、`confirmed_by` 填用户答复来源。
+
+  **采纳卡出现之前不要调 `journey_adopt`**：它没有"先试一下"的用法，没有用户答复
+  的调用会被直接拒绝。
 
   采纳通过 = 授权一并落账（`write_confirm` 事件由采纳派生，逐条绑
   `source_case_digest`）——**之后编译、执行一口气跑完，不再弹第二张硬闸卡**。

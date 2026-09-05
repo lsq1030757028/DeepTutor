@@ -369,19 +369,26 @@ human_gates: |-
     this one changes data in the system under test, and a pre-ticked "all" turns
     "I didn't read it" into "I agree".
 
-  Adoption is **two steps** (same shape as the requirement-entity card; the
-  card is issued server-side and verified on signature — edit it and it will
-  not match):
+  Adoption is **two steps, two tools** (same shape as the requirement-entity
+  card; the card is issued server-side and verified on signature — edit it and
+  it will not match):
 
-  1. With the draft set the user settled on in chat, call `journey_adopt` with
-     `prepare_adoption=true` — the server returns the adoption `card` plus a
-     write-case `disclosure` (cleanup / authorization / write_scope per case).
-  2. Pass the returned card to `ask_user` **verbatim**, and spell out the
-     disclosure in the intro (copy the three fields; never soften them into
-     "some data may change"). After the user answers, call `journey_adopt`
-     again: same `selected_draft_ids`, `authorized_write_draft_ids` set to the
-     write drafts the user ticked (may be empty), `adopted_via="chat_ask_user"`,
-     `confirmed_by` set to where the answer came from.
+  1. With the draft set the user settled on in chat, call
+     `journey_prepare_adoption` (the `prepare_adoption` step) — the server
+     returns the adoption `card`, a write-case `disclosure` (cleanup /
+     authorization / write_scope per case) and a ready-to-paste full
+     disclosure text (`disclosure_md`). **This step is not adoption** and
+     writes no artifact.
+  2. Pass the returned card to `ask_user` **verbatim**, with `disclosure_md` as
+     the intro word for word (do not trim it, never soften it into "some data
+     may change", do not summarise). Only after the user answers, call
+     `journey_adopt`: same `selected_draft_ids`, `authorized_write_draft_ids`
+     set to the write drafts the user ticked (may be empty),
+     `adopted_via="chat_ask_user"`, `confirmed_by` set to where the answer
+     came from.
+
+  **Never call `journey_adopt` before the adoption card has appeared**: there
+  is no "try it first" mode; a call without the user's answer is refused.
 
   Adoption passing means authorization lands with it (a `write_confirm` event
   derived from this adoption, bound per case to `source_case_digest`) — **after

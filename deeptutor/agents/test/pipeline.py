@@ -71,6 +71,7 @@ from deeptutor.services.tapd_context import (
     project_from_resolve_payload,
     project_hint_from_message,
     render_context_briefing,
+    require_visible_project_confirmation,
     resolve_shared_context,
     validate_context_save_payload,
     validate_context_status_payload,
@@ -305,9 +306,30 @@ class TestJourneyPipeline(AgenticChatPipeline):
         # 第一句就抬轮次预算：后面任何一段简报失败都不该把这一轮打回 8 轮，
         # 那正是「正常任务必然触顶」的形态。
         self._apply_round_floor(context)
+        await self._announce_turn_language(context, stream)
         inherited = await super()._capability_pre_loop_briefings(context, stream)
         tapd = await self._tapd_context_briefing(context)
         return "\n\n".join(part for part in (inherited.strip(), tapd.strip()) if part)
+
+    async def _announce_turn_language(self, context: UnifiedContext, stream: StreamBus) -> None:
+        """把本轮语种写进事件流，卡片外壳按它渲染（BB-698 的前端半边）。
+
+        `ask_user` 卡的 Pick an option / Next question、四张富卡的标题与页脚是
+        前端 i18n 串，默认跟界面语言。用户中文提问、界面仍是 en 时，正文中文而
+        外壳英文——同一张卡两种语言。事件里带 `turn_language`，前端对本轮的卡片
+        改用这个语种取文案；不带时前端照旧跟界面（普通聊天零变化）。
+        """
+        language = "zh" if str(context.language or "").lower().startswith("zh") else "en"
+        context.metadata["turn_language"] = language
+        try:
+            await stream.progress(
+                "",
+                source="chat",
+                stage="exploring",
+                metadata={"trace_kind": "turn_language", "turn_language": language},
+            )
+        except Exception:  # noqa: BLE001 - 外壳语种只是锦上添花，不能沉掉这一轮
+            return
 
     async def _tapd_context_briefing(self, context: UnifiedContext) -> str:
         oracle_mode = self._test_oracle_mode(context)
@@ -404,6 +426,10 @@ class TestJourneyPipeline(AgenticChatPipeline):
                     resolve_raw = await self.tool_lookup.execute(resolve_name, **resolve_kwargs)
                     resolved = parse_public_payload(resolve_raw)
                     resolution = resolve_shared_context(status, resolved, session=session)
+                    # BB-716：档案默认在冷会话里要让用户看见，不许静默沿用。
+                    resolution = require_visible_project_confirmation(
+                        resolution, session=session
+                    )
             except Exception as exc:  # noqa: BLE001 - normalize provider failures
                 resolution = resolve_shared_context(None, None, session=session)
                 resolution = resolution.__class__(
@@ -653,8 +679,20 @@ class TestJourneyPipeline(AgenticChatPipeline):
         if selected is None:
             selected = self._tapd_selected_project
         previous = await self._load_session_context(context.session_id)
-        identity = relevant.get("tapd_context_identity", "").strip() or previous.tapd_identity
-        role = relevant.get("tapd_context_role", "").strip() or previous.business_role
+        # 身份与角色的回落顺序：这张卡的答复 → 本会话已存的 → 宿主简报刚从共享
+        # 档案读到的（`_tapd_context_briefing` 写进 self._tapd_identity/_role）。
+        # 缺了第三级，冷会话里确认项目就会因"身份未知"而拒绝签发会话上下文，
+        # 而档案里明明有身份（BB-716 的确认卡走的正是这条路）。
+        identity = (
+            relevant.get("tapd_context_identity", "").strip()
+            or previous.tapd_identity
+            or self._tapd_identity
+        )
+        role = (
+            relevant.get("tapd_context_role", "").strip()
+            or previous.business_role
+            or self._tapd_role
+        )
         remember = relevant.get("tapd_context_remember_project", "")
         persist_default = wants_default(remember)
         needs_session_claim = bool(selected is not None and not persist_default)

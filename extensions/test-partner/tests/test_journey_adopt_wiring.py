@@ -51,7 +51,6 @@ def _tool_arguments(bid, selected, authorized, slug="adoptwire"):
         "adopted_via": "chat_ask_user",
         "confirmed_by": "chat",
         "idempotency_key": "",
-        "prepare_adoption": False,
         "authorized_write_draft_ids": list(authorized),
     }
 
@@ -97,11 +96,10 @@ def _adopt(bid, selected, authorized, *, token=None, claims=None, slug="adoptwir
 def test_prepare_returns_the_trusted_card_and_the_disclosure(store, target):
     bid = _draft_batch(store, target, [api_case("dw1", writes=True),
                                        api_case("dr1")])
-    out = tools.adopt(owner=OWNER, batch_id=bid,
-                      selected_draft_ids=["dw1", "dr1"],
-                      prepare_adoption=True,
-                      _bridge_claims=trusted_claims("journey_adopt", owner=OWNER),
-                      caller_surface="capability")
+    out = tools.prepare_adoption(
+        owner=OWNER, batch_id=bid, selected_draft_ids=["dw1", "dr1"],
+        _bridge_claims=trusted_claims("journey_prepare_adoption", owner=OWNER),
+        caller_surface="capability")
     assert out["ok"] and out["code"] == "NEEDS_GATE" and out["needs_gate"] == "adoption"
     draft = _load_draft(bid)
     assert out["card"] == decision_auth.expected_adopt_question(
@@ -120,19 +118,20 @@ def test_prepare_returns_the_trusted_card_and_the_disclosure(store, target):
 def test_prepare_without_a_trusted_bridge_is_rejected(store, target):
     bid = _draft_batch(store, target, [api_case("dw1", writes=True)])
     with artifacts.trusted_owner(OWNER):
-        out = tools.adopt(owner=OWNER, batch_id=bid, selected_draft_ids=["dw1"],
-                          prepare_adoption=True, caller_surface="workbench")
+        out = tools.prepare_adoption(owner=OWNER, batch_id=bid,
+                                     selected_draft_ids=["dw1"],
+                                     caller_surface="workbench")
     assert not out["ok"] and out["code"] == "E_USER_DECISION_REQUIRED"
 
 
 def test_too_many_write_cases_get_a_split_instruction_not_a_wall(store, target):
     cases = [api_case(f"dw{i}", writes=True) for i in range(9)]
     bid = _draft_batch(store, target, cases)
-    out = tools.adopt(owner=OWNER, batch_id=bid,
-                      selected_draft_ids=[c["draft_id"] for c in cases],
-                      prepare_adoption=True,
-                      _bridge_claims=trusted_claims("journey_adopt", owner=OWNER),
-                      caller_surface="capability")
+    out = tools.prepare_adoption(
+        owner=OWNER, batch_id=bid,
+        selected_draft_ids=[c["draft_id"] for c in cases],
+        _bridge_claims=trusted_claims("journey_prepare_adoption", owner=OWNER),
+        caller_surface="capability")
     assert not out["ok"] and out["code"] == "E_TOO_MANY_WRITE_CASES"
     # 2026-08-29：拆批指令是**给模型的操作**，从 message 搬到 machine。
     # message 只告诉用户「超了，我分两批请你确认」——他不需要知道怎么拆。
@@ -285,13 +284,12 @@ def test_workbench_cannot_smuggle_write_authorization_without_a_decision(store, 
 # ── 穿 main 包装的两步链（B-2 回归钉）────────────────────────────────────
 
 
-def _main_effective(bid, selected, authorized, *, slug, prepare):
+def _main_effective(bid, selected, authorized, *, slug):
     """main.journey_adopt 自己组的签名绑定对象，逐键照抄（顺序无关，值必须同）。"""
     return {
         "batch_id": bid, "selected_draft_ids": list(selected),
         "caseset_slug": slug, "adopted_via": "chat_ask_user",
         "confirmed_by": "chat", "idempotency_key": "",
-        "prepare_adoption": prepare,
         "authorized_write_draft_ids": list(authorized),
     }
 
@@ -339,24 +337,21 @@ def test_the_two_step_adoption_runs_through_the_production_mcp_wrapper(
     monkeypatch.setattr(main_mod, "_journey_bridge",
                         lambda tool, ctx, args: claims)
 
-    # 第一步：prepare 拿服务端签发的卡（不带任何用户决定，闸自身不死锁）
-    prepared = main_mod.journey_adopt(
-        batch_id=bid, selected_draft_ids=["dw1", "dr1"],
-        caseset_slug="mainwire", adopted_via="chat_ask_user",
-        confirmed_by="chat", prepare_adoption=True,
-        authorized_write_draft_ids=[])
+    # 第一步：prepare 拿服务端签发的卡（不带任何用户决定，闸自身不死锁）。
+    # BB-714：这一步是**另一个工具**，采纳卡出现之前轨迹里不会出现 journey_adopt。
+    prepared = main_mod.journey_prepare_adoption(
+        batch_id=bid, selected_draft_ids=["dw1", "dr1"])
     assert prepared["ok"] and prepared["needs_gate"] == "adoption", prepared
     card = prepared["card"]
     assert card["id"].startswith(f"journey_adopt:{bid}:")
     assert not artifacts.has_artifact(bid, "approved_caseset")
 
     # 第二步：带着这张卡的用户答复回来确认
-    effective = _main_effective(bid, ["dw1", "dr1"], ["dw1"],
-                                slug="mainwire", prepare=False)
+    effective = _main_effective(bid, ["dw1", "dr1"], ["dw1"], slug="mainwire")
     out = main_mod.journey_adopt(
         batch_id=bid, selected_draft_ids=["dw1", "dr1"],
         caseset_slug="mainwire", adopted_via="chat_ask_user",
-        confirmed_by="chat", prepare_adoption=False,
+        confirmed_by="chat",
         authorized_write_draft_ids=["dw1"],
         decision_context=_sign_card(card, effective, ["dw1"]))
     assert out["ok"], out
@@ -380,9 +375,10 @@ def test_the_confirm_step_through_main_still_refuses_a_missing_decision(
     out = main_mod.journey_adopt(
         batch_id=bid, selected_draft_ids=["dw1"], caseset_slug="mainwire",
         adopted_via="chat_ask_user", confirmed_by="chat",
-        prepare_adoption=False, authorized_write_draft_ids=["dw1"])
-    # 可信面上「没带决定」与「带了张假决定」是同一个错误码：桥接声明在场就
-    # 已经进了决定校验那条路。工作台面（无桥接声明）才报 E_USER_DECISION_REQUIRED，
-    # 见 test_prepare_without_a_trusted_bridge_is_rejected。
-    assert not out["ok"] and out["code"] == "E_USER_DECISION_INVALID", out
+        authorized_write_draft_ids=["dw1"])
+    # BB-714（2026-09-05）：可信面上「没带决定」现在是 E_USER_DECISION_REQUIRED
+    # （machine 指向 journey_prepare_adoption），「带了张假决定」才是 INVALID——
+    # 两种错误态分开报，模型才知道该去拿卡还是卡被改过。
+    assert not out["ok"] and out["code"] == "E_USER_DECISION_REQUIRED", out
+    assert "journey_prepare_adoption" in out["machine"]
     assert not artifacts.has_artifact(bid, "approved_caseset")

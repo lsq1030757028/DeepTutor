@@ -142,6 +142,29 @@ def test_v2_intro_included_and_clipped() -> None:
     assert payload.intro == "To tailor the research:"
 
 
+def test_a_full_write_disclosure_intro_is_never_truncated() -> None:
+    """BB-715（2026-09-05）：采纳卡的写用例披露走 intro，曾在 400 字处被截成「…」。
+
+    两条写用例、每条三行披露（写什么 / 怎么清理 / 凭什么授权）轻松过千字；
+    这张卡自称"必须仔细看的披露"，截断等于让用户在没看全的情况下授权。
+    """
+    disclosure = "\n".join(
+        f"- d{i} 取消支付弹框-不扣费且可重新发起：**会写数据**\n"
+        f"  - 写什么：在测试账号下创建一笔定制点歌订单并触发支付弹框\n"
+        f"  - 怎么清理：执行后删除该订单并回滚账户余额，清理由用例的 cleanup 步骤自动执行\n"
+        f"  - 凭什么授权：events#write_confirm（采纳卡派生的写授权，逐条绑用例内容摘要）"
+        for i in (6, 8)
+    ) * 2
+    assert len(disclosure) > 400
+    payload, err = build_ask_user_payload(
+        questions=[{"prompt": "采纳哪些用例？", "multi_select": True}],
+        intro=disclosure,
+    )
+    assert err is None and payload is not None
+    assert payload.intro == disclosure
+    assert not payload.intro.endswith("…")
+
+
 def test_v2_empty_intro_becomes_none() -> None:
     payload, _ = build_ask_user_payload(
         questions=[{"prompt": "hi"}],

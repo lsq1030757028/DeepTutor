@@ -31,8 +31,16 @@
 
 import { AlertTriangle, FlaskConical, Loader2, Quote } from "lucide-react";
 
+import type { AppLanguage } from "@/i18n/init";
+
 import { useJourneyCardCopy, type JourneyCardCopy } from "./copy";
 import type { JourneyState, RunState } from "./extract";
+
+/** 四张卡共用的入参：状态 + 本轮语种（BB-698，外壳文案按它取）。 */
+interface CardProps {
+  state: JourneyState;
+  language?: AppLanguage | null;
+}
 
 // ── 骨架 ───────────────────────────────────────────────────────────────────
 
@@ -222,8 +230,8 @@ function CaseRow({
 
 // ── 卡一 · 规则清单（形态由共用骨架推导，稿未直接画）────────────────────────
 
-function RulesCard({ state }: { state: JourneyState }) {
-  const C = useJourneyCardCopy();
+function RulesCard({ state, language }: CardProps) {
+  const C = useJourneyCardCopy(language);
   const { rules } = state;
   if (rules.length === 0) return null;
   return (
@@ -273,8 +281,8 @@ function RulesCard({ state }: { state: JourneyState }) {
 
 // ── 卡二 · 用例草稿概览（流式）────────────────────────────────────────────
 
-function DraftCard({ state }: { state: JourneyState }) {
-  const C = useJourneyCardCopy();
+function DraftCard({ state, language }: CardProps) {
+  const C = useJourneyCardCopy(language);
   const draft = state.draft;
   const live = state.pending === "draft_cases";
   if (!draft && !live) return null;
@@ -334,8 +342,8 @@ function verdictMeta(run: RunState, C: JourneyCardCopy) {
   return out;
 }
 
-function RunCard({ state }: { state: JourneyState }) {
-  const C = useJourneyCardCopy();
+function RunCard({ state, language }: CardProps) {
+  const C = useJourneyCardCopy(language);
   const run = state.run;
   const live = state.pending === "execute" || state.pending === "project";
   if (!run && !live) return null;
@@ -415,8 +423,8 @@ function RunCard({ state }: { state: JourneyState }) {
 
 // ── 卡四 · 覆盖收口摘要 ───────────────────────────────────────────────────
 
-function CoverageCard({ state }: { state: JourneyState }) {
-  const C = useJourneyCardCopy();
+function CoverageCard({ state, language }: CardProps) {
+  const C = useJourneyCardCopy(language);
   const cov = state.coverage;
   if (!cov) return null;
   const s = cov.summary;
@@ -483,8 +491,8 @@ function CoverageCard({ state }: { state: JourneyState }) {
 
 // ── 错误：工具明说自己失败了，或返回的不是业务数据 ─────────────────────────
 
-function ErrorCard({ state }: { state: JourneyState }) {
-  const C = useJourneyCardCopy();
+function ErrorCard({ state, language }: CardProps) {
+  const C = useJourneyCardCopy(language);
   if (state.errors.length === 0) return null;
   return (
     <section className="mt-3 rounded-xl border border-red-500/40 bg-red-500/5 px-3.5 py-3 text-sm">
@@ -518,14 +526,14 @@ function ErrorCard({ state }: { state: JourneyState }) {
  * 四张卡按旅程顺序排。**空状态返回 null**，不留空壳——
  * "选了模式但还没开始"和"这一轮什么都没发生"，用户看到的应当一样。
  */
-export default function TestJourneyCards({ state }: { state: JourneyState }) {
+export default function TestJourneyCards({ state, language }: CardProps) {
   return (
     <div data-testid="test-journey-cards">
-      <RulesCard state={state} />
-      <DraftCard state={state} />
-      <RunCard state={state} />
-      <CoverageCard state={state} />
-      <ErrorCard state={state} />
+      <RulesCard state={state} language={language} />
+      <DraftCard state={state} language={language} />
+      <RunCard state={state} language={language} />
+      <CoverageCard state={state} language={language} />
+      <ErrorCard state={state} language={language} />
     </div>
   );
 }

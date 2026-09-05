@@ -32,6 +32,7 @@ Journey；Test 轮由宿主注入短时签名，绑定 owner/session/turn/tool/a
 from __future__ import annotations
 
 from deeptutor.agents.chat.agentic_pipeline import CHAT_OPTIONAL_TOOLS
+from deeptutor.agents.test.language import resolve_turn_language
 from deeptutor.agents.test.pipeline import (
     PROMPT_AGENT,
     PROMPT_MODULE,
@@ -64,8 +65,23 @@ class TestCapability(BaseCapability):
         request_schema=get_capability_request_schema("test"),
     )
 
+    @staticmethod
+    def turn_language(context: UnifiedContext) -> str:
+        """本轮回复语种：跟用户的话走，界面语言只是判不出时的回落（BB-698）。
+
+        必须在建 pipeline **之前**定：纪律段目录、宿主简报、工具提示、卡片外壳
+        全都按这个值选。把它留给提示词去"请求"模型已经证明无效
+        （2026-09-05 UAT：中文提问、三条回复全英）。
+        """
+        return resolve_turn_language(
+            context.user_message,
+            conversation_history=context.conversation_history,
+            fallback=context.language,
+        )
+
     async def run(self, context: UnifiedContext, stream: StreamBus) -> None:
         # 主聊 pipeline 的子类：`ask_user` 的 waiter、MCP 工具组装、重放语义
         # 全部原样继承，唯一的加法是 system prompt 里那段旅程纪律。
+        context.language = self.turn_language(context)
         pipeline = TestJourneyPipeline(language=context.language)
         await pipeline.run(context, stream)

@@ -188,18 +188,25 @@ class MCPToolAdapter(BaseTool):
                     self._original_name == "journey_ingest"
                     and bool(str(effective.get("requirement_entity") or "").strip())
                 ) or (
-                    # 采纳是唯一硬闸（ADR-2）：非 prepare 的采纳调用必须携带
-                    # 本轮真实完成的 ask_user 决定，服务端照卡验签。
+                    # 采纳是唯一硬闸（ADR-2）：采纳调用**无条件**必须携带本轮真实
+                    # 完成的 ask_user 决定，服务端照卡验签。采纳卡的签发是另一个
+                    # 工具（journey_prepare_adoption，BB-714）——此前 prepare 步复用
+                    # 本工具名，轨迹里采纳卡之前就先出现一次 journey_adopt。
                     self._original_name == "journey_adopt"
-                    and not bool(effective.get("prepare_adoption"))
                 )
                 if needs_user_decision:
                     decision = current_resolved_user_decision()
                     if decision is None:
+                        hint = (
+                            " Issue the adoption card with journey_prepare_adoption "
+                            "and pass its card to ask_user first."
+                            if self._original_name == "journey_adopt"
+                            else ""
+                        )
                         return ToolResult(
                             content=(
                                 "This Journey gate requires a resolved interactive "
-                                "user decision from this same Test turn."
+                                f"user decision from this same Test turn.{hint}"
                             ),
                             success=False,
                         )

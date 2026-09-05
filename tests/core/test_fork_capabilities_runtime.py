@@ -169,7 +169,8 @@ def test_the_gate_topology_is_prompted(language: str) -> None:
         "requirement_entity_confirmed_via",  # 写实体也必须由用户落定
         "journey_ingest",  # 实体卡两步走的载体
         "clarifications",  # 轻确认 澄清：clarify 的记录参数
-        "prepare_adoption",  # 硬闸 采纳：两步走的 prepare 参数
+        "journey_prepare_adoption",  # 硬闸 采纳：签卡是另一个工具（BB-714）
+        "journey_adopt",  # 硬闸 采纳：只在用户答复采纳卡之后调用
         "disclosure",  # 硬闸 采纳：AC6 写用例披露
         "authorized_write_draft_ids",  # 硬闸 采纳：用户勾选的写授权集
         "confirmed_by",  # 硬闸 采纳：adopt 的记录参数
