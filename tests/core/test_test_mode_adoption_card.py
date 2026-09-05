@@ -21,7 +21,8 @@ CARD_ID = "journey_adopt:b-20260905-3ced7b6d:37bfdfcbb21e0709751152a0"
 CARD = {
     "id": CARD_ID,
     "multi_select": True,
-    "allow_free_text": False,
+    # 服务端契约：采纳卡保留自由文本行，用户能在卡上说「先不采纳」
+    "allow_free_text": True,
     "options": [{"label": f"d{i}", "description": f"用例 {i}"} for i in range(1, 9)],
 }
 DISCLOSURE_MD = "\n".join(
@@ -54,8 +55,8 @@ def _model_ask_user_args() -> dict:
                 "id": CARD_ID,
                 "header": "采纳(d1-d8)",
                 "prompt": "请勾选要采纳的用例：",
-                "multi_select": True,
-                "allow_free_text": True,
+                "multi_select": False,
+                "allow_free_text": False,
                 "options": [{"label": f"d{i}", "description": f"用例 {i}"} for i in range(1, 8)],
             },
             {
@@ -87,7 +88,7 @@ def test_the_card_question_is_restored_to_what_the_server_issued() -> None:
     card_q = fixed["questions"][0]
     assert [o["label"] for o in card_q["options"]] == [f"d{i}" for i in range(1, 9)]
     assert card_q["multi_select"] is True
-    assert card_q["allow_free_text"] is False
+    assert card_q["allow_free_text"] is True  # 以卡为准：自由文本行回来了
     # 模型自己加的写授权问题不动（9 个选项交给 ask_user 的上限判）
     other = fixed["questions"][1]
     assert other["id"] == "write_authorization_batch1"
@@ -122,7 +123,7 @@ def test_pipeline_remembers_the_issued_card_and_enforces_it_on_ask_user() -> Non
     after = pipeline._augment_tool_kwargs("ask_user", _model_ask_user_args(), context)
     assert after["intro"].startswith(DISCLOSURE_MD)
     assert after["intro"][: len(DISCLOSURE_MD)].count("写什么：") == 8
-    assert after["questions"][0]["allow_free_text"] is False
+    assert after["questions"][0]["allow_free_text"] is True
     assert len(after["questions"][0]["options"]) == 8
 
     # 别的工具不受影响

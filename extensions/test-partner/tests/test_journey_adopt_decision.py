@@ -402,3 +402,31 @@ def test_draft_digest_primitive_is_shared_with_adopt(store, target):
     case = api_case("dw1", writes=True)
     assert adopt_mod._draft_digest(case) == digest.draft_case_digest(case)
     assert decision_auth.adopt_draft_digest(case) == digest.draft_case_digest(case)
+
+
+# ── 2026-09-05 R3：采纳卡上必须能说「先不采纳」 ───────────────────────────────
+#
+# 宿主按服务端签发的卡校回 ask_user（BB-715 补修）之后，卡上的自由文本行由本
+# 契约决定。全只读的批次卡上零选项，没有自由文本行用户就只能交空答复，模型再
+# 把卡发一遍——死循环。放开自由文本，闸不放松：自由文本答复不是选项 label，
+# 采纳照拒。
+
+
+def test_adopt_card_keeps_the_free_text_row(store, target):
+    bid = _draft_batch(store, target, [api_case("dr1"), api_case("dr2")])
+    card = decision_auth.expected_adopt_question(bid, _load_draft(bid), ["dr1", "dr2"])
+    assert card["allow_free_text"] is True
+    assert card["options"] == []  # 只读用例不上授权行，卡上只剩自由文本这一条路
+
+
+def test_a_free_text_decline_on_the_adopt_card_is_refused_as_adoption(store, target):
+    cases = [api_case("dw1", writes=True), api_case("dr1")]
+    bid = _draft_batch(store, target, cases)
+    draft = _load_draft(bid)
+    selected = ["dw1", "dr1"]
+    token, claims = adopt_decision(bid, draft, selected, [], answer_ids=["先不采纳"])
+    with pytest.raises(decision_auth.DecisionAuthError):
+        _verify(bid, draft, selected, [], token, claims)
+    # 点选路径不受影响
+    token, claims = adopt_decision(bid, draft, selected, ["dw1"])
+    assert _verify(bid, draft, selected, ["dw1"], token, claims)["selected"] == ["dw1"]

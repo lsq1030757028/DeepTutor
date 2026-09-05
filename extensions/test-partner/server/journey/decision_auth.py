@@ -466,7 +466,13 @@ def expected_adopt_question(batch_id: str, case_draft: dict[str, Any],
     return {
         "id": f"journey_adopt:{batch_id}:{set_digest.removeprefix('sha256:')[:24]}",
         "multi_select": True,
-        "allow_free_text": False,
+        # 采纳卡保留「其他 — 自定义回复」一行（2026-09-05 R3 真会话实测）：宿主现在
+        # 按本卡原样校回 ask_user 的问题，禁了自由文本之后，用户在采纳卡上就没有
+        # 任何办法说「先不采纳」——全是只读用例时卡上连一个选项都没有，交空答复
+        # 模型又会把卡再发一遍，死循环。放开自由文本不削弱闸：`verify_adopt_context`
+        # 只认卡上选项 label 组成的答复，任何自由文本（比如「先不采纳」）都验不过，
+        # 采纳一律被拒——这正是用户要的效果。
+        "allow_free_text": True,
         "options": [
             {
                 "label": str(case.get("draft_id") or ""),
