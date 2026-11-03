@@ -82,7 +82,7 @@ jobs:
             -v "$PWD:/workspace" \
             -w /workspace \
             python:3.11-bookworm \
-            sh -c 'owner="$(stat -c "%u:%g" /workspace)"; trap "chown -R $owner /workspace" EXIT; git --version; python -m pip install -q -r extensions/test-partner/requirements-dev.txt; cd extensions/test-partner; python -m pytest -q --no-header -k "not test_ui_track_real_browser" --junitxml=/workspace/ci-artifacts/test-partner.xml'
+            sh -ec 'owner="$(stat -c "%u:%g" /workspace)"; trap "chown -R $owner /workspace" EXIT; git --version; python -m pip install -q -r extensions/test-partner/requirements-dev.txt; cd extensions/test-partner; python -m pytest -q --no-header -k "not test_ui_track_real_browser" --junitxml=/workspace/ci-artifacts/test-partner.xml'
 
       - name: Test Partner real Chromium regression
         shell: bash
@@ -93,7 +93,7 @@ jobs:
             -w /workspace \
             -e PLAYWRIGHT_BROWSERS_PATH=/tmp/ms-playwright \
             python:3.11-bookworm \
-            sh -c 'owner="$(stat -c "%u:%g" /workspace)"; trap "chown -R $owner /workspace" EXIT; printf "Acquire::Retries \"5\";\nAcquire::https::Timeout \"30\";\n" > /etc/apt/apt.conf.d/80-ci-retries; sed -i "s|http://deb.debian.org|https://deb.debian.org|g" /etc/apt/sources.list.d/debian.sources; python -m pip install -q -r extensions/test-partner/requirements-dev.txt; n=0; until python -m playwright install --with-deps chromium; do n=$((n+1)); test "$n" -lt 3 || exit 1; done; cd extensions/test-partner; python -m pytest -q --no-header tests/test_journey_exec.py::test_ui_track_real_browser --junitxml=/workspace/ci-artifacts/test-partner-browser.xml'
+            sh -ec 'owner="$(stat -c "%u:%g" /workspace)"; trap "chown -R $owner /workspace" EXIT; printf "Acquire::Retries \"5\";\nAcquire::https::Timeout \"30\";\n" > /etc/apt/apt.conf.d/80-ci-retries; sed -i "s|http://deb.debian.org|https://deb.debian.org|g" /etc/apt/sources.list.d/debian.sources; python -m pip install -q -r extensions/test-partner/requirements-dev.txt; n=0; until python -m playwright install --with-deps chromium; do n=$((n+1)); test "$n" -lt 3 || exit 1; done; cd extensions/test-partner; python -m pytest -q --no-header tests/test_journey_exec.py::test_ui_track_real_browser --junitxml=/workspace/ci-artifacts/test-partner-browser.xml'
 
       - name: Upload Test Partner evidence
         if: always()
