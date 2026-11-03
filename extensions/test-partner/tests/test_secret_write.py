@@ -81,17 +81,32 @@ def test_stdio_entry_pins_the_api_base_url():
     assert sw.stdio_entry()["env"]["TAPD_API_BASE_URL"] == "https://api.tapd.cn"
 
 
-def test_stdio_command_matches_the_dockerfile_venv_path():
+def test_stdio_entry_is_not_registered_while_the_venv_is_gone():
     """条目里的命令路径与 Dockerfile 装出来的 venv 必须对得上，
-    否则条目注册成功但一拉起就 ENOENT。"""
+    否则条目注册成功但一拉起就 ENOENT。
+
+    Delta 二十（16ba0f7e）已把 venv 从镜像里整块删掉，所以现在的约束反过来：
+    Dockerfile 里没有那个 venv 时，运行时代码一处都不许再注册这个条目。"""
     entry = sw.stdio_entry()
-    dockerfile = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.dirname(os.path.abspath(__file__))))), "Dockerfile")
-    with open(dockerfile, encoding="utf-8") as fh:
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))
+    with open(os.path.join(repo_root, "Dockerfile"), encoding="utf-8") as fh:
         source = fh.read()
-    assert "/opt/tapd-mcp" in source, "Dockerfile 里没有那个 venv"
-    assert entry["command"].startswith("/opt/tapd-mcp/")
+    if "/opt/tapd-mcp" in source:
+        assert entry["command"].startswith("/opt/tapd-mcp/")
+        return
+    callers = []
+    for base in ("deeptutor", os.path.join("extensions", "test-partner", "server")):
+        for dirpath, _, files in os.walk(os.path.join(repo_root, base)):
+            for name in files:
+                if not name.endswith(".py"):
+                    continue
+                path = os.path.join(dirpath, name)
+                with open(path, encoding="utf-8") as fh:
+                    text = fh.read()
+                if "stdio_entry(" in text.replace("def stdio_entry(", ""):
+                    callers.append(os.path.relpath(path, repo_root))
+    assert callers == [], f"venv 已移除，但仍有运行时代码注册 stdio 条目：{callers}"
 
 
 def test_default_whitelist_is_read_only(monkeypatch):
@@ -104,15 +119,14 @@ def test_default_whitelist_is_read_only(monkeypatch):
         assert banned not in tools
 
 
-def test_pinned_versions_are_declared_in_dockerfile():
-    """供应链纪律：钉死版本 + 禁 uvx（`tapd-runtime/PINNED.md`）。"""
+def test_dockerfile_never_runs_uvx():
+    """供应链纪律：禁 uvx（`tapd-runtime/PINNED.md`）。
+    钉版本的两个 ARG 随 Delta 二十的 fork 块一起删了，禁 uvx 这条仍然有效。"""
     dockerfile = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(
             os.path.dirname(os.path.abspath(__file__))))), "Dockerfile")
     with open(dockerfile, encoding="utf-8") as fh:
         source = fh.read()
-    assert "TAPD_MCP_VERSION=8.0.80" in source
-    assert "TAPD_MCP_SDK_VERSION=1.29.0" in source
     # uvx 会拉最新版，正是 PINNED.md 点名禁用的。
     # 只查**可执行行**——注释里写「禁用 uvx」是我们要的，不该被自己的断言判红。
     executed = [line for line in source.split("\n")
