@@ -64,7 +64,7 @@ jobs:
             -w /workspace \
             -e PYTHONPATH=/workspace \
             python:3.11 \
-            sh -c 'owner="$(stat -c "%u:%g" /workspace)"; trap "chown -R $owner /workspace" EXIT; git --version; python -m pip install -q -r requirements/server.txt -r requirements/partners.txt pytest pytest-asyncio; mkdir -p data/user/settings; printf "system:\n  language: en\nlogging:\n  level: WARNING\n" > data/user/settings/main.yaml; python -m pytest -q tests deeptutor/learning/tests --junitxml=/workspace/ci-artifacts/root-linux.xml'
+            sh -ec 'owner="$(stat -c "%u:%g" /workspace)"; trap "chown -R $owner /workspace" EXIT; git --version; python -m pip install -q -r requirements/server.txt -r requirements/partners.txt pytest pytest-asyncio; mkdir -p data/user/settings; printf "system:\n  language: en\nlogging:\n  level: WARNING\n" > data/user/settings/main.yaml; python -m pytest -q tests deeptutor/learning/tests --junitxml=/workspace/ci-artifacts/root-linux.xml'
 
       - name: Web UAT gate
         shell: bash
@@ -76,7 +76,7 @@ jobs:
             -e HOME=/tmp \
             -e NEXT_TELEMETRY_DISABLED=1 \
             node:22.12.0 \
-            sh -c 'owner="$(stat -c "%u:%g" /workspace)"; trap "chown -R $owner /workspace" EXIT; npm ci --legacy-peer-deps; npm run test:node; npm run i18n:parity; npm run build; npm run perf:check'
+            sh -ec 'owner="$(stat -c "%u:%g" /workspace)"; trap "chown -R $owner /workspace" EXIT; npm ci --legacy-peer-deps; npm run test:node; npm run i18n:parity; npm run build; npm run perf:check'
 
       - name: Upload root pytest evidence
         if: always()
