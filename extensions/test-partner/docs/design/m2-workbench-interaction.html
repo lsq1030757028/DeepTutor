@@ -1,0 +1,2300 @@
+<meta charset="utf-8">
+<title>M2 测试工作台 · 逐屏交互稿</title>
+<style>
+/* ══════════════════════════════════════════════════════════════════════════
+   色板一比一取自 DeepTutor web/app/globals.css:24-123（四套主题全量令牌）。
+   mood = 0016「跟齐 DeepTutor 现有风格」，所以这里不做任何色彩决策，
+   只做搬运——稿子里的每一个颜色在 DT 里都能找到同名令牌。
+
+   0016 硬约束落地：本稿零处 [var(--x)]/alpha 写法。
+   凡需要令牌色的半透明，一律 color-mix(in srgb, var(--x) N%, transparent)
+   ——这是 DT 自己已在用的正确写法（globals.css:665,668,682；
+   AskUserOptions.tsx:572,606 等 7 个 tsx 文件共 38 处）。
+   ══════════════════════════════════════════════════════════════════════════ */
+:root{
+  color-scheme:light;
+  --background:#fdfcf9; --foreground:#1c1816; --card:#ffffff; --card-foreground:#1c1816;
+  --primary:#b0501e; --primary-foreground:#ffffff; --secondary:#f5f2ea;
+  --muted:#f1ede2; --muted-foreground:#6d645a; --accent:#ece7d8;
+  --destructive:#c53a2c; --border:#e6decc; --input:#e6decc; --ring:#b0501e;
+  /* 语义状态色：DT 纪律是「结构用令牌，状态用 tailwind 原生色 + 成对 dark:」
+     （见 TestWorkbenchHub.tsx:7-9 的代码注释纪律）。这里照抄该二分。 */
+  --ok:#059669; --ok-bg:rgba(16,185,129,.15);
+  --warn:#d97706; --warn-bg:rgba(245,158,11,.15);
+  --bad:#dc2626; --bad-bg:rgba(239,68,68,.15);
+  --live:#0284c7; --live-bg:rgba(14,165,233,.15);
+  --probe:#7c3aed; --probe-bg:rgba(168,85,247,.15);
+}
+.dark{
+  color-scheme:dark;
+  --background:#1a1918; --foreground:#e8e4de; --card:#242220; --card-foreground:#e8e4de;
+  --primary:#d4734b; --primary-foreground:#1a1918; --secondary:#2a2725;
+  --muted:#2a2725; --muted-foreground:#9b9590; --accent:#302d2a;
+  --destructive:#d44a3c; --border:#3a3634; --input:#3a3634; --ring:#d4734b;
+  --ok:#34d399; --warn:#fbbf24; --bad:#f87171; --live:#38bdf8; --probe:#c4b5fd;
+}
+.theme-snow{
+  color-scheme:light;
+  --background:#ffffff; --foreground:#0d0d0d; --card:#ffffff; --card-foreground:#0d0d0d;
+  --primary:#2563eb; --primary-foreground:#ffffff; --secondary:#f7f7f7;
+  --muted:#f2f2f2; --muted-foreground:#6e6e6e; --accent:#ececec;
+  --destructive:#d92d20; --border:#e5e5e5; --input:#e5e5e5; --ring:#2563eb;
+  --ok:#059669; --warn:#d97706; --bad:#dc2626; --live:#0284c7; --probe:#7c3aed;
+}
+.theme-glass{
+  color-scheme:dark;
+  --background:#0e0d1a; --foreground:#ffffff; --card:rgba(255,255,255,.06); --card-foreground:#fff;
+  --primary:#a855f7; --primary-foreground:#ffffff; --secondary:rgba(255,255,255,.04);
+  --muted:rgba(255,255,255,.06); --muted-foreground:#b5b5c7; --accent:rgba(255,255,255,.12);
+  --destructive:#d44a3c; --border:rgba(255,255,255,.12); --input:rgba(255,255,255,.06);
+  --ok:#34d399; --warn:#fbbf24; --bad:#f87171; --live:#38bdf8; --probe:#c4b5fd;
+}
+.theme-glass body{background:radial-gradient(circle at 50% 50%,#1a1a2e 0%,#0d0d1a 100%);background-attachment:fixed}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--background);color:var(--foreground);
+  font-family:Geist,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  font-size:13px;line-height:1.55;-webkit-font-smoothing:antialiased}
+.serif{font-family:Lora,Georgia,serif}
+a{color:inherit}
+
+/* ── 文档外壳 ── */
+.top{position:sticky;top:0;z-index:20;background:var(--card);border-bottom:1px solid var(--border);
+  padding:10px 20px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.top h1{font-size:15px;margin:0 6px 0 0;font-weight:600}
+.top small{color:var(--muted-foreground);font-size:11.5px}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.seg button{border:0;background:transparent;color:var(--muted-foreground);font:inherit;font-size:11.5px;
+  padding:5px 11px;cursor:pointer}
+.seg button[data-on]{background:var(--primary);color:var(--primary-foreground);font-weight:500}
+.doc{max-width:1060px;margin:0 auto;padding:6px 24px 96px}
+.nav{position:sticky;top:50px;z-index:19;background:var(--background);padding:9px 0 6px;
+  border-bottom:1px solid var(--border);margin-bottom:6px}
+.nav a{font-size:11.5px;color:var(--muted-foreground);text-decoration:none;padding:3px 8px;
+  border-radius:7px;display:inline-block}
+.nav a:hover{background:var(--muted);color:var(--foreground)}
+
+.step{margin-top:40px;scroll-margin-top:96px}
+.step>h2{font-size:18px;margin:0 0 4px;font-weight:600;display:flex;gap:10px;align-items:center}
+.step>h2 i{width:27px;height:23px;border-radius:8px;background:var(--primary);color:var(--primary-foreground);
+  font-size:11px;font-style:normal;font-weight:600;display:flex;align-items:center;justify-content:center;flex:none}
+.step>p.k{margin:0 0 14px 37px;font-size:12.5px;color:var(--muted-foreground)}
+.inset{margin-left:37px}
+
+/* 「用户在这一屏要回答什么」——信息架构块，排在样式之前 */
+.ia{margin:0 0 12px 37px;border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.ia>.t{background:color-mix(in srgb,var(--muted) 55%,transparent);padding:6px 12px;
+  font-size:11px;color:var(--muted-foreground);border-bottom:1px solid var(--border)}
+.ia>.b{padding:10px 12px;display:grid;grid-template-columns:76px minmax(0,1fr);gap:6px 12px;font-size:12.5px}
+.ia .lb{color:var(--muted-foreground);font-size:11.5px}
+
+/* 屏框 */
+.screen{border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);
+  margin-left:37px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.screen+.screen{margin-top:12px}
+.screen>.hd{padding:7px 13px;font-size:11px;color:var(--muted-foreground);
+  border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--muted) 40%,transparent);
+  display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.screen>.bd{padding:14px 16px}
+.screen>.bd.tight{padding:10px 12px}
+
+/* 说明条 */
+.why,.fix,.land{margin:10px 0 0 37px;padding:3px 0 3px 12px;font-size:12px;color:var(--muted-foreground)}
+.why{border-left:2px solid var(--primary)}
+.fix{border-left:2px solid var(--warn)}
+.land{border-left:2px solid color-mix(in srgb,var(--foreground) 25%,transparent)}
+.why b,.fix b,.land b{color:var(--foreground)}
+
+/* DT 页头范式 A：SpaceSectionHeader.tsx:22-44 */
+.pghd{display:flex;gap:12px;align-items:flex-start;padding-bottom:14px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent);margin-bottom:14px}
+.pghd .icf{width:36px;height:36px;border-radius:12px;border:1px solid color-mix(in srgb,var(--border) 70%,transparent);
+  background:var(--card);display:flex;align-items:center;justify-content:center;flex:none;
+  box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.pghd h3{margin:0;font-size:19px;font-weight:600;letter-spacing:-.01em;line-height:1.25}
+.pghd .desc{margin:3px 0 0;font-size:13px;color:var(--muted-foreground)}
+.pghd .right{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+/* DT 按钮配方：TestWorkbenchHub.tsx:103/111/120（rounded-[9px] 是这个模块自有圆角） */
+.btn{font:inherit;font-size:13px;padding:6px 12px;border-radius:9px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:6px;
+  border:1px solid var(--border);background:var(--card);color:var(--foreground)}
+.btn:hover{background:var(--accent)}
+.btn.pri{background:var(--primary);color:var(--primary-foreground);border-color:transparent;font-weight:500}
+.btn.pri:hover{opacity:.9;background:var(--primary)}
+.btn.sm{font-size:11.5px;padding:4px 9px;border-radius:8px}
+.btn.gh{border-color:transparent;background:transparent;color:var(--muted-foreground)}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.btn[disabled]:hover{background:var(--card)}
+
+/* chip / 徽标 */
+.chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);border-radius:999px;
+  padding:1px 8px;font-size:11px;color:var(--muted-foreground);white-space:nowrap}
+.badge{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:1px 8px;
+  font-size:10.5px;font-weight:500;white-space:nowrap}
+.badge.ok{background:var(--ok-bg);color:var(--ok)}
+.badge.warn{background:var(--warn-bg);color:var(--warn)}
+.badge.bad{background:var(--bad-bg);color:var(--bad)}
+.badge.live{background:var(--live-bg);color:var(--live)}
+.badge.probe{background:var(--probe-bg);color:var(--probe)}
+.badge.mute{background:color-mix(in srgb,var(--muted) 70%,transparent);color:var(--muted-foreground)}
+/* 第一视觉层级的结论徽标（0017 O3：列表右侧只有一个"要我处理的事"，比其余徽标大一档） */
+.badge.lead{font-size:12.5px;padding:3px 11px;font-weight:600}
+.dot{width:6px;height:6px;border-radius:50%;flex:none}
+.dot.ok{background:#10b981}.dot.warn{background:#f59e0b}.dot.bad{background:#ef4444}
+.dot.live{background:#0ea5e9;animation:p 1.4s ease-in-out infinite}
+.dot.off{background:var(--border)}
+@keyframes p{50%{opacity:.35}}
+
+/* 表格：DeliveryDetail.tsx:425-472 紧凑范式（分隔线用 color-mix，不用失效的 /60） */
+.tw{overflow-x:auto;border:1px solid var(--border);border-radius:8px}
+table{border-collapse:collapse;width:100%;min-width:560px;font-size:12.5px}
+th{text-align:left;font-size:11px;font-weight:500;color:var(--muted-foreground);
+  padding:7px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover{background:color-mix(in srgb,var(--muted) 40%,transparent)}
+.mono{font-family:ui-monospace,"SFMono-Regular",Consolas,monospace;font-size:11.5px}
+.sub{font-size:11px;color:var(--muted-foreground);margin-top:2px;line-height:1.5}
+
+/* 卡片列表：TestWorkbenchHub.tsx:217-241 */
+.list{display:flex;flex-direction:column;gap:8px}
+.item{width:100%;text-align:left;border:1px solid var(--border);border-radius:12px;background:var(--card);
+  padding:11px 14px;cursor:pointer}
+.item:hover{border-color:color-mix(in srgb,var(--primary) 45%,var(--border))}
+.item .r1{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.item .ttl{font-size:13px;font-weight:500}
+.item .r2{margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+  font-size:11.5px;color:var(--muted-foreground)}
+.grow{flex:1}
+
+/* 产物账本条（新组件——DT 无 stepper 可抄，见 §9 偏离 1） */
+.ledger{display:flex;gap:6px;flex-wrap:wrap;align-items:stretch}
+.cell{flex:1 1 96px;min-width:96px;border:1px solid var(--border);border-radius:9px;padding:7px 9px;
+  background:color-mix(in srgb,var(--muted) 30%,transparent)}
+.cell.on{background:var(--card);border-color:color-mix(in srgb,var(--primary) 40%,var(--border))}
+.cell.on .nm{color:var(--foreground)}
+.cell .tp{display:flex;gap:5px;align-items:center;font-size:10px;color:var(--muted-foreground)}
+.cell .nm{font-size:12px;margin-top:3px;color:var(--muted-foreground);line-height:1.35}
+.cell .ar{font-size:10px;color:var(--muted-foreground);margin-top:3px;opacity:.85}
+.cell.err{border-color:color-mix(in srgb,var(--bad) 55%,var(--border));background:var(--bad-bg)}
+/* 四段账本（0021 必改 1：九格→四段。段是分组，不是新状态源——
+   段的状态仍由段内格子的产物存在性推导，没有第二套字段） */
+.seg4{flex:1 1 156px;min-width:156px;border:1px solid var(--border);border-radius:10px;padding:8px 10px;
+  background:color-mix(in srgb,var(--muted) 30%,transparent);cursor:pointer;text-align:left}
+.seg4.on{background:var(--card);border-color:color-mix(in srgb,var(--primary) 40%,var(--border))}
+.seg4:hover{border-color:color-mix(in srgb,var(--primary) 45%,var(--border))}
+.seg4 .sg{display:flex;gap:6px;align-items:center;font-size:12.5px;font-weight:500}
+.seg4 .sg .st{margin-left:auto;font-size:10.5px;font-weight:400;color:var(--muted-foreground)}
+.seg4 .ss{font-size:11px;color:var(--muted-foreground);margin-top:4px;line-height:1.45}
+.seg4.err{border-color:color-mix(in srgb,var(--bad) 55%,var(--border));background:var(--bad-bg)}
+.dot.half{background:transparent;box-shadow:inset 0 0 0 2px var(--primary)}
+
+/* 规则表：一条规则 = 主行 + 一行摊开的理由。
+   理由横跨整行、不占列宽，所以 0021 必改 2「合表」与红线「理由摊开不折叠」不必二选一。 */
+tr.rmain>td{border-bottom:0}
+tr.rmain.solo>td{border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent)}
+tr.rwhy>td{padding-top:2px;padding-bottom:9px}
+tr.rwhy details{margin-top:0;border:0;padding:0;background:transparent}
+tr.rwhy summary{font-size:11.5px}
+tbody tr.rmain:hover,tbody tr.rmain:hover+tr.rwhy{background:color-mix(in srgb,var(--muted) 40%,transparent)}
+.why2{border-left:2px solid var(--warn);padding:1px 0 1px 10px;font-size:12px;color:var(--warn)}
+.why2.gap{border-left-color:var(--bad);color:var(--bad)}
+.why2 .src{color:var(--muted-foreground);font-size:11px;margin-top:2px}
+
+/* 证据强度（0021 建议 4：断到哪层 + 证据 合成一个信号。
+   硬约束是语义一丝不减——所以标签直接把「只到状态码 / 断在业务值」写在脸上，不靠颜色暗示。 */
+.es{display:flex;gap:6px;align-items:center;font-size:12px;font-weight:500}
+.mtr{display:inline-flex;gap:2px;flex:none}
+.mtr i{width:5px;height:11px;border-radius:1.5px;display:block;
+  background:color-mix(in srgb,var(--foreground) 15%,transparent)}
+.es.s3{color:var(--ok)}.es.s3 .mtr i{background:var(--ok)}
+.es.s1{color:var(--warn)}.es.s1 .mtr i:first-child{background:var(--warn)}
+/* 探测项不在"强弱"这根标尺上，所以格子画成空心而不是不填——
+   和「什么都没断」的实心灰空格区分开，避免两种完全不同的事看起来一样 */
+.es.sp{color:var(--probe)}
+.es.sp .mtr i{background:transparent;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--probe) 60%,transparent)}
+.es.s0{color:var(--muted-foreground)}
+
+/* 词表随用随教（0021 建议 5）：术语只在第一次出现的那一屏解释一次 */
+.gloss{margin:9px 0 0 37px;font-size:11.5px;color:var(--muted-foreground);line-height:1.7}
+.gloss.in{margin:9px 0 0}
+.gloss em{font-style:normal;font-weight:500;color:var(--foreground);
+  border-bottom:1px dotted color-mix(in srgb,var(--foreground) 45%,transparent)}
+
+/* 覆盖占比条 */
+.cov{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--muted)}
+.cov i{display:block;height:100%}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted-foreground);margin-top:7px}
+.legend span{display:inline-flex;gap:5px;align-items:center}
+
+/* 进度条：NewBatchFlow.tsx:463-467（h-1.5 槽 + primary 填，仓内唯一范式） */
+.bar{height:6px;border-radius:999px;overflow:hidden;background:var(--muted);margin-top:6px}
+.bar i{display:block;height:100%;background:var(--primary)}
+
+/* 提示块 */
+.note{border-radius:9px;padding:9px 11px;font-size:12px;margin-top:10px;border:1px solid}
+.note.ok{border-color:color-mix(in srgb,var(--ok) 40%,transparent);background:color-mix(in srgb,var(--ok) 9%,transparent)}
+.note.warn{border-color:color-mix(in srgb,var(--warn) 45%,transparent);background:color-mix(in srgb,var(--warn) 10%,transparent)}
+.note.bad{border-color:color-mix(in srgb,var(--bad) 45%,transparent);background:color-mix(in srgb,var(--bad) 9%,transparent)}
+.note.flat{border-color:var(--border);background:color-mix(in srgb,var(--muted) 40%,transparent)}
+.note b{color:var(--foreground)}
+
+/* 空态：KnowledgeHome.tsx:266-283 范式（虚线 + 图标 + 标题 + 副 + 主按钮） */
+.empty{border:1px dashed var(--border);border-radius:16px;padding:34px 18px;text-align:center}
+.empty .t{font-size:13.5px;font-weight:500}
+.empty .s{margin:5px auto 0;max-width:430px;font-size:12.5px;color:var(--muted-foreground);line-height:1.65}
+.empty .a{margin-top:14px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+
+/* ask_user 卡：AskUserOptions.tsx:570-682 一比一 */
+.ask{border:1px solid var(--border);border-radius:16px;background:var(--card);padding:14px;
+  box-shadow:0 1px 2px rgba(0,0,0,.04),0 4px 14px rgba(0,0,0,.04)}
+.ask+.ask{margin-top:10px}
+.ask .hdr{display:flex;gap:11px;align-items:flex-start}
+.ask .ix{width:24px;height:24px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;
+  font-size:12px;font-weight:600;background:color-mix(in srgb,var(--foreground) 8%,transparent);
+  color:color-mix(in srgb,var(--foreground) 72%,transparent)}
+.ask .q{font-size:13px;font-weight:500;line-height:1.4}
+.ask .qs{font-size:11px;color:var(--muted-foreground);margin-top:2px}
+.opts{margin-top:11px;display:flex;flex-wrap:wrap;gap:6px}
+.opt{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:999px;
+  padding:4px 11px;font-size:11.5px;font-weight:500;color:var(--muted-foreground);background:transparent;
+  cursor:pointer;font-family:inherit}
+.opt.on{border-color:color-mix(in srgb,var(--foreground) 35%,transparent);
+  background:color-mix(in srgb,var(--foreground) 5%,transparent);color:var(--foreground)}
+.opt .n{width:16px;height:16px;border-radius:50%;font-size:10px;display:flex;align-items:center;justify-content:center;
+  background:color-mix(in srgb,var(--muted) 60%,transparent);color:var(--muted-foreground)}
+.opt .n.done{background:var(--primary);color:var(--primary-foreground)}
+.ask .ft{margin-top:12px;padding-top:11px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+  border-top:1px solid color-mix(in srgb,var(--border) 65%,transparent)}
+.ask .lnk{font-size:11.5px;color:var(--muted-foreground);text-decoration:underline;cursor:pointer}
+.askbtn{border:0;border-radius:6px;background:var(--primary);color:var(--primary-foreground);
+  padding:6px 12px;font-size:12px;font-weight:500;cursor:pointer;font-family:inherit}
+.askbtn.sec{background:transparent;border:1px solid var(--border);color:var(--foreground)}
+/* 已答态：AskUserOptions.tsx:861-882 */
+.resolved{border:1px solid color-mix(in srgb,var(--border) 60%,transparent);border-radius:8px;
+  background:var(--background);box-shadow:0 1px 2px rgba(0,0,0,.04);padding:8px 14px;margin-top:10px;
+  display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--muted-foreground)}
+.resolved b{font-size:13px;color:var(--foreground);font-weight:600}
+
+/* 聊天气泡外壳（只为让卡片有语境，不设计聊天本身） */
+.chat{background:var(--background);border-radius:10px;padding:12px}
+.bub{font-size:12.5px;color:var(--muted-foreground);margin-bottom:2px}
+
+/* 输入框与模式选择器摹本：ChatComposer.tsx:862-890（触发钮）/:884（弹层）/:95-134（行） */
+.composer{border:1px solid var(--border);border-radius:16px;background:var(--card);padding:10px 12px 8px}
+.cin{font-size:13.5px;color:var(--muted-foreground);padding:2px 2px 8px}
+.ctool{display:flex;gap:6px;align-items:center}
+.capbtn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 8px;border:0;border-radius:8px;
+  background:transparent;color:var(--foreground);font:inherit;font-size:13px;font-weight:500;cursor:pointer}
+.capbtn:hover{background:color-mix(in srgb,var(--muted) 55%,transparent)}
+.capbtn.on{background:color-mix(in srgb,var(--primary) 10%,transparent);color:var(--primary)}
+.sendb{width:28px;height:28px;border-radius:50%;background:var(--primary);color:var(--primary-foreground);
+  display:flex;align-items:center;justify-content:center;font-size:14px}
+.capmenu{width:262px;border:1px solid var(--border);border-radius:12px;background:var(--popover,var(--card));
+  padding:4px 0;box-shadow:0 12px 32px -12px rgba(0,0,0,.35);margin-bottom:8px}
+.capitem{display:flex;gap:10px;align-items:center;padding:6px 12px;cursor:pointer}
+.capitem:hover{background:color-mix(in srgb,var(--muted) 45%,transparent)}
+.capitem .l{font-size:12.5px;font-weight:500;line-height:1.3}
+.capitem .d{font-size:11px;line-height:1.35;color:var(--muted-foreground)}
+.capitem .ic{color:var(--muted-foreground)}
+.capitem.on .ic{color:var(--primary)}
+.capitem.on .l{color:var(--foreground)}
+
+/* 聊天侧富结果卡（新组件，挂 ChatMessages.tsx:326-370 那道已有四个同型先例的缝） */
+.rcard{border:1px solid var(--border);border-radius:16px;background:var(--card);padding:13px 14px;
+  box-shadow:0 1px 2px rgba(0,0,0,.04),0 4px 14px rgba(0,0,0,.04)}
+.rcard+.rcard{margin-top:10px}
+.rh{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px}
+.rrow{display:flex;gap:9px;align-items:center;font-size:12px;padding:5px 0;
+  border-top:1px solid color-mix(in srgb,var(--border) 50%,transparent)}
+.rf{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:11px;padding-top:10px;
+  border-top:1px solid color-mix(in srgb,var(--border) 65%,transparent)}
+
+/* 确认弹层：ConfirmDialog 语义（DT 有该组件，本稿只画观感） */
+.dlg{border:1px solid var(--border);border-radius:16px;background:var(--card);overflow:hidden;
+  box-shadow:0 18px 48px -18px rgba(0,0,0,.45)}
+.dlg .dh{padding:12px 15px 0;font-size:14px;font-weight:600}
+.dlg .db{padding:8px 15px 0;font-size:12.5px;color:var(--muted-foreground);line-height:1.7}
+.dlg .df{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 15px;margin-top:12px;
+  border-top:1px solid color-mix(in srgb,var(--border) 65%,transparent)}
+
+/* 双栏对照 */
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(268px,1fr));gap:10px}
+.pane{border:1px solid var(--border);border-radius:11px;overflow:hidden}
+.pane>.t{padding:6px 11px;font-size:11px;color:var(--muted-foreground);
+  background:color-mix(in srgb,var(--muted) 45%,transparent);border-bottom:1px solid var(--border)}
+.pane>.c{padding:11px}
+
+/* 侧栏摹本：SidebarShell.tsx:351（aside 底 = --secondary）与 :415-419（菜单项） */
+.sb{width:214px;flex:none;background:var(--secondary);border-radius:10px;padding:8px 6px}
+.sb .g{font-size:11px;color:var(--muted-foreground);padding:4px 11px 6px}
+.sb .n{display:flex;gap:10px;align-items:center;padding:7px 11px;border-radius:8px;font-size:13.5px;
+  color:var(--foreground);cursor:pointer}
+.sb .n.on{background:var(--accent);font-weight:500}
+.sb .sep{border-top:1px solid color-mix(in srgb,var(--border) 55%,transparent);margin:8px 6px}
+
+.kv{display:grid;grid-template-columns:88px minmax(0,1fr);gap:5px 12px;font-size:12px}
+.kv .k{color:var(--muted-foreground)}
+.act{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding-top:11px;margin-top:11px;
+  border-top:1px solid color-mix(in srgb,var(--border) 65%,transparent)}
+details{border:1px solid var(--border);border-radius:9px;padding:8px 11px;margin-top:9px;font-size:12px}
+summary{cursor:pointer;color:var(--muted-foreground)}
+pre{background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:7px;padding:9px;
+  overflow-x:auto;font-size:11px;line-height:1.55;margin:8px 0 0}
+code{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;
+  background:color-mix(in srgb,var(--muted) 55%,transparent);padding:1px 5px;border-radius:4px}
+.ic{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7;flex:none}
+.tabs{display:flex;gap:2px;background:var(--muted);border-radius:8px;padding:2px;width:fit-content}
+.tabs button{border:0;background:transparent;font:inherit;font-size:12px;padding:4px 11px;border-radius:6px;
+  color:var(--muted-foreground);cursor:pointer}
+.tabs button[data-on]{background:var(--background);color:var(--foreground);font-weight:500;
+  box-shadow:0 1px 2px rgba(0,0,0,.05)}
+</style>
+
+<div class="top">
+  <h1 class="serif">M2 测试工作台 · 逐屏交互稿</h1>
+  <div class="seg" id="th">
+    <button data-t="light" data-on>Cream</button><button data-t="dark">Dark</button>
+    <button data-t="snow">Default</button><button data-t="glass">Glass</button>
+  </div>
+  <small>切主题看四套配色是否都成立——DT 有四套，新页面必须四套都对</small>
+</div>
+
+<div class="doc">
+<div class="nav">
+  <a href="#s0">0 先说清楚</a>
+  <a href="#s1">1 批次列表</a><a href="#s2">2 阶段账本</a><a href="#s3">3 规则表</a>
+  <a href="#s4">4 结果表</a><a href="#s5">5 需求接入</a><a href="#s6">6 聊天侧</a>
+  <a href="#s7">7 双视图</a><a href="#s8">8 异常态</a>
+  <a href="#s9">9 设计说明</a><a href="#s10">10 落点与预算</a><a href="#s11">11 四件都已定</a>
+  <a href="#s12">12 本轮改了什么</a>
+</div>
+
+<!-- ═══ 0 ═══ -->
+<section class="step" id="s0">
+  <h2><i>0</i>这份稿要解决什么，不解决什么</h2>
+  <p class="k">M1 的批次界面是施工时顺手生成的，功能齐但没经过设计——这一份补上，并且先过你的眼再动手。</p>
+
+  <div class="screen"><div class="bd">
+    <div class="two">
+      <div class="pane">
+        <div class="t">这份稿管什么</div>
+        <div class="c" style="font-size:12.5px;line-height:1.75;color:var(--muted-foreground)">
+          <b style="color:var(--foreground)">每一屏用户在问什么问题</b>，以及界面怎么用最少的东西把这个问题答掉。
+          屏与屏之间怎么连、走不通的时候界面说什么。
+        </div>
+      </div>
+      <div class="pane">
+        <div class="t">这份稿不管什么</div>
+        <div class="c" style="font-size:12.5px;line-height:1.75;color:var(--muted-foreground)">
+          不写产品代码，不改任何既有文件；不改后端产物契约（schema 已 v1.0.0 冻结）；
+          不新造视觉体系——颜色圆角字号全部从 DT 现有页面搬。
+        </div>
+      </div>
+    </div>
+
+    <div class="note flat">
+      <b>一条测试旅程 = 一个批次。</b>批次是唯一的状态对象，聊天和工作台是它的两个投影。
+      这句话是整份稿的地基：所有"同步""跳转""状态不一致"的问题，答案都是同一句——
+      <b>以批次为准，界面只是它的两个窗口</b>。
+    </div>
+
+    <div style="margin-top:14px;font-size:11px;color:var(--muted-foreground)">
+      八屏各自要回答的问题 —— <b style="color:var(--foreground)">每屏只允许有一个</b> ↓</div>
+    <div class="tw" style="margin-top:6px"><table>
+      <thead><tr><th style="width:118px">屏</th><th>这一屏唯一要回答的问题</th><th style="width:150px">答不上来会怎样</th></tr></thead>
+      <tbody>
+        <tr><td>1 批次列表</td><td><b>今天有哪几条要我处理？</b></td><td>只能靠记忆找活</td></tr>
+        <tr><td>2 阶段账本</td><td><b>这条旅程现在轮到我做什么？</b></td><td>把工具当流水线，卡住不知卡在哪</td></tr>
+        <tr><td>3 规则表</td><td><b>需求里的规则，还有哪条没交代？</b></td><td>覆盖率数字好看但没人信</td></tr>
+        <tr><td>4 结果表</td><td><b>哪些结论我可以真的信？</b></td><td>假绿，或者不敢信绿</td></tr>
+        <tr><td>5 需求接入</td><td><b>这条需求现在接到什么程度了？</b></td><td>需求和用例两张皮</td></tr>
+        <tr><td>6 聊天侧</td><td><b>这一轮要我拍什么？</b></td><td>找不到入口，或者普通聊天里冒出测试元素</td></tr>
+        <tr><td>7 双视图</td><td><b>我刚才那一下，另一边认不认？</b></td><td>两个真相，最致命的一种坏</td></tr>
+        <tr><td>8 异常态</td><td><b>它坏了还是我用错了？</b></td><td>卡死，只能找人</td></tr>
+      </tbody></table></div>
+
+    <div class="note flat"><b>上一版这张表填错了，错法值得记下来。</b>屏 1 那一格原本写的是三个问题
+      （有哪些 / 走到哪 / 哪条要我管），屏 4 写了三个，屏 6 写了四个。
+      <b>一屏挂三个问题，界面就得摆三套控件</b>——这正是工作台侧被判"不顺"的机械成因。
+      <div style="margin-top:6px">本轮的做法：<b>先把这张表压到一屏一问，再让屏去对齐它</b>，而不是反过来给已有的屏补问题。
+        屏 1 删微条、屏 2 九格并四段、屏 3 与屏 5 的规则表合成一张，三处改动都是这一格文字压缩后的直接后果。</div></div>
+  </div></div>
+
+  <div class="why"><b>为什么信息架构排在样式前面</b>：0016 写了一条证伪信号——
+    「看着像 DT 但用起来不顺」= mood 做成了皮肤套用。防它的办法就是先把上面这张表填对，
+    再谈颜色。上表任何一行答不上来，改样式都没用。</div>
+
+  <div class="fix"><b>本轮返工的病因，写在最前面</b>（0021 总裁定 + BB-499）：上一版<b>把工程产物模型按原样投影成了 UI</b>——
+    后端 <code>stepper()</code> 返几项、账本就画几格，后端有几张表、界面就摆几张表。
+    聊天侧之所以过稿，是因为它被压缩过（摘要级卡 + 「看的进聊天、改的进工作台」）；工作台侧没压。
+    <div style="margin-top:6px"><b>压缩原则</b>：工程产物模型 ≠ 用户心智模型。凡是后端产物逐项映射成 UI 元素的地方，
+      中间必须垫一层<b>按用户任务的分组</b>，否则界面复杂度就等于后端复杂度。
+      <b>压缩的是投影方式，不是信任机制</b>——覆盖三态、逐行理由、探测不进分母、挂起带子因、写确认零默认、
+      结论落账不可编辑、成对错误态分开说，这七样一条没动，见各屏。</div></div>
+</section>
+
+<!-- ═══ 1 ═══ -->
+<section class="step" id="s1">
+  <h2><i>1</i>入口与批次列表</h2>
+  <p class="k">侧栏点进来的第一屏。一条测试旅程一张卡，卡上必须能一眼看出走到哪、结论如何。</p>
+
+  <div class="ia">
+    <div class="t">这一屏</div>
+    <div class="b">
+      <span class="lb">目标</span><span>让用户三秒内挑出「该我管的那一条」，而不是逐条点进去看。</span>
+      <span class="lb">布局</span><span>DT 标准页头（图标框 + 标题 + 描述 + 右上操作区）→ 常驻任务条（有任务在跑时）→ 筛选行 → 批次卡纵向列表。内容区 <code>max-w-6xl px-6 py-10</code>，与既有工作台同宽。</span>
+      <span class="lb">关键交互</span><span>整张卡可点进详情；右上「从 TAPD 拉需求」为主动作、「手动新建」为次动作；筛选按阶段与结论两轴。</span>
+      <span class="lb">状态流转</span><span>卡上的阶段与结论<b>全部由产物存在性推导</b>，不存进度字段——所以刷新页面、换设备看到的永远一致。</span>
+      <span class="lb">空 / 错</span><span>零批次 → 引导空态；扩展服务不可达 → 区分「没装」和「装了但坏了」，两句话不同。</span>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">侧栏 · 两个测试入口并列（0017 O1，用户拍板）</div>
+    <div class="bd">
+      <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap">
+        <div class="sb">
+          <div class="g">工作区</div>
+          <div class="n">Home</div>
+          <div class="n">Partners</div>
+          <div class="n">Book</div>
+          <div class="sep"></div>
+          <div class="n">Memory</div>
+          <div class="n">Knowledge Center</div>
+          <div class="n">测试工作台</div>
+          <div class="n on">测试旅程</div>
+          <div class="n">Settings</div>
+        </div>
+        <div style="flex:1;min-width:250px">
+          <div class="tw"><table style="min-width:0">
+            <thead><tr><th style="width:100px">入口</th><th>什么时候进这个</th></tr></thead>
+            <tbody>
+              <tr><td><b>测试工作台</b><div class="sub">既有，不动</div></td>
+                <td><b>抓包快车道。</b>手里已经有一份接口录制或文档，想尽快变成能跑的用例——不问需求是什么，直接从流量出发。
+                  <div class="sub">进来第一件事是「传一份东西上来」。</div></td></tr>
+              <tr><td><b>测试旅程</b><div class="sub">M2 新增</div></td>
+                <td><b>需求驱动的完整旅程。</b>手里是一条需求（TAPD 单子），要从"这条需求说了什么"一路走到
+                  "哪些规则测了、结论是什么、没测的为什么"。
+                  <div class="sub">进来第一件事是「挑一条需求」。</div></td></tr>
+            </tbody></table></div>
+          <div class="note flat" style="font-size:12px"><b>一句话分工</b>：
+            手里有<b>流量</b>走测试工作台，手里有<b>需求</b>走测试旅程。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">/test-journey · 正常态</div>
+    <div class="bd">
+      <div class="pghd">
+        <div class="icf"><svg class="ic" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="m9 14 2 2 4-4"/></svg></div>
+        <div>
+          <h3 class="serif">测试旅程</h3>
+          <p class="desc">一条需求从接入到结论收口的完整过程。每条旅程的进度由它产出了哪些东西决定。</p>
+        </div>
+        <div class="right">
+          <button class="btn sm">环境与凭据</button>
+          <button class="btn sm">刷新</button>
+          <button class="btn pri sm">从 TAPD 拉需求</button>
+        </div>
+      </div>
+
+      <!-- 常驻任务条：TestWorkbenchHub.tsx:129-132 已有先例（刻意放在视图分支之外） -->
+      <div class="note flat" style="display:flex;gap:10px;align-items:center;margin-top:0">
+        <span class="dot live"></span>
+        <div class="grow">
+          <b>正在执行 · 药品管理主链路</b>
+          <span style="color:var(--muted-foreground)"> · 第 6/12 条 · 已跑 1 分 12 秒</span>
+          <div class="bar"><i style="width:50%"></i></div>
+        </div>
+        <button class="btn sm">回到它</button><button class="btn sm">停止</button>
+      </div>
+
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:14px 0 10px">
+        <div class="tabs"><button data-on>全部 5</button><button>要我拍板 2</button><button>已收口 1</button></div>
+        <span class="grow"></span>
+        <span class="chip">来源：全部</span><span class="chip">结论：全部</span>
+      </div>
+
+      <div class="list">
+        <div class="item">
+          <div class="r1">
+            <span class="ttl">销售员只能看自己的订单</span>
+            <span class="chip">TAPD #1140342</span>
+            <span class="grow"></span>
+            <span class="badge warn lead">等你采纳 12 条用例</span>
+          </div>
+          <div class="r2">
+            <span>用例已生成 · 待采纳</span><span>·</span><span>12 条草稿</span><span>·</span><span>2 小时前</span>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="r1">
+            <span class="ttl">药品管理主链路</span>
+            <span class="chip">TAPD #1140287</span>
+            <span class="grow"></span>
+            <span class="badge live lead"><span class="dot live"></span>执行中 6/12</span>
+          </div>
+          <div class="r2">
+            <span>正在执行</span><span>·</span><span>12 条已采纳</span><span>·</span><span>刚刚</span>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="r1">
+            <span class="ttl">登录三次错误锁定一小时</span>
+            <span class="chip">TAPD #1140203</span>
+            <span class="grow"></span>
+            <span class="badge bad lead">2 条没过</span>
+          </div>
+          <div class="r2">
+            <span>9 条 · 通过 6 / 没过 2 / 挂起 1</span><span>·</span><span>覆盖 8/9 · 已收口</span><span>·</span><span>昨天 18:40</span>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="r1">
+            <span class="ttl">客户资料导入（草稿）</span>
+            <span class="chip">手动新建</span>
+            <span class="grow"></span>
+            <span class="badge mute lead">刚接入，还没往下走</span>
+          </div>
+          <div class="r2">
+            <span>已接入</span><span>·</span><span>还没澄清</span><span>·</span><span>3 天前</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:14px;font-size:11.5px;color:var(--muted-foreground)">
+        凭据只存在你这台机器上，界面任何位置都不显示它的值。
+      </div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">空态 · 一条旅程都还没有</div>
+    <div class="bd">
+      <div class="empty">
+        <svg class="ic" viewBox="0 0 24 24" style="width:26px;height:26px;color:var(--muted-foreground);margin-bottom:8px"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/></svg>
+        <div class="t">现在没有要你处理的事</div>
+        <div class="s">这份列表按「今天有什么要我管」排：有用例等你采纳、有结果没过、有旅程卡住了，都会出现在这里。
+          现在一条旅程都还没有——从 TAPD 挑一条需求开始。</div>
+        <div class="a"><button class="btn pri">从 TAPD 拉需求</button><button class="btn">手动新建一条</button></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">错误态 · 后端不可达（两种，说法必须不同）</div>
+    <div class="bd tight">
+      <div class="note warn"><b>测试能力还没装上。</b>这台机器上没找到 test-partner 服务。装好后刷新这一页就能用。
+        <span class="lnk" style="text-decoration:underline;cursor:pointer">怎么装</span></div>
+      <div class="note bad"><b>测试能力装了，但连不上。</b>服务在 127.0.0.1:3789 没有响应（可能没启动）。
+        <div style="margin-top:7px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm">重试</button><button class="btn sm">看服务日志</button></div></div>
+    </div>
+  </div>
+
+  <div class="gloss"><b>这一屏第一次出现的词</b>（后面各屏不再重复解释）：
+    <em>采纳</em> = 把草稿用例冻结成正式的那一份，之后编译、执行、出结论都以它为准；
+    <em>收口</em> = 需求里每条规则要么有用例、要么有一句为什么不测，两样都没有就不算收口；
+    <em>挂起</em> = 跑了，但证据不够，系统拒绝给结论。</div>
+
+  <div class="fix"><b>改了什么：卡上那条九格微条已删</b>（0021 必改 3）。
+    上一版的理由是"微条给的是整条路"——但这条列表的组织原则是 O3 拍的
+    <b>「今天有什么要我处理」，不是盘进度</b>，而微条恰恰是进度拓扑：它不要求用户做任何事。
+    按 O3 自己的规矩就该降级。
+    <div style="margin-top:5px">而且上一版自认过冗余：文字状态（"待采纳"）和微条同时给，是<b>两个控件答同一个问题</b>。
+      进度拓扑现在只在详情页看（§2 四段账本），列表卡上不再有。</div></div>
+  <div class="fix"><b>第一眼口径已定：先说有几条没过</b>（0017 O3，用户拍板）。
+    每张卡右侧<b>只放一个</b>大一档的徽标，说的是"这条要你做什么"——等你采纳 / 执行中 / 几条没过 / 刚接入还没动。
+    覆盖情况与收口状态降到第二行的灰字里，和条数、时间并列。
+    <div style="margin-top:5px">理由是这份列表的用法：<b>今天有什么要我处理</b>，不是盘进度。
+      「已收口」这种好消息不需要抢第一眼——它不要求你做任何事。</div></div>
+  <div class="why"><b>两个入口的已知代价，本稿不替你消化</b>：0017 记了你接受「侧栏两个测试入口，可能一时分不清该进哪个」。
+    本轮<b>没有</b>加引导浮层、首次进入说明、也没加"你要找的是不是另一个"这类提示——那些都是拿提示补设计洞。
+    <div style="margin-top:5px"><b>建议（本轮不实现，等你哪天觉得真的绊到了再定）</b>：三种成本递增的区分手段——
+      ① 侧栏两项各配一行 tooltip，把上面那句「有流量走这个、有需求走那个」放进去（最轻）；
+      ② 两页的空态里互相点名对方，明确说"如果你手里是一份录制，去隔壁"（中）；
+      ③ 两项在侧栏里紧邻并加一个共同的分组小标题（改动侧栏结构，最重，会动到 SECONDARY_NAV 的分组语义）。
+      我推荐真绊到了先上 ①。</div></div>
+  <div class="land"><b>落点</b>：新增 <code>web/app/(workspace)/test-journey/page.tsx</code>（薄壳，触点 T1）+
+    <code>web/components/test-journey/JourneyList.tsx</code>（触点 T2）；侧栏加一项 = 改
+    <code>web/components/sidebar/SidebarShell.tsx</code> SECONDARY_NAV（触点 T3，与既有
+    <code>/test-workbench</code> 项同组同写法，:112-121 有先例）。文案成对进
+    <code>web/locales/{en,zh}/app.json</code>（触点 T4）。</div>
+</section>
+
+<!-- ═══ 2 ═══ -->
+<section class="step" id="s2">
+  <h2><i>2</i>批次详情 · 阶段账本</h2>
+  <p class="k">这不是进度条，是账本。四段亮不亮，只看「这个东西产出来没有」，不看走到第几步。</p>
+
+  <div class="ia">
+    <div class="t">这一屏</div>
+    <div class="b">
+      <span class="lb">目标</span><span><b>只回答一件事：这条旅程现在轮到我做什么。</b>「哪一格为什么还灭着」是追问，放在段展开里，不占第一眼。</span>
+      <span class="lb">布局</span><span>返回 + 批次页头 → 三个页签（账本 / 规则 / 结果）→ <b>当前该你做的那一条</b> → 四段账本 → 事件流（默认收起）。</span>
+      <span class="lb">关键交互</span><span>四段各点开看段内的格子；段内亮格点开看产物，灭格点开只说一句「缺什么才能亮」。整条账本没有百分比、没有「第几步」。</span>
+      <span class="lb">状态流转</span><span>产物写盘即亮，没有中间态。执行这类耗时动作用单独一条运行进度，不动账本——<b>账本记事实，进度记过程</b>，两件事不混。</span>
+      <span class="lb">空 / 错</span><span>四段全灭 = 刚建的批次；段内某格亮但下游被闸拦住 → 该段转红 + 一句人话原因。</span>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">/test-journey/b-20260811-a7k2c9 · 账本页签</div>
+    <div class="bd">
+      <div class="pghd" style="padding-bottom:12px;margin-bottom:12px">
+        <button class="btn sm" style="margin-top:2px">← 全部旅程</button>
+        <div>
+          <h3 style="font-size:17px">销售员只能看自己的订单</h3>
+          <p class="desc" style="font-size:12.5px">TAPD #1140342 · 标准档 · 靶机 127.0.0.1:8047 · 创建于 2 小时前</p>
+        </div>
+        <div class="right">
+          <button class="btn sm">继续对话</button>
+          <button class="btn pri sm">去采纳 12 条用例</button>
+        </div>
+      </div>
+
+      <div class="tabs" style="margin-bottom:12px"><button data-on>账本</button><button>规则</button><button>结果</button></div>
+
+      <div class="note ok" style="display:flex;gap:10px;align-items:center;margin-top:0">
+        <div class="grow"><b>轮到你了：12 条用例草稿等你采纳</b>
+          <div style="font-size:11.5px;margin-top:2px">勾选哪些进库。采纳这一下是冻结点——之后编译、执行、出结论都以这一份为准。</div></div>
+        <button class="btn pri sm">去采纳</button>
+      </div>
+
+      <div style="margin-top:14px;font-size:11px;color:var(--muted-foreground)">这条旅程的账本 · 四段 ↓</div>
+      <div class="ledger" style="margin-top:6px">
+        <div class="seg4 on">
+          <div class="sg"><span class="dot ok"></span>接入与澄清<span class="st">齐了</span></div>
+          <div class="ss">需求已读入，9 条规则已澄清并分析</div>
+        </div>
+        <div class="seg4 on">
+          <div class="sg"><span class="dot half"></span>用例<span class="st">差最后一步</span></div>
+          <div class="ss">12 条草稿写好了，还没采纳</div>
+        </div>
+        <div class="seg4">
+          <div class="sg"><span class="dot off"></span>执行<span class="st">还没开始</span></div>
+          <div class="ss">采纳之后才跑得起来</div>
+        </div>
+        <div class="seg4">
+          <div class="sg"><span class="dot off"></span>收口<span class="st">还没开始</span></div>
+          <div class="ss">结论与覆盖都还没有</div>
+        </div>
+      </div>
+
+      <div class="note flat">
+        <b>停在这里也算完整交付。</b>不是每条旅程都要走到最后一段——只做到"用例已生成"拿去评审，
+        或者只做到"规则已澄清"拿去和产品对齐，都是正经交付物。所以这条账本不显示"完成度 44%"。
+      </div>
+
+      <details>
+        <summary>这条旅程都发生过什么（12 条事件）</summary>
+        <div class="tw" style="margin-top:8px"><table>
+          <thead><tr><th style="width:118px">时间</th><th style="width:104px">谁</th><th>发生了什么</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">08-11 14:02</td><td>你</td><td>确认档位：标准档</td></tr>
+            <tr><td class="mono">08-11 14:05</td><td>系统</td><td>从 TAPD #1140342 读入需求正文，已存快照摘要</td></tr>
+            <tr><td class="mono">08-11 14:11</td><td>你</td><td>澄清了 3 个问题（在聊天里）</td></tr>
+            <tr><td class="mono">08-11 14:26</td><td>系统</td><td>生成 12 条用例草稿，其中 2 条标为探测性</td></tr>
+          </tbody></table></div>
+      </details>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">段点开 · 九个格子一个没少，只是收进了段里</div>
+    <div class="bd">
+      <div style="font-size:11px;color:var(--muted-foreground);margin-bottom:6px">点开「用例」这一段 ↓</div>
+      <div class="ledger" style="max-width:460px">
+        <div class="cell on"><div class="tp"><span class="dot ok"></span>已产出</div><div class="nm">用例已生成</div><div class="ar">12 条草稿</div></div>
+        <div class="cell"><div class="tp"><span class="dot off"></span>还没有</div><div class="nm">用例已采纳</div><div class="ar">等你勾选冻结</div></div>
+        <div class="cell"><div class="tp"><span class="dot off"></span>还没有</div><div class="nm">已编译成工程</div><div class="ar">采纳后自动</div></div>
+      </div>
+      <div class="tw" style="margin-top:12px"><table>
+        <thead><tr><th style="width:112px">段</th><th>段里是哪几格（顺序不变，只是分了组）</th></tr></thead>
+        <tbody>
+          <tr><td><b>接入与澄清</b></td><td>需求已接入 · 规则已澄清 · 测试已分析</td></tr>
+          <tr><td><b>用例</b></td><td>用例已生成 · 用例已采纳 · 已编译成工程</td></tr>
+          <tr><td><b>执行</b></td><td>已执行</td></tr>
+          <tr><td><b>收口</b></td><td>结论已投影 · 覆盖已收口</td></tr>
+        </tbody></table></div>
+      <div class="note flat"><b>段状态怎么来的，和格子完全同源</b>：段内格子<b>全有产物</b> = 齐了；
+        <b>有一部分</b> = 差最后一步；<b>一个都没有</b> = 还没开始。
+        段<b>不是</b>一个新的状态字段，也不存盘——它是格子的即时汇总。
+        所以「亮灭由产物存在性推导、不存 step 字段、无百分比、任意前缀都是合法交付」这条原则一个字没改，
+        <b>改的只是一次显示几个东西</b>。</div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">灭的段点开 · 不假装能点，但要说清缺什么</div>
+    <div class="bd tight">
+      <div class="note warn"><b>「执行」这一段还开不了。</b>它要的东西是一份编译好的自动化工程，现在还没有；
+        而编译要的是一份已采纳的用例集，现在也还没有。
+        <div style="margin-top:7px">往回一段就是能动的：<button class="btn sm pri" style="margin-left:4px">去采纳用例</button></div></div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">异常 · 段里有东西产出了，但被闸拦住</div>
+    <div class="bd tight">
+      <div class="ledger" style="max-width:340px">
+        <div class="seg4 err">
+          <div class="sg"><span class="dot bad"></span>收口<span class="st">被拦下</span></div>
+          <div class="ss">跑完了 1 趟，但结论没能落账</div>
+        </div>
+      </div>
+      <div class="note bad"><b>跑完了，但结论没能落账。</b>3 条用例执行时通过了，可是没留下能证明"业务真的生效"的证据，
+        系统拒绝把它们记成通过——宁可没结论，也不给假结论。
+        <div style="margin-top:7px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm">看是哪 3 条</button><button class="btn sm">补证据后重跑</button></div></div>
+      <div class="note flat" style="font-size:11.5px">段展开后能看到是段里的哪一格红了
+        （「结论已投影」被拦，「覆盖已收口」还没开始）。<b>红色不吞掉细节，只是把细节挪到第二眼。</b></div>
+    </div>
+  </div>
+
+  <div class="gloss"><b>这一屏第一次出现的词</b>：<em>账本</em> = 记这条旅程<b>产出过什么</b>，不记它走到第几步；
+    <em>档</em> = 这条需求打算测多深（清单 / 标准 / 深），在聊天里拍，见 §6e；
+    <em>趟</em> = 同一批用例的一次完整执行，同一条旅程可以跑很多趟。</div>
+
+  <div class="why"><b>为什么坚持"亮灭由产物推导"而不是存一个 step 字段</b>：存字段就会有第二真相——
+    字段说走到第 5 步，可产物其实被删了。推导出来的账本永远不会撒谎，代价只是每次要看一眼文件在不在，
+    这个代价可以忽略。</div>
+  <div class="fix"><b>改了什么：九格并成四段</b>（0021 必改 1）。
+    上一版的九格是 <code>artifacts.py:195-207</code> <code>stepper()</code> 的直译——<b>后端返几项就画几格</b>。
+    <div style="margin-top:5px">最硬的反向证据是上一版自己写下的那条施工要求：后端现返 7 项，
+      稿子为了<b>凑满九格</b>反过来要求后端补 2 项。<b>UI 完整性倒逼工程量，说明投影方向反了</b>——
+      用户心智里这件事是四段（接入与澄清 → 用例 → 执行 → 收口），不是九个并列的产物名。</div>
+    <div style="margin-top:5px"><b>原则一条没削</b>：亮灭仍由产物存在性推导、不存 step 字段、无百分比、任意前缀是合法交付。
+      该原则约束的是<b>状态怎么来</b>，不约束<b>显示几格</b>——这是上一版把两件事混在一起了。</div></div>
+  <div class="fix"><b>施工要求（后端，不占上游预算，维持不变）</b>：现在
+    <code>server/journey/artifacts.py:195-207</code> 的 <code>stepper()</code> 只返 7 项——六个批次级产物加编译产物；
+    执行与投影的产物落在 run 目录（<code>run_receipt</code> / <code>verdicts.jsonl</code>），没进账本。
+    <b>四段里「执行」和「收口」的亮灭要读的正是这两项</b>，所以这条施工要求照旧，只是它的理由从
+    "凑满九格"换成了"这两段没有数据源"。属 extensions 内改动。</div>
+  <div class="land"><b>落点</b>：<code>web/app/(workspace)/test-journey/[batchId]/page.tsx</code> +
+    <code>web/components/test-journey/ArtifactLedger.tsx</code>（均在 T1/T2 薄壳预算内）。零新增上游触点。</div>
+</section>
+
+<!-- ═══ 3 ═══ -->
+<section class="step" id="s3">
+  <h2><i>3</i>批次详情 · 规则表（规则的唯一权威视图）</h2>
+  <p class="k">需求里每条规则，要么有用例，要么有一句"为什么不测"。两样都没有，这条旅程就不能算收口。</p>
+
+  <div class="note warn inset" style="margin-bottom:12px"><b>这一屏是合并出来的</b>（0021 必改 2）。
+    上一版同一批规则 R1–R12 被投影了<b>三次</b>：接入面段②的澄清表（管"依据"）、段③的分析面板（管"例子与反例"）、
+    覆盖页签（管"覆盖状态"）。同一个实体在三个地方各认一遍，是"信息量大"体感的主要来源，
+    也和本稿地基<b>「批次是唯一状态对象」</b>相悖——<b>对象唯一，视图就该唯一</b>。
+    <div style="margin-top:6px">现在：<b>规则只有这一张表</b>。依据、覆盖状态、关联用例三列并存，例子与反例收进行展开。
+      接入面那两段只留摘要和入口，不再列第二遍（见 §5）。
+      <b>后端不动</b>——<code>coverage.py:49-79</code> 的三态数据与澄清产物各自照旧，合并只发生在展示层。</div></div>
+
+  <div class="ia">
+    <div class="t">这一屏</div>
+    <div class="b">
+      <span class="lb">目标</span><span><b>只回答一件事：需求里的规则，还有哪条没交代。</b>"交代"= 有用例，或有一句站得住的不测理由。</span>
+      <span class="lb">布局</span><span>顶部一句能不能收口的结论 → 三段占比条 → 规则表（规则 / 规则说的是 / 依据 / 覆盖 / 关联用例），理由横跨整行摊在主行下面。</span>
+      <span class="lb">关键交互</span><span>红行（没测也没说理由）必须带两条出路：补一句不覆盖声明，或去生成用例。理由<b>永远摊开显示</b>，不折叠也不进 tooltip——理由要被看见才有约束力。例子与反例点行展开看。</span>
+      <span class="lb">状态流转</span><span>写完声明 → 该行红转琥珀 → 占比条即时变 → 顶部结论跟着从"不能收口"变"可以收口"。这条链要当场看得见，否则用户不知道自己刚才那下有没有用。</span>
+      <span class="lb">空 / 错</span><span>还没做需求分析 → 不画空表，直接说"要先有规则清单"并给入口；存在红行 → 顶部红横幅。</span>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">规则页签 · 9 条规则，有一条 gap 没解释</div>
+    <div class="bd">
+      <div class="note bad"><b>这条旅程现在不能算收口。</b>有 1 条规则既没有用例、也没有说明为什么不测。
+        补上任意一样就能收口。</div>
+
+      <div class="cov" style="margin-top:12px">
+        <i style="width:66.7%;background:#10b981"></i><i style="width:22.2%;background:#f59e0b"></i><i style="width:11.1%;background:#ef4444"></i>
+      </div>
+      <div class="legend">
+        <span><span class="dot ok"></span>有用例 6</span>
+        <span><span class="dot warn"></span>说明了不测 2</span>
+        <span><span class="dot bad"></span>没测也没说 1</span>
+        <span style="margin-left:auto">共 9 条规则</span>
+      </div>
+
+      <div class="tw" style="margin-top:12px"><table style="min-width:730px">
+        <thead><tr><th style="width:48px">规则</th><th>规则说的是</th><th style="width:206px">依据（这条规则打哪来）</th>
+          <th style="width:96px">覆盖</th><th style="width:150px">关联用例</th></tr></thead>
+        <tbody>
+          <tr class="rmain"><td class="mono">R1</td><td>销售员登录后，订单列表只显示自己的订单</td>
+            <td><span class="badge ok">需求原文</span>
+              <div class="sub">「销售员登录系统后…只能看到本人创建的订单」</div></td>
+            <td><span class="badge ok">有用例</span></td>
+            <td><span class="chip">TC-001</span> <span class="badge ok">通过</span></td></tr>
+          <tr class="rwhy"><td></td><td colspan="4">
+            <details><summary>这条的例子与反例（3 个）</summary>
+              <div style="margin-top:6px;line-height:1.85">
+                <div><span class="badge ok">正例</span> 销售员甲有 3 笔订单 → 列表显示 3 笔</div>
+                <div><span class="badge bad">反例</span> 销售员甲访问乙的订单详情 URL → 被拒（这条另立为 R3）</div>
+                <div><span class="badge warn">边界</span> 销售员一笔订单都没有 → 空列表而不是报错（这条另立为 R4）</div>
+              </div></details></td></tr>
+
+          <tr class="rmain solo"><td class="mono">R2</td><td>管理员登录后，订单列表显示全部销售员的订单</td>
+            <td><span class="badge ok">需求原文</span>
+              <div class="sub">「管理员可以看到所有销售员的订单」</div></td>
+            <td><span class="badge ok">有用例</span></td>
+            <td><span class="chip">TC-003</span> <span class="badge bad">不通过</span></td></tr>
+
+          <tr class="rmain solo"><td class="mono">R3</td><td>销售员直接改 URL 访问他人订单详情，应被拒绝</td>
+            <td><span class="badge ok">需求原文</span>
+              <div class="sub">由「只能看到本人创建的订单」推出的反例，澄清时你确认过</div></td>
+            <td><span class="badge ok">有用例</span></td>
+            <td><span class="chip">TC-004</span> <span class="badge warn">挂起</span></td></tr>
+
+          <tr class="rmain solo"><td class="mono">R4</td><td>销售员一笔订单都没有时，显示空列表而不是报错</td>
+            <td><span class="badge ok">需求原文</span>
+              <div class="sub">同上，边界情形，澄清时你确认过</div></td>
+            <td><span class="badge ok">有用例</span></td>
+            <td><span class="chip">TC-002</span> <span class="badge ok">通过</span></td></tr>
+
+          <tr class="rmain"><td class="mono">R6</td><td>订单列表按下单时间倒序</td>
+            <td><span class="badge ok">需求原文</span>
+              <div class="sub">「列表按下单时间倒序排列」</div></td>
+            <td><span class="badge warn">说明了不测</span></td>
+            <td>—</td></tr>
+          <tr class="rwhy"><td></td><td colspan="4">
+            <div class="why2">为什么不测：需求文档没写清"同一秒下单的两笔怎么排"，判不了对错，本轮不测。
+              <div class="src">—— 你在 08-11 14:11 的澄清里写的</div></div></td></tr>
+
+          <tr class="rmain"><td class="mono">R7</td><td>导出订单为 Excel</td>
+            <td><span class="badge ok">需求原文</span>
+              <div class="sub">「支持把当前列表导出为 Excel」</div></td>
+            <td><span class="badge warn">说明了不测</span></td>
+            <td>—</td></tr>
+          <tr class="rwhy"><td></td><td colspan="4">
+            <div class="why2">为什么不测：要下载文件并解析内容才能判，本轮执行器不支持，转人工。
+              <div class="src">—— 你在 08-11 14:11 的澄清里写的</div></div></td></tr>
+
+          <tr class="rmain" style="background:color-mix(in srgb,var(--bad) 7%,transparent)">
+            <td class="mono">R9</td><td>连续三次密码错误，账号锁定一小时</td>
+            <td><span class="badge ok">需求原文</span>
+              <div class="sub">「连续三次输错密码，账号锁定 1 小时」</div></td>
+            <td><span class="badge bad">没测也没说</span></td>
+            <td>—</td></tr>
+          <tr class="rwhy" style="background:color-mix(in srgb,var(--bad) 7%,transparent)"><td></td><td colspan="4">
+            <div class="why2 gap">这条规则被漏掉了，不填就不能收口。<b>它有需求原文依据，所以更不该被漏</b>。
+              <div style="margin-top:7px;display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn sm pri">为它生成用例</button>
+                <button class="btn sm">写一句为什么不测</button>
+              </div></div></td></tr>
+
+          <tr class="rmain solo"><td class="mono">R11</td><td>订单金额不接受负数</td>
+            <td><span class="badge probe">探测性</span>
+              <div class="sub">需求没写。按常识加的，指不回原文，所以结论不进判据。</div></td>
+            <td><span class="badge ok">有用例</span></td>
+            <td><span class="chip">TC-007</span> <span class="badge probe">探测</span></td></tr>
+
+          <tr class="rmain solo"><td class="mono">R12</td><td>订单列表分页每页 20 条</td>
+            <td><span class="badge probe">探测性</span>
+              <div class="sub">需求没写页大小。这条只做观察。</div></td>
+            <td><span class="badge ok">有用例</span></td>
+            <td><span class="chip">TC-012</span> <span class="badge probe">探测</span></td></tr>
+        </tbody></table></div>
+
+      <div class="note flat"><b>"依据"和"覆盖"是两根独立的轴，合表之后这件事才看得出来。</b>
+        依据答的是"这条规则打哪来"，覆盖答的是"这条规则测没测"。
+        <b>R9 就是这两根轴交叉出来的最坏格子</b>：它有需求原文依据（不是猜的），却一个用例都没有、也没人解释——
+        上一版这两个事实分居两张表，谁都看不出它同时成立。</div>
+
+      <div class="note flat"><b>"说明了不测"不是绕过，是留痕。</b>那两行的理由会跟着交付物一起交出去，
+        谁都能翻出来问一句"这个理由站得住吗"。所以理由要写具体，不接受"暂不测试"这种话。
+        <div style="margin-top:6px"><b>理由为什么横跨整行而不是缩成一列</b>：合表之后列变多，再切一列给理由，
+          每列都会窄到必须折叠——而红线要求理由<b>摊开显示、不进 tooltip</b>。
+          横跨整行是这两件事唯一都不牺牲的排法：理由永远可见，主行的四列也都还够宽。</div></div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">写完声明的当场反馈</div>
+    <div class="bd tight">
+      <div class="cov"><i style="width:66.7%;background:#10b981"></i><i style="width:33.3%;background:#f59e0b"></i></div>
+      <div class="note ok" style="display:flex;gap:10px;align-items:center">
+        <div class="grow"><b>已记下。R9 从「没测也没说」变成「说明了不测」，这条旅程现在可以收口了。</b></div>
+        <button class="btn sm">去收口</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">空态 · 还没做需求分析</div>
+    <div class="bd">
+      <div class="empty">
+        <div class="t">还没有规则清单，这张表是空的</div>
+        <div class="s">规则表比的是"需求里有几条规则"和"你测了几条"。规则清单来自需求分析这一步，先把它做了。</div>
+        <div class="a"><button class="btn pri">去做需求分析</button></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="why"><b>为什么理由永远摊开而不是塞进 tooltip</b>：gap 的原因是这一屏唯一有价值的东西。
+    覆盖了几条谁都能数，为什么没覆盖才是评审时被追问的。藏进 hover 等于没有。
+    <b>合表没有动这一条</b>——只是把它从"一列"改成了"横跨整行的一块"，可见性反而更高了。</div>
+  <div class="why"><b>为什么合的是视图，不是链路</b>：0020 架构侧结论要求「三段折叠非向导、任意前缀是合法交付」。
+    这次合的是<b>同一个实体的三处重复呈现</b>，澄清 → 分析 → 覆盖这条链上每一段仍然各写各的产物、各自都能单独停下。
+    <b>用户少看两张表，工程链路一步没少。</b></div>
+  <div class="fix"><b>后端数据已经够了，合并不新增契约</b>：<code>server/journey/coverage.py:49-79</code> 已按
+    covered / declared_uncovered / gap_unexplained 三态出行，带 <code>gap_reason</code> 与三项计数，
+    还带一句"gap 无解释不 done"的问题串；依据与例子来自澄清 / 分析产物。
+    <b>两边数据结构照旧不动</b>，前端按 <code>rule_id</code> 把它们并到一行——合并只发生在展示层。</div>
+  <div class="land"><b>落点</b>：<code>web/components/test-journey/RuleTable.tsx</code>（原 <code>CoverageMap.tsx</code>，
+    T1/T2 内）。零新增上游触点。</div>
+</section>
+
+<!-- ═══ 4 ═══ -->
+<section class="step" id="s4">
+  <h2><i>4</i>批次详情 · 结果表</h2>
+  <p class="k">逐条结论 + 凭什么 + 能不能回放。探测项单独一栏，绝不混进通过率的分母。</p>
+
+  <div class="ia">
+    <div class="t">这一屏</div>
+    <div class="b">
+      <span class="lb">目标</span><span><b>只回答一件事：哪些结论我可以真的信。</b>敢信绿，也知道哪些绿是浅绿、哪些结论压根不算数。</span>
+      <span class="lb">布局</span><span>趟次选择器（同一批次可跑多趟）→ 汇总条 → 用例表（编号 / 用例 / 结论 / <b>证据强度</b> / 回放）。上一版的「断到哪层」+「证据」两列已合成一列。</span>
+      <span class="lb">关键交互</span><span>结论只有四种：通过 / 不通过 / 挂起 / 拦下。<b>挂起必须写清为什么挂起</b>，不许光写"挂起"。trace 给两个出口：一个按钮，一条可复制命令。</span>
+      <span class="lb">状态流转</span><span>结论一旦落账就定死，界面上没有任何编辑入口——结论是从证据投影出来的，不是人写的。要改只能改用例重跑。</span>
+      <span class="lb">空 / 错</span><span>从没跑过 → 引导去执行；执行失败 / 证据缺失 / trace 打不开三种异常见 §8。</span>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">结果页签 · 第 2 趟（08-11 16:20）</div>
+    <div class="bd">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:11px">
+        <div class="tabs"><button>第 1 趟 15:02</button><button data-on>第 2 趟 16:20</button></div>
+        <span class="grow"></span>
+        <span class="chip">两趟结论完全一致</span>
+        <button class="btn sm">再跑一趟</button>
+      </div>
+
+      <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:11px">
+        <span class="badge ok">通过 6</span>
+        <span class="badge bad">不通过 2</span>
+        <span class="badge warn">挂起 1</span>
+        <span class="badge mute">拦下 1</span>
+        <span class="badge probe">探测 2 · 不计入</span>
+        <span class="chip" style="margin-left:auto">通过率按 10 条判据算，探测的 2 条不在分母里</span>
+      </div>
+
+      <div class="tw"><table>
+        <thead><tr><th style="width:62px">编号</th><th>用例与预期</th><th style="width:118px">结论</th>
+          <th style="width:158px">证据强度</th><th style="width:104px">回放</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">TC-001</td>
+            <td>销售员甲登录后只看到自己的 3 笔订单
+              <div class="sub">预期：列表条数=3，且每条的销售员=甲</div></td>
+            <td><span class="badge ok">通过</span></td>
+            <td><div class="es s3"><span class="mtr"><i></i><i></i><i></i></span>断在业务值</div>
+              <div class="sub">页面快照 + 接口响应</div></td>
+            <td><button class="btn sm">打开 trace</button></td></tr>
+
+          <tr><td class="mono">TC-003</td>
+            <td>管理员登录后能看到全部 9 笔订单
+              <div class="sub">预期：列表条数=9</div></td>
+            <td><span class="badge bad">不通过</span>
+              <div class="sub" style="color:var(--bad)">实际只有 3 笔——管理员看到的和销售员一样</div></td>
+            <td><div class="es s3"><span class="mtr"><i></i><i></i><i></i></span>断在业务值</div>
+              <div class="sub">页面快照 + 接口响应</div></td>
+            <td><button class="btn sm">打开 trace</button></td></tr>
+
+          <tr><td class="mono">TC-004</td>
+            <td>销售员改 URL 访问他人订单应被拒
+              <div class="sub">预期：提示无权限，且看不到订单内容</div></td>
+            <td><span class="badge warn">挂起</span>
+              <div class="sub" style="color:var(--warn)">接口返回 200 看着像通过，但没留下能证明"页面确实没显示订单内容"的证据，
+                不给通过。</div></td>
+            <td><div class="es s1"><span class="mtr"><i></i><i></i><i></i></span>只到状态码</div>
+              <div class="sub" style="color:var(--warn)">缺页面证据</div></td>
+            <td><button class="btn sm">打开 trace</button></td></tr>
+
+          <tr><td class="mono">TC-007</td>
+            <td>订单金额为负数时应被拒绝
+              <div class="sub">预期：需求文档没写，按常识猜的</div></td>
+            <td><span class="badge probe">探测 · 不计入</span>
+              <div class="sub">跑出来是接受了负数。这条只是记录现象，不作为通过或不通过的依据——
+                需求没写，判不了对错。</div></td>
+            <td><div class="es sp"><span class="mtr"><i></i><i></i><i></i></span>只是观察</div>
+              <div class="sub">接口响应 · 没有对错可断</div></td>
+            <td><button class="btn sm">打开 trace</button></td></tr>
+
+          <tr><td class="mono">TC-011</td>
+            <td>批量导出订单
+              <div class="sub">预期：导出文件含 9 行</div></td>
+            <td><span class="badge mute">拦下</span>
+              <div class="sub">用例里的 <code>{{export_token}}</code> 没有值，没往外发请求就停了。</div></td>
+            <td><div class="es s0"><span class="mtr"><i></i><i></i><i></i></span>什么都没断</div>
+              <div class="sub">没执行，没有证据</div></td>
+            <td><button class="btn sm" disabled>无 trace</button></td></tr>
+        </tbody></table></div>
+
+      <div class="note flat"><b>这一列是防假绿的，合并之后一个字都没含糊。</b>
+        上一版是「断到哪层」+「证据」两列，扫读时要左右对一遍才知道这条绿靠不靠得住。
+        现在<b>把结论直接写在标签上</b>：
+        <div style="margin-top:7px;display:flex;gap:16px;flex-wrap:wrap">
+          <span class="es s3"><span class="mtr"><i></i><i></i><i></i></span>断在业务值</span>
+          <span class="es s1"><span class="mtr"><i></i><i></i><i></i></span>只到状态码</span>
+          <span class="es sp"><span class="mtr"><i></i><i></i><i></i></span>只是观察</span>
+          <span class="es s0"><span class="mtr"><i></i><i></i><i></i></span>什么都没断</span>
+        </div>
+        <div style="margin-top:7px"><b>「只到状态码」和「断在业务值」是两句不同的话，不是同一个刻度上的两个数</b>——
+          前者的意思是"接口活着，业务有没有真生效不知道"，后者才是"真的验过"。
+          <b>颜色只是辅助，字面本身就说清了</b>；副行接着说清证据到底有哪几样。
+          <b>做不到一眼分辨就该退回两列</b>，本轮判定做得到，理由是这两个词从不同时出现在同一格。</div></div>
+
+      <details>
+        <summary>trace 按钮点不动时怎么办</summary>
+        <div style="margin-top:7px">每行都给一条可以直接复制的命令，本地终端粘上就能开：</div>
+        <pre>python -m playwright show-trace "…\data\test-workbench\runs\r-20260811-x3f\TC-001\trace.zip"</pre>
+      </details>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">空态 · 用例采纳了但从没跑过</div>
+    <div class="bd">
+      <div class="empty">
+        <div class="t">这 12 条还没跑过</div>
+        <div class="s">执行会真的打开浏览器操作靶机。跑之前确认一下环境指向的是 127.0.0.1:8047 这台本地靶机，不是别的地方。</div>
+        <div class="a"><button class="btn pri">执行这 12 条</button><button class="btn">先看环境</button></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="gloss"><b>这一屏第一次出现的词</b>：<em>四结论</em> = 通过 / 不通过 / 挂起 / 拦下，只有这四种，没有第五种；
+    <em>探测</em> = 需求没写、判不了对错的观察项，<b>既不是第五种结论，也不进通过率的分母</b>；
+    <em>证据强度</em> = 这条结论到底断到了哪儿。</div>
+
+  <div class="why"><b>为什么探测项要单独一种颜色而不是归到"挂起"</b>：两者的含义完全相反。
+    挂起是"本该有结论但证据不够"——需要人去补；探测是"本来就不该有结论"——不需要人做任何事。
+    混在一起，用户会去追一堆根本不用追的行。<b>合并证据列没有碰这条</b>：探测在结论列仍是独立的紫色徽标，
+    在证据强度列也仍是独立的一句「只是观察」，两处都没有和挂起共用任何视觉。</div>
+  <div class="fix"><b>改了什么：两列合一</b>（0021 建议 4，manager 自决采纳）。
+    六列变五列，<code>用例与预期</code> 拿回约 70px 宽度。
+    <div style="margin-top:5px"><b>一处照做但打了折的地方，如实说</b>：0021 原话是"行展开见细节"。
+      我改成了<b>静态副行</b>——因为细节只有两三个词（"页面快照 + 接口响应"），
+      为两个词加一个展开器，控件比内容还多，属于把复杂度从"一列"搬到"一个开关"。
+      副行常驻显示信息量比展开更大、交互元素反而更少。<b>若判为不符合原意，退回展开器即可，语义不受影响。</b></div></div>
+  <div class="fix"><b>结论词表已固定</b>：<code>server/journey/gates/verdict_projection.py:35</code> 定死
+    PASS / FAIL / PENDING / BLOCKED 四值，且挂起带子因（<code>needs-f9</code> /
+    <code>needs-evidence-type</code>，同文件 :15-16）；探测标记来自
+    <code>server/journey/execute_run.py:124</code>「探测性:不进 PASS 判据」。
+    界面上的四个中文词与探测色，是这四值加一个标记的直译，没有自造状态。</div>
+  <div class="land"><b>落点</b>：<code>web/components/test-journey/ResultTable.tsx</code> +
+    <code>TraceLauncher.tsx</code>（T1/T2 内）。trace 走 extensions 的本地接口，零上游触点。</div>
+</section>
+
+<!-- ═══ 5 ═══ -->
+<section class="step" id="s5">
+  <h2><i>5</i>需求接入面（M2 新增）</h2>
+  <p class="k">一条 TAPD 需求怎么变成一组可测的规则。三段折叠，不是三步向导——任一段做完停下都算数。</p>
+
+  <div class="ia">
+    <div class="t">这一屏</div>
+    <div class="b">
+      <span class="lb">目标</span><span><b>只回答一件事：这条需求现在接到什么程度了。</b>三段各产出了什么、还差哪一段——不在这里第二次呈现规则本身。</span>
+      <span class="lb">布局</span><span>三个可折叠段：① 从 TAPD 拉需求 ② 澄清记录 ③ 测试分析。每段头部带该段产物的状态点，段内<b>只有摘要与入口</b>。</span>
+      <span class="lb">关键交互</span><span>拉需求只填需求号或从列表选；澄清的问答发生在聊天里，这一屏只报"澄清出了几条规则"；要看规则本身，走「规则」页签那张唯一的表。</span>
+      <span class="lb">状态流转</span><span>每段完成即写一份产物，账本对应格子当场亮。三段之间不强制顺序锁——但没有需求正文就没法澄清，界面会如实说这句话。</span>
+      <span class="lb">空 / 错</span><span>TAPD 通道没配 → 指去配置页，不在这里收凭据；需求拉不到 → 权限 / 不存在 / 通道断三种分开说。</span>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">段① 从 TAPD 拉需求</div>
+    <div class="bd">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:11px">
+        <span class="dot ok"></span><b style="font-size:13px">需求已接入</b>
+        <span class="chip">TAPD 通道已配置</span>
+        <span class="grow"></span><button class="btn sm">换一条需求</button>
+      </div>
+      <div class="kv">
+        <span class="k">需求</span><span><span class="mono">#1140342</span> 销售员只能看自己的订单</span>
+        <span class="k">状态 / 处理人</span><span>开发中 · 张某</span>
+        <span class="k">正文快照</span><span>已存摘要，用来防止需求改了而结论还挂在旧版上 <span class="chip mono">sha256:4f7c…a1</span></span>
+        <span class="k">靶机</span><span class="mono">http://127.0.0.1:8047</span>
+        <span class="k">凭据</span><span><span class="badge ok">已配置</span> <span style="color:var(--muted-foreground)">值不显示，也不进任何产物文件</span></span>
+      </div>
+      <details>
+        <summary>需求正文（只读，168 行）</summary>
+        <div style="margin-top:7px;font-size:12px;color:var(--muted-foreground);line-height:1.75">
+          销售员登录系统后，在订单管理页面只能看到本人创建的订单；管理员可以看到所有销售员的订单……
+        </div>
+      </details>
+      <div class="note flat"><b>定档在聊天里拍。</b>接入完成时会在聊天弹一张卡问你走哪个档
+        （清单 / 标准 / 深），档位决定后面生成多少用例、断多深。见 §6 第一张卡。</div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">段② 澄清记录 · 只报进度，不再列第二遍规则</div>
+    <div class="bd">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:11px">
+        <span class="dot ok"></span><b style="font-size:13px">已澄清 · 9 条规则</b>
+        <span class="grow"></span><span class="chip">7 条有原文依据 · 2 条是猜的</span>
+      </div>
+      <div class="note flat" style="margin-top:0;display:flex;gap:10px;align-items:center">
+        <div class="grow"><b>规则清单只有一张表，在「规则」页签。</b>
+          <div style="font-size:11.5px;margin-top:2px">每条规则的依据、覆盖状态、关联用例、例子与反例，全在那一张表里。
+            这一段不再复述——同一个东西认两遍，就会有两个真相。</div></div>
+        <button class="btn sm">打开规则表</button>
+      </div>
+      <div class="note flat"><b>"依据"是硬要求，不是装饰。</b>非探测性的规则必须能指回需求原文的某一句；
+        指不回去的，只能标探测性、不进判据。这条规矩在后端就是闸，界面只是把它显形——
+        <b>显形的地方是规则表的「依据」列</b>，规矩本身一点没松。</div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">段③ 测试分析 · 例子与反例挂回规则行，这里只留跨规则的东西</div>
+    <div class="bd">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:11px">
+        <span class="dot ok"></span><b style="font-size:13px">已分析</b>
+        <span class="grow"></span><span class="chip">9 条规则 · 21 个例子 · 3 个消费面</span>
+      </div>
+      <div class="note flat" style="margin-top:0"><b>21 个例子分别挂在规则表对应那一行，点行展开就能看。</b>
+        它们本来就是"某条规则的例子"，独立摆一个面板等于把规则实体又投影了一次。</div>
+      <div class="pane" style="margin-top:11px">
+        <div class="t">留在这里的只有这一样：这条需求会从哪几个面被用到（跨规则，不属于任何单条）</div>
+        <div class="c" style="font-size:12px;line-height:1.8">
+          <div><span class="chip">Web 页面</span> 订单列表页、订单详情页</div>
+          <div><span class="chip">接口</span> <span class="mono">GET /api/orders</span></div>
+          <div><span class="chip">同类共存</span> 管理员与销售员两种角色同时在线时互不串数据</div>
+        </div>
+      </div>
+      <div class="act"><span class="grow"></span><button class="btn pri">按这份分析生成用例</button></div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">错误态 · 需求拉不到（三种，不许合并成一句"失败"）</div>
+    <div class="bd tight">
+      <div class="note warn"><b>TAPD 通道还没配。</b>配好之后回到这里就能选需求。
+        <span class="lnk">去配置</span> · <span style="color:var(--muted-foreground)">凭据只存在本机，界面不显示值</span></div>
+      <div class="note warn"><b>这个需求号你没有权限看。</b>#1140342 在 TAPD 里存在，但当前账号读不到。
+        换个需求，或找项目管理员开权限。</div>
+      <div class="note bad"><b>TAPD 连不上。</b>不是权限问题——通道本身没响应。
+        <div style="margin-top:7px;display:flex;gap:8px"><button class="btn sm">重试</button><button class="btn sm">检查通道</button></div></div>
+    </div>
+  </div>
+
+  <div class="why"><b>为什么做成三段折叠而不是三步向导</b>：向导默认你要走到底，中途退出就是"没做完"。
+    但这条链上任何一段停下都是合法交付——只澄清出一份规则清单拿去和产品对，本身就是有用的产出。
+    折叠面板天然表达"各段独立、都能单独看"。<b>这一条没被合表影响</b>：段②③瘦身的是呈现，
+    三段各写各的产物、各自都能单独停下，链路一步没少。</div>
+  <div class="fix"><b>改了什么：段②的澄清表和段③的例子面板都撤了</b>（0021 必改 2 的另一半）。
+    它们和覆盖页签是同一批规则的第二、第三次投影。撤掉之后：
+    <div style="margin-top:5px">· 依据 → 规则表的「依据」列（<b>没丢，换了位置</b>）<br>
+      · 例子与反例 → 规则表对应行的展开（<b>没丢，收进行里</b>）<br>
+      · 段②③只剩状态点 + 一句摘要 + 一个入口</div>
+    <div style="margin-top:5px">这一屏因此从"三段各一张密集表"变成"三段各一句话"，
+      而它本来要回答的问题——<b>这条需求接到什么程度了</b>——恰恰只需要那三句话。</div></div>
+  <div class="land"><b>落点</b>：<code>web/components/test-journey/IntakePanel.tsx</code>（T1/T2 内）。
+    TAPD 的拉取走 extensions 侧网关，凭据不经过前端；<b>零新增上游触点</b>。</div>
+</section>
+
+<!-- ═══ 6 ═══ -->
+<section class="step" id="s6">
+  <h2><i>6</i>聊天侧：模式入口、人闸卡、结果卡</h2>
+  <p class="k">载体已定为正式「测试」Capability 模式（0019）。这一节从"怎么进这个模式"开始，
+    到"模式里会出现哪些卡"，再到"没选模式时什么都不出现"。</p>
+
+  <div class="note flat inset" style="margin-bottom:12px">
+    <b>先说清一件容易误解的事：不是自动识别。</b>DT 没有意图路由——模式由用户在输入框的选择器里
+    <b>显式选中</b>（<code>web/components/chat/home/ChatComposer.tsx:95</code> 的注释原文即
+    "One row in the capability picker"）。所以"正式模式"= 在那个选择器里多一项「测试」，
+    和研究 / 出题 / 可视化并列。<b>用户没选，就什么都不会发生。</b>
+  </div>
+
+  <div class="ia">
+    <div class="t">这一节</div>
+    <div class="b">
+      <span class="lb">目标</span><span>进得去（选得到模式）、看得懂（这一轮在什么模式里）、拍得下（人闸）、看得见（结果卡）、退得干净（没选模式时零打扰）。</span>
+      <span class="lb">布局</span><span>入口在输入框工具条；模式徽章在用户气泡上方；人闸卡与结果卡都在助手气泡内，沿用 DT 现成的卡片形态。</span>
+      <span class="lb">关键交互</span><span>卡片自己不存状态——点下去写的是批次。要逐条勾选/编辑/筛选的操作一律去工作台，聊天里只做"看"和"答一个问题"。</span>
+      <span class="lb">状态流转</span><span>只有最新一张未答人闸卡能点，旧卡自动折叠成"你的回答"。结果卡随事件流增量长出来，不等最终结果。</span>
+      <span class="lb">空 / 错</span><span>未选模式 = 零测试元素；答案没送到不许显示已答；误触重放要拦一道确认。</span>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">6a 入口 · 输入框里的模式选择器，「测试」与其他模式并列</div>
+    <div class="bd">
+      <div class="chat" style="position:relative;padding-bottom:16px">
+        <div class="capmenu">
+          <div class="capitem"><svg class="ic" viewBox="0 0 24 24"><path d="M8 10h8M8 14h5"/><rect x="3" y="4" width="18" height="16" rx="2"/></svg>
+            <div class="grow"><div class="l">Chat</div><div class="d">Flexible conversation with any tool</div></div></div>
+          <div class="capitem"><svg class="ic" viewBox="0 0 24 24"><path d="M12 20h9M4 20h4M12 4v16"/><circle cx="12" cy="4" r="2"/></svg>
+            <div class="grow"><div class="l">Quiz</div><div class="d">Auto-validated question generation</div></div></div>
+          <div class="capitem"><svg class="ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <div class="grow"><div class="l">Research</div><div class="d">Comprehensive multi-agent research</div></div></div>
+          <div class="capitem"><svg class="ic" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+            <div class="grow"><div class="l">Visualize</div><div class="d">Generate charts, diagrams, interactive pages</div></div></div>
+          <div class="capitem on"><svg class="ic" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="m9 14 2 2 4-4"/></svg>
+            <div class="grow"><div class="l">测试</div><div class="d">从需求走到结论：接入、生成用例、执行、覆盖收口</div></div>
+            <svg class="ic" viewBox="0 0 24 24" style="color:var(--primary)"><path d="m5 12 5 5L20 7"/></svg></div>
+          <div class="capitem"><svg class="ic" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg>
+            <div class="grow"><div class="l">More Capabilities</div><div class="d">Solve · Mastery Path</div></div></div>
+        </div>
+        <div class="composer">
+          <div class="cin">给「测试」模式说一句：帮我测 TAPD #1140342</div>
+          <div class="ctool">
+            <button class="capbtn on"><svg class="ic" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/></svg>测试
+              <svg class="ic" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="m6 15 6-6 6 6"/></svg></button>
+            <span class="grow"></span>
+            <span class="sendb">↑</span>
+          </div>
+        </div>
+      </div>
+      <div class="note flat"><b>这一屏本轮不设计，只是标位置。</b>选择器的弹层、行的排版、选中打勾——
+        全是 DT 现成的（<code>ChatComposer.tsx:95-134</code> 的 <code>CapMenuItem</code>：15px 图标 +
+        12.5px 名 + 11px 描述 + 选中打勾）。我们要做的只是往那个数组里加一项，图标与 Test Workbench 侧栏项同款。</div>
+      <div class="note warn"><b>一个跟齐时要绕开的坑</b>：现成选中行的底色用的是
+        <code>bg-[var(--primary)]/[0.06]</code>——就是 0016 禁的那类失效写法，实际渲染<b>没有底色</b>。
+        所以「选中」目前是靠<b>主色图标 + 右侧对勾</b>撑起来的，这两样是生效的。
+        新增项不要指望那层底色，也不要照抄它。</div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">6b 选中之后 · 模式徽章打在用户气泡上方</div>
+    <div class="bd"><div class="chat">
+      <div style="display:flex;justify-content:flex-end"><div style="max-width:75%">
+        <div style="text-align:right;padding-right:4px;font-size:10px;letter-spacing:.03em;color:var(--muted-foreground)">测试</div>
+        <div style="margin-top:6px;border-radius:16px;background:var(--secondary);padding:9px 13px;font-size:13px">
+          帮我测 TAPD #1140342</div>
+      </div></div>
+      <div class="bub" style="margin-top:12px">已读入需求 #1140342。先跟你确认走哪个档 ↓</div>
+    </div></div>
+      <div class="note flat"><b>徽章形态照抄，不加设计</b>：DT 现在就是在用户气泡上方打一行
+        10px 的浅灰字（<code>ChatMessages.tsx:1046</code>，标签来自 <code>getModeBadgeLabel</code> 的
+        七分支 <code>:108-116</code>）。它刻意很轻——用来回溯"这一轮是什么模式"，不是状态指示灯。
+        我们只是给那七分支加第八个：<code>test_journey → 测试</code>。</div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">6c 没选模式时 · 什么都不出现（施工别把它做成常驻）</div>
+    <div class="bd">
+      <div class="chat">
+        <div style="display:flex;justify-content:flex-end"><div style="max-width:75%">
+          <div style="text-align:right;padding-right:4px;font-size:10px;letter-spacing:.03em;color:var(--muted-foreground)">Chat</div>
+          <div style="margin-top:6px;border-radius:16px;background:var(--secondary);padding:9px 13px;font-size:13px">
+            帮我看看这段代码</div>
+        </div></div>
+        <div class="bub" style="margin-top:12px">这段代码的问题在于……（普通回答，纯文本）</div>
+      </div>
+      <div class="note ok"><b>零测试元素：没有旅程卡、没有账本条、没有"要不要建个批次"的提示、没有任何入口浮层。</b>
+        用户想测，自己去选择器里选「测试」。</div>
+      <div class="note flat"><b>这不是靠自觉，是机制</b>：每张富卡的取数第一关就是判
+        <code>msg.capability</code> 等不等于本模式的字面量（<code>ChatMessages.tsx:326-370</code> 四个
+        现存分支个个如此），纯 Chat 模式这个字段是空串，<b>全部早退</b>。
+        <b>给施工的话</b>：新增的测试结果卡必须挂进同一个判断，不许在分支外面渲染任何东西——
+        一旦漏挂，普通聊天里就会冒出测试元素，这是本节唯一的硬红线。</div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">6d 模式跨轮保持 · 已实证成立，风险解除<span style="margin-left:auto;color:var(--muted-foreground)">备用降级形态保留但不实现</span></div>
+    <div class="bd">
+      <div class="note ok"><b>已实证：模式跨轮保持，这条风险解除</b>（0020 附带结论）。
+        选一次就够，一条旅程十几轮都不用再碰选择器。
+        <div style="margin-top:6px">证据是三条独立的、全量枚举无截断的核查：改模式的动作全仓只有 3 处、
+          真正调用它的只有选择器那一个回调、发送逻辑不清空它；服务端还会把它写进用户偏好并在下一轮回灌
+          （<code>turn_runtime.py:754-755</code> 写、<code>:848</code> 回灌）。</div>
+        <div style="margin-top:6px"><b>所以下面右边那个降级形态不实现。</b>它留在稿里只有一个用途：
+          万一 Day-1 运行态冒烟把这条结论证伪了，照着做就行，不用重新设计。</div></div>
+      <div class="two" style="margin-top:11px">
+        <div class="pane"><div class="t">实际形态 · 保持（已实证，就是这样）</div><div class="c">
+          <div class="chat" style="padding:9px">
+            <div style="font-size:11px;color:var(--muted-foreground);text-align:right">测试</div>
+            <div class="bub" style="margin-top:6px">…第 2 轮</div>
+            <div style="font-size:11px;color:var(--muted-foreground);text-align:right;margin-top:8px">测试</div>
+            <div class="bub" style="margin-top:6px">…第 3 轮，徽章还在，用户什么都没做</div>
+          </div>
+          <div class="sub" style="margin-top:7px">一条旅程十几轮对话，用户只在开头选一次。<b>这就是实测到的行为，本轮无需任何额外设计。</b></div>
+        </div></div>
+        <div class="pane" style="opacity:.6"><div class="t">备用形态 · 不实现<span class="chip" style="margin-left:6px">仅在运行态冒烟证伪时启用</span></div><div class="c">
+          <div class="chat" style="padding:9px">
+            <div class="note warn" style="margin-top:0;font-size:11.5px;display:flex;gap:8px;align-items:center">
+              <span class="dot warn"></span>
+              <div class="grow"><b>旅程「销售员只能看自己的订单」还在进行中</b>
+                <div style="font-size:11px">发一句话前记得把模式切回「测试」，否则这轮不会接到这条旅程上。</div></div>
+              <button class="btn sm pri">切回测试</button>
+            </div>
+            <div class="composer" style="margin-top:8px">
+              <div class="cin">…</div>
+              <div class="ctool"><button class="capbtn">Chat
+                <svg class="ic" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="m6 15 6-6 6 6"/></svg></button>
+                <span class="grow"></span><span class="sendb">↑</span></div>
+            </div>
+          </div>
+          <div class="sub" style="margin-top:7px">一条<b>粘滞提示条</b>贴在输入框上方，只在"有旅程未收口且当前模式不是测试"时出现，
+            一键切回。旅程收口或用户手动关掉就消失。
+            <br>（若真要启用：不做自动切回——那等于替用户改了他刚选的东西，他可能就是想临时问一句别的；
+            也不做弹窗——每发一句弹一次，两轮就成噪音。）</div>
+        </div></div>
+      </div>
+      <div class="note flat"><b>给施工的口径</b>：右边这块<b>不要做</b>。Day-1 运行态冒烟里带一条"连发两轮看徽章还在不在"，
+        非阻塞项；冒烟通过就永久不做，冒烟证伪才照右边实现。<b>不许提前做，也不许因为"顺手"就做。</b></div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">6e 人闸卡一 · 定档确认（接入完成时弹）<span style="margin-left:auto;color:var(--muted-foreground)">以下四类形态不变：0015 拍的复用现成问答卡，0019 未推翻</span></div>
+    <div class="bd"><div class="chat">
+      <div class="bub">需求 #1140342 已读入，9 条规则。这条需求你想测到什么程度？</div>
+      <div class="ask">
+        <div class="hdr">
+          <div class="ix">1</div>
+          <div class="grow">
+            <div class="q">这条需求走哪个档？</div>
+            <div class="qs">档位决定生成多少用例、断言断到多深，之后可以改但要重新生成。</div>
+          </div>
+        </div>
+        <div class="opts">
+          <button class="opt"><span class="n">1</span>清单档 · 只列要点不执行</button>
+          <button class="opt on"><span class="n">2</span>标准档 · 主链路 + 权限反例</button>
+          <button class="opt"><span class="n">3</span>深档 · 加边界与并发</button>
+        </div>
+        <div class="ft">
+          <span class="lnk">在工作台打开这条旅程</span>
+          <span class="grow"></span>
+          <button class="askbtn sec">先不定</button><button class="askbtn">按标准档走</button>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">卡二 · 澄清（多个问题一张卡）</div>
+    <div class="bd"><div class="chat">
+      <div class="bub">需求里有 3 处我判不了，想请你定一下。</div>
+      <div class="ask">
+        <div class="opts" style="margin-top:0;margin-bottom:11px">
+          <button class="opt"><span class="n done">✓</span>订单排序规则</button>
+          <button class="opt on"><span class="n">2</span>管理员能否改他人订单</button>
+          <button class="opt"><span class="n">3</span>锁定期间能否重置密码</button>
+        </div>
+        <div class="hdr">
+          <div class="ix">2</div>
+          <div class="grow">
+            <div class="q">管理员能不能修改销售员创建的订单？</div>
+            <div class="qs">需求只写了管理员"能看到全部订单"，没说能不能改。</div>
+          </div>
+        </div>
+        <div class="opts">
+          <button class="opt">能改，和自己的订单一样</button>
+          <button class="opt">只能看不能改</button>
+          <button class="opt">需求确实没定，标成探测性</button>
+        </div>
+        <div style="margin-top:9px;border:1px dashed var(--border);border-radius:11px;padding:9px 11px;
+          font-size:12.5px;color:var(--muted-foreground)">或者自己写一句…</div>
+        <div class="ft">
+          <span style="font-size:11.5px;color:var(--muted-foreground)">3 个问题答了 1 个</span>
+          <span class="grow"></span>
+          <button class="askbtn sec">上一个</button><button class="askbtn">下一个</button>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">卡三 · 采纳流转（聊天里只做流转，不在这里勾用例）</div>
+    <div class="bd"><div class="chat">
+      <div class="bub">12 条用例草稿写好了，其中 2 条是探测性的。</div>
+      <div class="ask">
+        <div class="hdr">
+          <div class="ix">1</div>
+          <div class="grow">
+            <div class="q">去工作台勾选要入库的用例</div>
+            <div class="qs">采纳是冻结点：勾中的会被锁成一份不可改的用例集，之后编译、执行、出结论都以它为准。
+              逐条勾选在工作台做，那边能看到每条的请求和断言。</div>
+          </div>
+        </div>
+        <div class="opts">
+          <button class="opt on">去工作台采纳</button>
+          <button class="opt">已经采纳好了，继续往下</button>
+          <button class="opt">这批不要，重新生成</button>
+        </div>
+        <div class="ft">
+          <span class="lnk">批次 b-20260811-a7k2c9 · 12 条草稿</span>
+          <span class="grow"></span>
+          <button class="askbtn">确定</button>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">卡四 · 写确认（要动被测系统的数据了）</div>
+    <div class="bd"><div class="chat">
+      <div class="bub">下面这批用例会往靶机里写数据，先跟你确认。</div>
+      <div class="ask">
+        <div class="hdr">
+          <div class="ix">1</div>
+          <div class="grow">
+            <div class="q">这 4 条会改动靶机数据，允许吗？</div>
+            <div class="qs">只影响 <span class="mono">127.0.0.1:8047</span> 这台本地靶机。跑完不会自动清理。</div>
+          </div>
+        </div>
+        <div class="tw" style="margin-top:10px"><table style="min-width:0">
+          <thead><tr><th style="width:62px">用例</th><th>会做什么</th><th style="width:88px">影响</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">TC-005</td><td>新建一笔订单</td><td>多 1 条数据</td></tr>
+            <tr><td class="mono">TC-006</td><td>修改订单金额</td><td>改 1 条数据</td></tr>
+            <tr><td class="mono">TC-009</td><td>连续输错密码 3 次</td><td>测试账号被锁 1 小时</td></tr>
+            <tr><td class="mono">TC-010</td><td>删除刚建的订单</td><td>删 1 条数据</td></tr>
+          </tbody></table></div>
+        <div class="opts">
+          <button class="opt">4 条都允许</button>
+          <button class="opt on">只允许前两条</button>
+          <button class="opt">都跳过，只跑只读的 8 条</button>
+        </div>
+        <div class="ft">
+          <span style="font-size:11.5px;color:var(--muted-foreground)">默认一条都不选——写操作不给默认同意</span>
+          <span class="grow"></span>
+          <button class="askbtn">按选择执行</button>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">旧卡的样子 · 答过就折叠，不能再点</div>
+    <div class="bd"><div class="chat">
+      <div class="resolved">
+        <svg class="ic" viewBox="0 0 24 24" style="opacity:.5"><path d="m9 18 6-6-6-6"/></svg>
+        <b>你的回答</b><span>· 定档：标准档</span>
+        <span class="grow"></span><span class="chip">已处理</span>
+      </div>
+      <div class="resolved">
+        <svg class="ic" viewBox="0 0 24 24" style="opacity:.5"><path d="m9 18 6-6-6-6"/></svg>
+        <b>你的回答</b><span>· 澄清 3 问已答</span>
+        <span class="grow"></span><span class="chip">已处理</span>
+      </div>
+    </div></div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">6f 富结果卡 · 分工口径：看的进聊天，改的进工作台</div>
+    <div class="bd">
+      <div class="note flat"><b>一句话分工</b>：<b>只读的、随生成流出来的、看一眼就够的</b> → 聊天富卡；
+        <b>要逐条勾、要编辑、要筛选、要多列对照、要长期回看的</b> → 工作台。
+        <div style="margin-top:6px">判据不是"重不重要"，是<b>要不要动手</b>。聊天是流水，翻上去找一张三天前的卡是苦差事；
+          工作台有地址、能刷新、能收藏。凡是用户会回头找第二次的，就不该只活在聊天里。</div></div>
+
+      <div class="tw" style="margin-top:12px"><table>
+        <thead><tr><th style="width:132px">产物</th><th style="width:92px">在哪出现</th><th>为什么这么分</th></tr></thead>
+        <tbody>
+          <tr><td>规则清单（澄清结果）</td><td><span class="badge ok">聊天卡</span></td>
+            <td>澄清本来就发生在聊天里，结果不该要用户跳出去看。只读，答完就定。</td></tr>
+          <tr><td>用例草稿概览</td><td><span class="badge ok">聊天卡（流式）</span></td>
+            <td>生成要几十秒，边生成边出条目比转圈强。<b>只读</b>——逐条勾选采纳仍在工作台。</td></tr>
+          <tr><td>执行进度与结论摘要</td><td><span class="badge ok">聊天卡（流式）</span></td>
+            <td>用户在等，逐条出结论是最好的等待体验。摘要级：几条过、几条没过、几条挂起。</td></tr>
+          <tr><td>覆盖收口摘要</td><td><span class="badge ok">聊天卡</span></td>
+            <td>三段条 + 一句"能不能收口"，是一个可以一眼答完的问题。</td></tr>
+          <tr><td>逐条采纳（勾选冻结）</td><td><span class="badge mute">工作台</span></td>
+            <td>要看每条的请求体与断言再决定勾不勾，是密集表格操作。聊天气泡最宽 75%，装不下；
+              而且勾选状态若在卡里自持，就是第二真相。</td></tr>
+          <tr><td>结果表全字段 + trace</td><td><span class="badge mute">工作台</span></td>
+            <td>五列、要筛选、要开 trace、要比两趟。这是要回头找第二次的东西。</td></tr>
+          <tr><td>规则表逐行原因 / 写不覆盖声明</td><td><span class="badge mute">工作台</span></td>
+            <td>写声明是编辑动作，且声明会跟着交付物交出去，需要一个能改能复核的地方。</td></tr>
+          <tr><td>需求接入三段 / 环境与凭据</td><td><span class="badge mute">工作台</span></td>
+            <td>配置类，一次配好长期用，不属于对话流。</td></tr>
+        </tbody></table></div>
+
+      <div style="margin-top:14px;font-size:11px;color:var(--muted-foreground)">三张聊天富卡的样子 ↓</div>
+
+      <div class="chat" style="margin-top:6px">
+        <div class="bub">按标准档生成用例中…</div>
+        <div class="rcard">
+          <div class="rh"><span class="dot live"></span><b>正在生成用例</b>
+            <span class="grow"></span><span class="chip">7 / 约 12</span></div>
+          <div class="bar" style="margin:8px 0 10px"><i style="width:58%"></i></div>
+          <div class="rrow"><span class="mono">TC-001</span><span class="grow">销售员甲登录后只看到自己的 3 笔订单</span><span class="badge mute">业务</span></div>
+          <div class="rrow"><span class="mono">TC-002</span><span class="grow">销售员改 URL 访问他人订单应被拒</span><span class="badge mute">业务</span></div>
+          <div class="rrow"><span class="mono">TC-007</span><span class="grow">订单金额为负数时应被拒绝</span><span class="badge probe">探测</span></div>
+          <div class="rrow" style="opacity:.5"><span class="mono">…</span><span class="grow">还在写</span></div>
+          <div class="rf"><span style="font-size:11.5px;color:var(--muted-foreground)">这里只看，勾选采纳在工作台</span>
+            <span class="grow"></span><button class="btn sm" disabled>去采纳（生成完才能点）</button></div>
+        </div>
+      </div>
+
+      <div class="chat" style="margin-top:10px">
+        <div class="rcard">
+          <div class="rh"><span class="dot live"></span><b>正在执行 · 第 6/12 条</b>
+            <span class="grow"></span><span class="badge ok">通过 4</span><span class="badge bad">没过 1</span><span class="badge warn">挂起 1</span></div>
+          <div class="bar" style="margin:8px 0 10px"><i style="width:50%"></i></div>
+          <div class="rrow"><span class="mono">TC-003</span><span class="grow">管理员应看到全部 9 笔订单</span><span class="badge bad">没过</span></div>
+          <div class="rrow"><span class="mono">TC-004</span><span class="grow">销售员改 URL 访问他人订单应被拒</span><span class="badge warn">挂起 · 缺页面证据</span></div>
+          <div class="rf"><span style="font-size:11.5px;color:var(--muted-foreground)">摘要级。证据、断言层、trace 都在工作台</span>
+            <span class="grow"></span><button class="btn sm">看完整结果表</button></div>
+        </div>
+      </div>
+
+      <div class="chat" style="margin-top:10px">
+        <div class="rcard">
+          <div class="rh"><span class="dot bad"></span><b>覆盖还差一条才能收口</b><span class="grow"></span><span class="chip">9 条规则</span></div>
+          <div class="cov" style="margin:9px 0 0"><i style="width:66.7%;background:#10b981"></i><i style="width:22.2%;background:#f59e0b"></i><i style="width:11.1%;background:#ef4444"></i></div>
+          <div class="legend" style="font-size:11px"><span><span class="dot ok"></span>有用例 6</span>
+            <span><span class="dot warn"></span>说明了不测 2</span><span><span class="dot bad"></span>没测也没说 1</span></div>
+          <div class="rf"><span style="font-size:11.5px;color:var(--muted-foreground)">R9「三次错误锁定一小时」没人管</span>
+            <span class="grow"></span><button class="btn sm pri">去处理它</button></div>
+        </div>
+      </div>
+
+      <div class="note flat"><b>三张卡共用一个骨架</b>：标题行（状态点 + 一句话 + 右侧计数）→ 内容 → 页脚（一句边界说明 + 一个去工作台的按钮）。
+        <b>页脚那句边界说明是强制的</b>——它回答"为什么这张卡不让我在这儿改"，不写用户就会去点卡里的东西然后发现点不动。</div>
+      <div class="fix"><b>流式怎么做，有现成的抄</b>：出题模式是仓里唯一"不等最终结果、边生成边渲染"的先例——
+        它在最终结果落地前先从事件流里累积条目渲染（<code>ChatMessages.tsx:343-351</code>，
+        <code>extractStreamingQuizQuestions</code> 分支不依赖 <code>resultEvent</code>）。
+        上面两张流式卡照它的路子走。
+        <div style="margin-top:5px">另外，<b>研究模式的整体布局是本节结构上的最佳参照</b>：同一个助手气泡里依次是
+          问答卡 → 结构化编辑卡 → 正文（<code>ChatMessages.tsx:416-445</code>），
+          正是「人闸卡 + 产物卡 + 说明」这个组合。不用另起炉灶。</div></div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">6g 误触重放 · 不许静默重跑，要先问一句</div>
+    <div class="bd">
+      <div class="note flat"><b>风险来自两条路径，且它们的暴露面不同</b>（0019 裁定二.3）：
+        <div style="margin-top:6px">① <b>「重新生成」按钮 —— 本模式碰不到。</b>那个按钮只在这一轮<b>没有</b>模式时才出现
+          （<code>ChatMessages.tsx:1380-1386</code>：<code>!pairedUserMessage?.capability ||
+          capability === "chat"</code>）。选了「测试」模式的轮次，按钮根本不渲染。</div>
+        <div style="margin-top:4px">② <b>「编辑消息 → 分支重跑」 —— 本模式一样中招。</b>能不能编辑只看有没有 id
+          （<code>ChatMessages.tsx:906-907</code> 的 <code>canEdit</code> 完全不读 capability），
+          所以测试轮的消息照样能改、改完照样重跑，<b>副作用工具会再执行一遍</b>。</div></div>
+
+      <div class="note bad"><b>后果说具体点</b>：用户把「帮我测 #1140342」改成「帮我测 #1140343」再发，
+        看起来只是换了个需求号，实际会把上一轮那 4 条写操作（建订单、改金额、锁账号、删订单）
+        <b>在靶机上再跑一遍</b>。用户没有任何提示。</div>
+
+      <div style="margin-top:14px;font-size:11px;color:var(--muted-foreground)">用户点「编辑」并提交后，应该看到 ↓</div>
+      <div class="chat" style="margin-top:6px">
+        <div class="dlg">
+          <div class="dh">这一轮已经跑过了，要再跑一遍吗？</div>
+          <div class="db">改完重发会<b>重新执行这一轮做过的事</b>。上一轮在靶机
+            <span class="mono">127.0.0.1:8047</span> 上做过这些改动：
+            <div class="tw" style="margin-top:9px"><table style="min-width:0">
+              <thead><tr><th style="width:62px">用例</th><th>做过什么</th><th style="width:88px">再跑一遍会</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">TC-005</td><td>新建一笔订单</td><td>再建一笔</td></tr>
+                <tr><td class="mono">TC-006</td><td>修改订单金额</td><td>再改一次</td></tr>
+                <tr><td class="mono">TC-009</td><td>连输 3 次错密码</td><td>测试账号再被锁 1 小时</td></tr>
+                <tr><td class="mono">TC-010</td><td>删除刚建的订单</td><td>再删一次</td></tr>
+              </tbody></table></div>
+            <div class="note flat" style="font-size:11.5px"><b>只读的那 8 条不受影响</b>——它们重跑没有副作用，会照常跑。</div>
+          </div>
+          <div class="df">
+            <span style="font-size:11.5px;color:var(--muted-foreground)">默认选项是最保守的那个</span>
+            <span class="grow"></span>
+            <button class="btn sm">取消</button>
+            <button class="btn sm">只重跑只读的 8 条</button>
+            <button class="btn sm pri" style="background:var(--destructive);border-color:transparent">4 条写操作也重跑</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="note ok"><b>跑完之后，结果卡上要留痕</b>：重放产生的那一趟必须标出来，不能和第一趟长得一样。</div>
+      <div class="chat" style="margin-top:6px">
+        <div class="rcard">
+          <div class="rh"><span class="dot ok"></span><b>执行完成 · 第 3 趟</b>
+            <span class="chip">重放自第 2 趟</span>
+            <span class="grow"></span><span class="badge ok">通过 6</span><span class="badge bad">没过 2</span></div>
+          <div class="rf"><span style="font-size:11.5px;color:var(--muted-foreground)">写操作这一趟按你的选择跳过了，所以 TC-005/006/009/010 记为未执行</span>
+            <span class="grow"></span><button class="btn sm">看完整结果表</button></div>
+        </div>
+      </div>
+
+      <div class="why"><b>为什么是确认而不是禁止</b>：重跑本身是正当需求——改了用例当然要再跑。
+        要拦的不是重跑，是<b>用户不知道自己在重跑</b>。所以给的是一句话 + 一张"上次动过什么"的清单 +
+        一个只跑只读的中间档，不是一个"不许"。</div>
+      <div class="fix"><b>界面这一层只是最后一道</b>：真正的防线是执行侧的幂等（同一步带同一把钥匙就不重复做、
+        重放的收据标明是重放、写确认不因为重生成就沿用上次的同意）。0019 把它定为<b>载体无关必做项</b>，
+        两条重放路径各要一条测试。<b>界面确认不能替代它</b>——用户点了"都重跑"之后，账还得算对。</div>
+    </div>
+  </div>
+
+  <div class="why"><b>为什么写确认卡默认一条都不勾</b>：其余三类卡拍错了最多重来一遍，写确认拍错了会改动被测系统的数据。
+    默认全选等于把"我没细看"变成"我同意"。这一条是四类卡里唯一的例外规则。</div>
+  <div class="fix"><b>哪些是现成的，哪些是真要新写的</b>：
+    人闸四卡零新组件（<code>AskUserOptions.tsx:570-682</code> 外壳与胶囊、<code>:861-882</code> 已答折叠、
+    <code>:114,253</code> 旧卡自动置为已答）；模式入口与徽章是往现成清单里加条目；
+    <b>真要新写的只有 6f 的三张结果卡</b>——但它们挂的是 <code>ChatMessages.tsx:326-370</code>
+    已有四个同型先例的那道缝，属于沿既有缝生长，不是另起炉灶。</div>
+  <div class="land"><b>落点</b>：本节触碰四处上游（模式注册 U4、徽章 U5、结果卡分支 U6、后端注册三件 U1-U3），
+    逐项见 §10 —— <b>0019 已把载体从 Partner 改为正式 Capability，0017 O2「用第 5 处触点接 Partner 人闸」随之作废</b>，
+    §10 的预算表已按 0019 重出。</div>
+</section>
+
+<!-- ═══ 7 ═══ -->
+<section class="step" id="s7">
+  <h2><i>7</i>双视图一致性</h2>
+  <p class="k">同一个批次，聊天和工作台是两个窗口不是两份数据。这一屏画的是它们怎么互相跳、怎么保持一致。</p>
+
+  <div class="ia">
+    <div class="t">这一屏</div>
+    <div class="b">
+      <span class="lb">目标</span><span>让用户不用问"我刚在聊天里答的，工作台知道吗"。</span>
+      <span class="lb">布局</span><span>左右对照：左边聊天，右边工作台，中间标出跳转与同步的方向。</span>
+      <span class="lb">关键交互</span><span>工作台 →「继续对话」带着批次上下文回聊天；聊天 → 每张卡的「在工作台打开」。</span>
+      <span class="lb">状态流转</span><span>在任一侧改了状态，另一侧当场跟着变，不需要刷新。冲突时永远以批次为准，卡片认输。</span>
+      <span class="lb">空 / 错</span><span>批次还没有聊天会话 → 按钮改成"开一个会话谈这条旅程"；答案没送达 → 卡不许显示已答。</span>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">同一刻的两个窗口</div>
+    <div class="bd">
+      <div class="two">
+        <div class="pane">
+          <div class="t">聊天 · 用户刚点了「标准档」</div>
+          <div class="c">
+            <div class="resolved" style="margin-top:0"><b>你的回答</b><span>· 定档：标准档</span>
+              <span class="grow"></span><span class="chip">已处理</span></div>
+            <div class="bub" style="margin-top:9px">好，按标准档走。已经在读需求正文了，读完会把规则清单放到工作台。</div>
+            <div style="margin-top:8px"><span class="lnk">在工作台打开这条旅程 →</span></div>
+          </div>
+        </div>
+        <div class="pane">
+          <div class="t">工作台 · 同一秒，不用刷新</div>
+          <div class="c">
+            <div class="ledger" style="gap:5px">
+              <div class="seg4 on" style="min-width:0;flex:1 1 120px">
+                <div class="sg"><span class="dot half"></span>接入与澄清</div>
+                <div class="ss">需求已接入（标准档），正在读正文</div></div>
+              <div class="seg4" style="min-width:0;flex:1 1 96px">
+                <div class="sg"><span class="dot off"></span>用例</div>
+                <div class="ss">还没开始</div></div>
+            </div>
+            <div class="note flat" style="font-size:11.5px">页头上的「标准档」也同时变了——它读的是同一个批次。</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="note flat"><b>反过来也一样。</b>用户在工作台勾完 12 条点了采纳，聊天里那张"去工作台采纳"的卡
+        会自己变成已处理，不需要用户回聊天再点一次"我采纳好了"。</div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">两个入口的样子</div>
+    <div class="bd">
+      <div class="two">
+        <div class="pane">
+          <div class="t">工作台 → 聊天</div>
+          <div class="c">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <button class="btn sm">继续对话</button>
+              <span style="font-size:11.5px;color:var(--muted-foreground)">带着这条旅程的上下文回聊天</span>
+            </div>
+            <div class="note flat" style="font-size:11.5px">没有会话时按钮变成「开一个会话谈这条旅程」，
+              不是灰掉——灰掉等于告诉用户此路不通，其实是通的。</div>
+          </div>
+        </div>
+        <div class="pane">
+          <div class="t">聊天 → 工作台</div>
+          <div class="c">
+            <div class="ask" style="padding:11px">
+              <div class="q" style="font-size:12.5px">12 条用例草稿写好了</div>
+              <div class="ft" style="margin-top:9px;padding-top:9px">
+                <span class="lnk">在工作台打开 · b-20260811-a7k2c9</span>
+                <span class="grow"></span><button class="askbtn" style="font-size:11.5px">确定</button>
+              </div>
+            </div>
+            <div class="note flat" style="font-size:11.5px">每张卡都有这条锚，位置固定在左下角。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">错误态 · 答案没送到</div>
+    <div class="bd tight">
+      <div class="ask">
+        <div class="q">这条需求走哪个档？</div>
+        <div class="opts"><button class="opt on">标准档</button></div>
+        <div class="note bad" style="margin-top:10px"><b>没送到。</b>你的选择还留着，但服务端没收到，工作台那边也还没变。
+          <div style="margin-top:7px"><button class="btn sm pri">重新提交</button></div></div>
+      </div>
+      <div class="note flat"><b>这里绝不能乐观地先显示成功。</b>卡显示已答而服务端没收到，
+        就是"两个真相"——用户以为拍完了，工作台还在等。宁可显示失败让他再点一次。</div>
+    </div>
+  </div>
+
+  <div class="why"><b>为什么"以批次为准"值得单独一屏</b>：这套系统里最贵的一种坏，是同一件事在两个地方
+    显示两个答案。前面每一屏都在依赖这条约定——账本亮灭、覆盖计数、结论表，全都读同一个批次。
+    这一屏不是新功能，是把这条约定画出来验收。</div>
+  <div class="fix"><b>跳转能力是路由组白送的</b>：批次页挂在 <code>(workspace)</code>（0015 已拍），
+    该路由组的布局里原生带聊天上下文（<code>web/app/(workspace)/layout.tsx:12-18</code>），
+    「继续对话」不需要跨路由组传状态。挂 <code>(utility)</code> 就得自己绕。</div>
+  <div class="land"><b>落点</b>：全部在 T1/T2 薄壳内。<b>零新增上游触点。</b></div>
+</section>
+
+<!-- ═══ 8 ═══ -->
+<section class="step" id="s8">
+  <h2><i>8</i>四种异常态</h2>
+  <p class="k">每一种都按同一个模子：说清是什么坏了 + 用户还能走哪条路。缺任何一半都不算做完。</p>
+
+  <div class="screen">
+    <div class="hd">异常一 · 执行失败——"跑不起来"和"跑了没过"必须分开</div>
+    <div class="bd">
+      <div class="note bad"><b>没跑起来。</b>浏览器起来了，但靶机 <span class="mono">127.0.0.1:8047</span> 没有响应——
+        大概率是靶机没启动。<b>一条用例都没发出去</b>，所以这一趟没有任何结论。
+        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn sm pri">靶机起好了，重试</button>
+          <button class="btn sm">看执行日志</button>
+        </div></div>
+      <div class="note flat" style="font-size:11.5px">对比：如果是"跑起来了但 2 条没通过"，
+        那不是异常，是结果——去结果表看，不在这里报错。<b>把这两件事混成一个红框，是最常见的坏设计。</b></div>
+
+      <div class="note warn" style="margin-top:12px"><b>跑到一半停了。</b>第 7 条时浏览器崩了。
+        前 6 条的结论已经存下来了，不会丢；从第 7 条接着跑就行，不用整批重来。
+        <div style="margin-top:8px"><button class="btn sm pri">从第 7 条接着跑</button>
+          <button class="btn sm">看前 6 条结论</button></div></div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">异常二 · 证据缺失（这一条最容易被当成"系统抽风"）</div>
+    <div class="bd">
+      <div class="note warn"><b>3 条用例跑通了，但不算通过。</b>它们只证明了接口返回 200，
+        没留下能证明"页面上确实看不到别人订单"的证据。系统不肯把这种叫通过。
+        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn sm">看是哪 3 条</button>
+          <button class="btn sm pri">给它们补上页面断言再跑</button>
+        </div></div>
+      <div class="tw" style="margin-top:11px"><table>
+        <thead><tr><th style="width:62px">编号</th><th>缺什么</th><th style="width:150px">补了会变成</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">TC-004</td><td>没有页面快照，只有接口响应</td><td><span class="badge warn">挂起</span> → <span class="badge ok">可判通过</span></td></tr>
+          <tr><td class="mono">TC-008</td><td>断言只写了状态码，没断响应内容</td><td><span class="badge warn">挂起</span> → <span class="badge ok">可判通过</span></td></tr>
+        </tbody></table></div>
+      <div class="note flat" style="font-size:11.5px"><b>为什么不干脆判通过</b>：判了就是假绿。
+        一个测试系统一旦给过假绿，它出的所有绿色都不值钱了。</div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">异常三 · 探测项无法判定（其实不是异常，但用户会当成异常）</div>
+    <div class="bd">
+      <div class="note flat"><b>TC-007 没有结论，这是对的，不是坏了。</b>
+        这条用例问的是"订单金额能不能填负数"——需求文档里根本没规定，所以不管跑出什么结果，
+        都判不出对错。它只记录一个现象：<span style="color:var(--foreground)">系统接受了 -100 这个金额</span>。
+        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn sm">这是个缺陷，去提单</button>
+          <button class="btn sm">这是设计如此，记一句就行</button>
+          <button class="btn sm">需求补了，转成正式用例</button>
+        </div></div>
+      <div class="note flat" style="font-size:11.5px">用中性底色而不是黄色/红色，是刻意的——
+        黄色会让人觉得"有事要处理"，可探测项本来就不要求任何人做任何事。三个按钮是可选出路，不是待办。</div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">异常四 · trace 打不开（三个原因，说法不同）</div>
+    <div class="bd tight">
+      <div class="note warn"><b>本地查看器没起来。</b>命令给你，终端里粘上就能开：
+        <pre>python -m playwright show-trace "…\runs\r-20260811-x3f\TC-001\trace.zip"</pre></div>
+      <div class="note warn"><b>这条用例没有 trace 文件。</b>它在发请求之前就被拦下了
+        （变量没值），浏览器压根没打开，所以没有可回放的东西。这是对的。</div>
+      <div class="note bad"><b>trace 文件应该在，但找不到了。</b>可能被清理掉了。
+        这一趟的结论还在，只是回放没了；要回放只能重跑。
+        <div style="margin-top:7px"><button class="btn sm">重跑这一条</button></div></div>
+    </div>
+  </div>
+
+  <div class="why"><b>四种异常共用一个模子</b>：一句话说清坏在哪（用被测系统的语言，不用堆栈），
+    加至少一条还能走的路。这是既有工作台设计稿定下的规矩——「禁用 + 一句解释 + 一条还能走的路，
+    三件缺一不可」。本稿沿用，不新立。</div>
+  <div class="land"><b>落点</b>：错误呈现散在各组件内，无独立文件；<b>零新增上游触点</b>。
+    文案成对进 <code>web/locales/{en,zh}/app.json</code>（并入触点 T4）。</div>
+</section>
+
+<!-- ═══ 9 ═══ -->
+<section class="step" id="s9">
+  <h2><i>9</i>设计说明</h2>
+  <p class="k">mood 是「跟齐 DeepTutor 现有风格」。下面逐条说这句话具体怎么落的，以及我在哪三处故意没跟齐、为什么。</p>
+
+  <div class="screen">
+    <div class="hd">一 · mood 怎么落地</div>
+    <div class="bd">
+      <div class="note flat"><b>判断标准只有一条</b>：把这些屏截图放进 DT 现有页面中间，
+        用户认不出哪张是新的。所以这份稿没有做任何色彩、字体、圆角上的"设计"——全是搬运。</div>
+      <div class="tw" style="margin-top:11px"><table>
+        <thead><tr><th style="width:112px">要素</th><th style="width:250px">DT 现在怎么写的（证据）</th><th>本稿怎么用</th></tr></thead>
+        <tbody>
+          <tr><td>色板</td>
+            <td>四套主题的全量令牌<div class="sub mono">web/app/globals.css:24-123</div></td>
+            <td>一比一复制到本稿 CSS 顶部，四套都能切（用顶栏按钮验）。零自定义色值。</td></tr>
+          <tr><td>字体</td>
+            <td>Geist（正文）+ Lora（有仪式感的标题）<div class="sub mono">web/app/layout.tsx:11-21</div></td>
+            <td>正文 Geist；只有页面主标题用 Lora——跟 DT「工具页标题用无衬线、门面标题用衬线」的现有分工一致。</td></tr>
+          <tr><td>页头</td>
+            <td>圆角图标框 + 19px 标题 + 描述 + 右上操作区<div class="sub mono">web/components/space/SpaceSectionHeader.tsx:22-44</div></td>
+            <td>屏 1 直接复用这个组件（既有测试工作台也是这么用的）。屏 2 批次页头是它的紧凑变体：加一个返回。</td></tr>
+          <tr><td>卡片</td>
+            <td>圆角 12 + 边框 + 卡片底 + 轻阴影<div class="sub mono">TestWorkbenchHub.tsx:223</div></td>
+            <td>批次卡、面板、屏框全用这一套。hover 提亮边框也照抄。</td></tr>
+          <tr><td>按钮</td>
+            <td>圆角 9px 的次/主按钮对<div class="sub mono">TestWorkbenchHub.tsx:103,120</div></td>
+            <td>照抄。这个 9px 圆角全仓只在测试工作台出现，用它等于宣告"我是测试工作台的一部分"。</td></tr>
+          <tr><td>表格</td>
+            <td>紧凑型：12.5px 正文、11px 表头、每格下边线<div class="sub mono">DeliveryDetail.tsx:425-472</div></td>
+            <td>规则表、结果表都用它。加了一条现有页面没有的行 hover，理由见下面偏离 3。</td></tr>
+          <tr><td>状态色</td>
+            <td>纪律二分：结构用 CSS 令牌，状态用原生色 + 成对深色<div class="sub mono">TestWorkbenchHub.tsx:7-9（代码注释即纪律）</div></td>
+            <td>严格照办。通过/不通过/挂起/执行中/探测五种状态色都是原生色，不塞进主题令牌。</td></tr>
+          <tr><td>空态</td>
+            <td>虚线框 + 图标 + 标题 + 副标题 + 主按钮<div class="sub mono">KnowledgeHome.tsx:266-283</div></td>
+            <td>三处空态全用这个模子，只换文案。</td></tr>
+          <tr><td>进度条</td>
+            <td>6px 高、全圆角、灰槽 + 主色填<div class="sub mono">NewBatchFlow.tsx:463-467</div></td>
+            <td>常驻任务条里的进度用它。仓里就这一种进度条写法，没有第二种可选。</td></tr>
+          <tr><td>聊天问答卡</td>
+            <td>圆角 16、双层浅阴影、圆形序号、胶囊选项<div class="sub mono">AskUserOptions.tsx:570-682</div></td>
+            <td>§6 四类卡一比一。这不是"参考"，是真的复用同一个组件。</td></tr>
+          <tr><td>字号阶</td>
+            <td>实测主力：12 / 11 / 13 / 12.5 / 11.5 px<div class="sub">（全仓统计，px 任意值远多于 tailwind 语义阶）</div></td>
+            <td>正文 12.5-13、辅助 11.5、徽标 10.5-11。不引入新字号。</td></tr>
+        </tbody></table></div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">二 · 三处有意的偏离</div>
+    <div class="bd">
+      <div class="note warn"><b>偏离 1：产物账本条是全新组件。</b>
+        DT 里没有步骤条可抄——<code>web/components/ui/</code> 下只有 Button、ConfirmDialog、Tooltip 三个文件，
+        没有 Card / Table / Badge / Tabs / Progress 任何一个；现有的"步骤"是纯文字
+        （<code>NewBatchFlow.tsx:337-339</code> 的 "step 1 of 3"）。
+        <div style="margin-top:6px"><b>理由</b>：产物账本的语义（亮灭由文件在不在推导、没有百分比、任何前缀都算交付）
+        和"第几步 of 几步"是相反的，没法用文字步骤表达。
+        <b>补偿</b>：这个新组件的每一个视觉零件——边框卡、状态圆点、11px 说明文字——都是现有配方，
+        只是组合方式新。用户看到的是熟悉的零件搭出的新东西，不是第二套视觉语言。</div></div>
+
+      <div class="note warn"><b>偏离 2：半透明一律用 color-mix，不用 <code>[var(--x)]/N</code>。</b>
+        这是执行 0016 的硬约束。当版实测：<code>web/</code> 下 <code>[var(--x)]/数字</code> 命中
+        <b>1037 处</b>（0016 记的是 1003，同量级，结论不变），这些写法在 Tailwind v3.4 下编译不出 CSS，
+        也就是说现有页面里那些本该是半透明的分隔线、弱化边框、10% 主色底，<b>实际渲染出来什么都没有</b>。
+        <div style="margin-top:6px"><b>后果要说在前面</b>：新页面会比现有页面看起来"层次更清楚"——
+        这不是我加了装饰，是现有页面本该有的层次没生效。这是有意的不一致，方向是修正。
+        <b>写法有先例</b>：<code>color-mix(in srgb, var(--x) N%, transparent)</code> 在 DT 里已用了 38 处
+        （globals.css:665,668,682 与 AskUserOptions.tsx:572,606 等 7 个组件），不是我新发明的。</div></div>
+
+      <div class="note warn"><b>偏离 3：结果表和规则表有真的行 hover。</b>
+        现有管理表写了 hover 底色但用的正是上面那种失效写法，等于没有。本稿用 color-mix 实现，
+        <div style="margin-top:6px"><b>理由</b>：结果表要逐行读、逐行点 trace，一行五列，没有 hover 高亮很容易串行；
+        规则表更需要——一条规则占主行 + 摊开行两行，hover 必须把这两行一起点亮，
+        否则用户会把上一条的理由读到下一条头上。CSS 里
+        <code>tr.rmain:hover + tr.rwhy</code> 就是为这件事写的。这是可读性刚需，不是装饰。</div></div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">三 · 和既有测试工作台的关系</div>
+    <div class="bd">
+      <div class="two">
+        <div class="pane">
+          <div class="t">既有 · /test-workbench（留在原处不动）</div>
+          <div class="c" style="font-size:12.5px;line-height:1.75;color:var(--muted-foreground)">
+            围绕"交付批次"：传文档或抓包 → 生成用例 → 采纳 → 执行 → 看结果。
+            <div style="margin-top:6px">M1 那个 gateway 调试页按 0016 降级为内部调试面，不算用户界面。</div>
+          </div>
+        </div>
+        <div class="pane">
+          <div class="t">新增 · /test-journey（本稿）</div>
+          <div class="c" style="font-size:12.5px;line-height:1.75;color:var(--muted-foreground)">
+            围绕"一条需求的完整旅程"：从 TAPD 需求接入起，到覆盖收口止，全程有账本、有覆盖、有证据。
+          </div>
+        </div>
+      </div>
+      <div class="note flat"><b>视觉上两者必须同源</b>——同一个 9px 圆角按钮、同一套表格、同一个页头组件。
+        用户不该觉得自己在两个产品之间切换。<b>已定（0017 O1）：两个入口并列</b>，分工与侧栏呈现见 §1 第一屏。
+        <b>合并不登记为欠账</b>——将来真要合是一次新的拍板，不是执行旧承诺。</div>
+    </div>
+  </div>
+
+  <div class="fix"><b>关于证伪</b>：0016 说得很清楚——如果你看完觉得「看着像 DT 但用起来不顺」，
+    那就是我把 mood 做成了皮肤套用，得回到信息架构层重做，不是调样式能解决的。
+    §0 那张"每屏在回答什么问题"的表就是给你验这一条用的：先看表，觉得表填对了再看屏。</div>
+</section>
+
+<!-- ═══ 10 ═══ -->
+<section class="step" id="s10">
+  <h2><i>10</i>落点与上游触点预算</h2>
+  <p class="k">载体改成正式「测试」模式之后，这张表整个重排了——原来的 5 处预算是按 Partner 载体算的，已作废。</p>
+
+  <div class="note bad inset" style="margin-bottom:12px">
+    <b>预算超了一倍，这件事摆在明面上。</b>护栏 6 原本规定动 DT 主体不超过 5 处；
+    按 0019 定的正式 Capability 载体，实际是 <b>9~10 处</b>（工作台侧 4 + 聊天侧 5~6）。
+    <b>用户已拍板把预算从 5 提到 11 并接受超支</b>（0020 裁定一）。
+    <div style="margin-top:6px">这些触点<b>形态确实轻</b>——绝大多数是"往一个集中式清单里加一行"，
+      与已登记的路由注册、侧栏数组同型，合并冲突面小。
+      <b>但"轻"不等于"没有"，超预算就是超预算，本稿不替它化妆。</b></div>
+    <div style="margin-top:6px"><b>连带记一笔失误</b>（0020 原文口径）：0019 报批时只报了聊天侧的 5~7 处，
+      <b>没把工作台侧已登记的 4 处并进总数</b>，用户批 0019 时没看到真实总量。
+      总量超护栏一倍是必须上浮的事，不该被吞下。已补上浮并重新拍板。</div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">A · 工作台侧（4 处，未变）</div>
+    <div class="bd">
+      <div class="tw"><table>
+        <thead><tr><th style="width:44px">#</th><th style="width:250px">文件</th><th style="width:74px">性质</th><th>为什么必须动它</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">T1</td><td class="mono">web/app/(workspace)/test-journey/…</td>
+            <td><span class="badge ok">新增</span></td>
+            <td>页面路由本身。挂 (workspace) 是 0015 已拍板项——为了拿到该路由组原生的聊天上下文。</td></tr>
+          <tr><td class="mono">T2</td><td class="mono">web/components/test-journey/…</td>
+            <td><span class="badge ok">新增</span></td>
+            <td>薄壳组件（列表 / 账本 / 覆盖 / 结果 / 接入面 / trace 入口）。全部只调 extensions 的接口，不含业务逻辑。</td></tr>
+          <tr><td class="mono">T3</td><td class="mono">web/components/sidebar/SidebarShell.tsx</td>
+            <td><span class="badge warn">改既有</span></td>
+            <td>侧栏加一个入口。与既有 Test Workbench 项同组同写法（:112-121 有先例注释），改动是一个数组元素。</td></tr>
+          <tr><td class="mono">T4</td><td class="mono">web/locales/{en,zh}/app.json</td>
+            <td><span class="badge warn">改既有</span></td>
+            <td>新文案成对加。0016 强制中英成对，算一处。</td></tr>
+        </tbody></table></div>
+      <div class="note flat" style="font-size:11.5px">这四处与载体无关，0019 没有改动它们。</div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">B · 聊天侧（6 处，本轮新增 —— 载体改成正式模式带来的）</div>
+    <div class="bd">
+      <div class="tw"><table>
+        <thead><tr><th style="width:44px">#</th><th style="width:250px">文件</th><th style="width:74px">性质</th><th>改什么 / 对应哪一屏</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">U1</td><td class="mono">deeptutor/runtime/bootstrap/builtin_capabilities.py:3-11</td>
+            <td><span class="badge warn">改既有</span></td>
+            <td>内置能力字典加一行。<div class="sub">让「测试」成为一个真能力，不是前端假装。</div></td></tr>
+          <tr><td class="mono">U2</td><td class="mono">deeptutor/runtime/request_contracts.py</td>
+            <td><span class="badge warn">改既有</span></td>
+            <td>请求契约加本模式的配置模型与校验。</td></tr>
+          <tr><td class="mono">U3</td><td class="mono">deeptutor/i18n/metadata_i18n.py:5-33</td>
+            <td><span class="badge warn">改既有</span></td>
+            <td>模式的名字与一句话描述（中英）。<div class="sub">就是 §6a 选择器那一行里显示的字。</div></td></tr>
+          <tr><td class="mono">U4</td><td class="mono">web/app/(workspace)/home/[[...sessionId]]/page.tsx:216-278</td>
+            <td><span class="badge warn">改既有</span></td>
+            <td>前端能力数组加一项（图标 / 名 / 描述 / 允许的工具）。<div class="sub">→ §6a 入口</div></td></tr>
+          <tr><td class="mono">U5</td><td class="mono">web/components/chat/home/ChatMessages.tsx:108-116</td>
+            <td><span class="badge warn">改既有</span></td>
+            <td>徽章文案：七分支加第八个。<div class="sub">→ §6b 模式徽章</div></td></tr>
+          <tr><td class="mono">U6</td><td class="mono">ChatMessages.tsx:321-503 + 新增结果卡组件</td>
+            <td><span class="badge warn">改既有</span></td>
+            <td><b>富结果卡分支</b>——本表里唯一不是"清单加一行"的一处，但那道缝已有四个同型先例。
+              <div class="sub">→ §6f 三张卡。<b>本轮判为必做</b>：不做它，选正式模式换回来的最大一块收益就没了。</div></td></tr>
+        </tbody></table></div>
+
+      <div class="note flat"><b>为什么这些叫"轻"</b>：U1、U3、U4、U5 都是往一个集中式清单里加一个条目，
+        与已登记的路由注册、侧栏数组是同一类东西，上游同步时几乎不会撞车。
+        U2 是加一个模型。<b>真正需要看着点的是 U6——它是改渲染逻辑，不是加一行清单</b>，这一条不美化。</div>
+
+      <div class="note warn"><b>两条附带要求（0020 随裁定执行，不是建议）</b>
+        <div style="margin-top:6px">① <b>触点要集中成能整块删掉的 fork 区块</b>。不许把改动零散撒进上游文件——
+          将来要撤回或重做时，得能一次性摘干净。（与 0018 对 Dockerfile 的同类要求同源。）</div>
+        <div style="margin-top:4px">② <b>首次同上游时实测冲突面并回报</b>。"形态轻、冲突小"目前是判断不是事实；
+          第一次真的同一次上游，把撞了几处、撞在哪如实报回来。</div></div>
+
+      <div class="note bad"><b>0019 的撤回信号，原样保留</b>：若这些触点在首次上游同步时就产生冲突，
+        说明"merge 友好"这个判断错了，要重估这条路的长期成本——不是硬扛。</div>
+
+      <div class="note flat"><b>曾经有过一条 U7，已经没了。</b>那是"把定档做成发送前的配置卡"要付的触点。
+        O4 定为不做（见 §11），这一行随之删除，<b>预算维持 11 不再往上加</b>。删它的理由不只是省触点，
+        见 §11 O4 那张卡——我给的成本估算当时是错的。</div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">C · 不占预算的部分（都在 extensions 内，改多少都不碰 DT 主体）</div>
+    <div class="bd tight">
+      <div class="note flat" style="margin-top:0">
+        账本要补执行与投影两格（<code>server/journey/artifacts.py:195-207</code> 的 <code>stepper()</code> 现返 7 项）；
+        TAPD 拉取、trace 启动、覆盖与结论数据接口；<b>以及执行侧的幂等化</b>——
+        0019 把它定为载体无关必做项（约 1~2 人日、0 触点），§6g 那道界面确认<b>不能替代它</b>。
+      </div>
+      <div class="note warn"><b>作废登记</b>：0017 O2「用第 5 处触点给 Partner 接人闸」已被 0019 作废——
+        它的前提是"载体不变"，而载体变了。Partner 侧不再需要接线；
+        取而代之的是上表 U1-U6。这一条写在这里，是为了让后来翻表的人不再去找那个 T5。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 11 ═══ -->
+<section class="step" id="s11">
+  <h2><i>11</i>四件都已定</h2>
+  <p class="k">O1、O3 记在 0017，O4 记在 0020，O2 随载体变更作废。
+    这里保留每件当时权衡的选项，是为了让你复核时看得见"排除了什么、代价是什么"——<b>不用再选了</b>。</p>
+
+  <div class="note warn inset" style="margin-bottom:12px"><b>另有一条被推翻的</b>：O2 当时定的是
+    「用第 5 处触点给 Partner 接人闸」。0019 把载体换成了正式「测试」模式，
+    <b>Partner 方案整个作废，O2 连带作废</b>——不是改了做法，是那个问题不存在了。
+    下面 O2 那张卡保留原样，作为决策链的记录；<b>真正生效的触点账在 §10</b>。</div>
+
+  <div class="screen">
+    <div class="hd">O1 · 新页和既有测试工作台，是并列还是合并 —— 已定</div>
+    <div class="bd">
+      <div class="note ok"><b>你选了 A：并列两个入口。</b>呈现见 §1 第一屏，分工是「有流量走测试工作台、有需求走测试旅程」。
+        <div style="margin-top:5px">你同时接受了"两个入口可能一时分不清"这个代价，所以本稿没有加任何引导提示去补它；
+          真绊到了再上区分手段，三种备选写在 §1 末尾。</div></div>
+      <div class="kv" style="grid-template-columns:52px minmax(0,1fr);gap:9px 12px;margin-top:11px">
+        <span class="k">选项 A</span><span><b>并列两个入口</b>（<span class="badge ok">已选</span>）。侧栏两项：Test Workbench（既有）+ 测试旅程（新）。
+          两者在既有工作台顶部互相给一条跳转。
+          <div class="sub">代价：侧栏第二组多一项，用户要理解两者分工。好处：M2 零迁移风险，既有交付批次一条都不动。</div></span>
+        <span class="k">选项 B</span><span><b>不加入口，从既有工作台里进</b>。侧栏不变，测试旅程作为既有工作台内的一个页签。
+          <div class="sub">代价：新页拿不到 (workspace) 的聊天上下文（既有工作台在另一个路由组），
+            §7 的双视图跳转要绕行实现，与 0015 已拍板方向相反。</div></span>
+        <span class="k">选项 C</span><span><b>直接合并</b>：既有工作台整体迁进新页面，只留一个入口。
+          <div class="sub">代价：M2 工期显著扩面，既有交付批次要做数据迁移，风险最大。好处：最终形态最干净。</div></span>
+        <span class="k">结果</span><span>选 A。0017 同时记明：<b>「先并列、M3 再合」这一项你没有选</b>，
+          所以合并<b>不登记为欠账</b>——将来真要合，是一次新的拍板，不是执行旧承诺。</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">O2 · 聊天人闸的服务端接线如果要动上游，动不动 —— <span style="color:var(--muted-foreground)">已作废（0019 换了载体）</span></div>
+    <div class="bd" style="opacity:.65">
+      <div class="note flat"><b>整卡作废，保留作决策链记录。</b>本卡的前提是"载体是 Partner"；
+        0019 把载体改成了正式「测试」Capability 模式，人闸随主聊侧原生可得，不需要为它买触点。
+        新的触点账见 §10 的 U1-U6。</div>
+      <div class="note ok"><b>（历史）定为 3-A：该动就动，用掉最后一处触点预算。</b>
+        依据是「人闸留在聊天里」属 0015 已拍板的体验，为省预算削弱它属不可接受的降级。
+        触点表已把 T5 从"预留"改成"已指派"，见 §10。</div>
+      <div class="note flat" style="margin-top:11px"><b>背景</b>：0015 拍了"复用现成问答机制、零新聊天组件"。前端链路是现成的（已实证），
+        但 test-partner 的会话能不能<b>发出</b>这种卡，M1 设计稿把它列成了待核验假设，还没落定。
+        施工第一步会核验它。三种结果对应三种做法：</div>
+      <div class="kv" style="grid-template-columns:52px minmax(0,1fr);gap:9px 12px;margin-top:11px">
+        <span class="k">情况 1</span><span>已经能发 → 什么都不用做，聊天侧零触点。<span class="badge ok">最好</span></span>
+        <span class="k">情况 2</span><span>不能发，但在 extensions 内补接就行 → 也是零上游触点。<span class="badge ok">可接受</span></span>
+        <span class="k">情况 3</span><span>不能发，必须改 DT 主体的聊天服务端 → 要占最后 1 处触点预算。这时候有两条路：</span>
+        <span class="k">3-A</span><span><b>占掉 T5，把人闸留在聊天里</b>（<span class="badge ok">已选</span>）。四类卡的体验和 §6 画的一致。
+          <div class="sub">代价：预算用满，此后任何新增上游改动都要专门批。</div></span>
+        <span class="k">3-B</span><span><b>不动上游，人闸改到工作台内做</b>，聊天只发一条"有事要你拍板"的通知。
+          <div class="sub">代价：0015 拍的"闸时刻遥控器"体验降级——用户在聊天里聊着，要拍板得先跳出去。
+            §6 四张卡里的定档和澄清受影响最大。</div></span>
+        <span class="k">撤回信号</span><span>若施工实测改动面显著大于预估（不止接线、要改 DT 会话协议或触及多文件），
+          说明"一处触点"这个判断错了，回来重议 3-B——<b>不是硬塞进这一处</b>。</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">O3 · 批次列表上，"这条旅程结论如何"用什么当第一眼 —— 已定</div>
+    <div class="bd">
+      <div class="note ok"><b>你选了 A：先说有几条没过。</b>屏 1 已按此改：右侧只留一个大一档的徽标，
+        覆盖与收口状态降到第二行灰字。列表按<b>「今天有什么要我处理」</b>组织，不是按进度盘点。</div>
+      <div class="two" style="margin-top:11px">
+        <div class="pane"><div class="t">A · 先说有几条没过 <span class="badge ok">已选</span></div><div class="c">
+          <div class="item" style="cursor:default"><div class="r1"><span class="ttl">登录三次错误锁定</span>
+            <span class="grow"></span><span class="badge bad lead">2 条没过</span></div>
+            <div class="r2"><span>通过 6 / 没过 2 / 挂起 1</span><span>·</span><span>覆盖 8/9 · 已收口</span></div></div>
+          <div class="sub" style="margin-top:7px">代价：覆盖只有 8/9 这件事退到第二眼。接受——它不要求你现在做任何事。</div>
+        </div></div>
+        <div class="pane"><div class="t">B · 先说能不能收口 <span class="chip">未选</span></div><div class="c">
+          <div class="item" style="cursor:default"><div class="r1"><span class="ttl">登录三次错误锁定</span>
+            <span class="grow"></span><span class="badge warn lead">还不能收口</span></div></div>
+          <div class="sub" style="margin-top:7px">排除理由：有严重缺陷但覆盖齐的批次会显示成绿的，容易麻痹。</div>
+        </div></div>
+        <div class="pane"><div class="t">C · 两个都放 <span class="chip">未选</span></div><div class="c">
+          <div class="item" style="cursor:default"><div class="r1"><span class="ttl">登录三次错误锁定</span>
+            <span class="grow"></span><span class="badge bad">2 条没过</span><span class="badge mute">覆盖 8/9</span></div></div>
+          <div class="sub" style="margin-top:7px">这是改稿前的画法。信息全，但列表长了以后每行两个徽标，扫起来等于没重点。</div>
+        </div></div>
+      </div>
+      <div class="note flat" style="margin-top:11px"><b>这一条改的不只是徽标</b>：它定了整份列表的组织逻辑。
+        往后新增任何列表信息，都先问一句「它要求用户现在做什么吗」——不要求的，就往第二行放。</div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">O4 · 定档放在"发送前的配置表单"还是维持"发完再用问答卡问" —— 已定</div>
+    <div class="bd">
+      <div class="note ok"><b>你选了 A：不做配置卡，档位与靶机改用人闸卡在读完需求后问。</b>
+        形态就是 §6e 卡一那张，原样保留，不用改。预算维持 11 不再往上加。</div>
+
+      <div class="note bad"><b>这一条我算错过一次，得记下来。</b>
+        <div style="margin-top:6px">上一版我在这张卡和 §10 的 U7 行里写的是「配置卡多<b>一处</b>上游触点」。
+          <b>这个数字是错的，实测是 6 处。</b></div>
+        <div style="margin-top:6px"><b>错在哪</b>：我只看了这个卡片组件本身，以为往它的清单里加一项就完事——
+          和 U1/U3/U4/U5 那种"加一行"同类。实际上它<b>不是数据驱动的</b>：能力名是写死的联合类型
+          加一张写死的标签表（<code>CapabilityConfigCard.tsx:31-44</code>），
+          接进来还要动输入框、两个页面、以及服务端的请求契约和会话运行时。
+          <b>一处 → 六处，差了六倍。</b></div>
+        <div style="margin-top:6px"><b>后果不止是数字</b>：manager 拿着我这个错数字去问过用户一次，
+          用户当时基于"只多一处"选了要配置卡。发现算错后那一轮结论被撤回、重新问了一遍，才有了现在的 A。</div>
+        <div style="margin-top:6px"><b>教训（给后面所有触点估算）</b>：看到一个组件"支持多种能力"，
+          不能默认它是数据驱动的。<b>先翻它怎么认这些能力——是读表还是写死的联合类型</b>。
+          写死的，接一个新成员就是一次改类型 + 改表 + 改所有调用点，成本量级完全不同。
+          <b>本稿其余触点估算已按这条复核过一遍。</b></div></div>
+
+      <div class="note flat"><b>另外，架构上这条也站不住</b>（这是撤回后才想清楚的）：配置卡本质是"向导的第一步"——
+        先填表、填完才让你说话。而这套东西的架构约束是<b>禁向导式流水线、任意前缀都是合法交付</b>。
+        用卡片在读完需求后问，不只是省触点，方向上也更对。</div>
+
+      <div style="margin-top:12px;font-size:11px;color:var(--muted-foreground)">当时权衡的两案留档 ↓</div>
+      <div class="two" style="margin-top:6px">
+        <div class="pane"><div class="t">A · 发完话，再用问答卡定档 <span class="badge ok">已选</span></div><div class="c">
+          <div class="chat" style="padding:9px">
+            <div class="bub" style="font-size:11.5px">用户：帮我测 #1140342</div>
+            <div class="bub" style="font-size:11.5px;margin-top:6px">助手：已读入。走哪个档？</div>
+            <div class="ask" style="padding:9px;margin-top:6px">
+              <div class="q" style="font-size:12px">这条需求走哪个档？</div>
+              <div class="opts" style="margin-top:7px"><button class="opt" style="font-size:11px">清单</button>
+                <button class="opt on" style="font-size:11px">标准</button><button class="opt" style="font-size:11px">深</button></div>
+            </div>
+          </div>
+          <div class="sub" style="margin-top:7px"><b>好</b>：0 额外触点，形态就是 §6e 画的那张。
+            系统读完需求再问，能带着"这条需求有 9 条规则"的信息问，问得更准。
+            <br><b>差</b>：多一个来回。用户明明一开始就知道自己要测多深。</div>
+        </div></div>
+        <div class="pane" style="opacity:.6"><div class="t">B · 用发送前配置卡 <span class="chip">未选 · 不实现</span></div><div class="c">
+          <div class="chat" style="padding:9px">
+            <div class="rcard" style="padding:10px">
+              <div class="rh" style="font-size:12px"><b>测试设置</b></div>
+              <div style="margin-top:8px;font-size:11.5px;color:var(--muted-foreground)">档位</div>
+              <div class="opts" style="margin-top:5px"><button class="opt" style="font-size:11px">清单</button>
+                <button class="opt on" style="font-size:11px">标准</button><button class="opt" style="font-size:11px">深</button></div>
+              <div style="margin-top:9px;font-size:11.5px;color:var(--muted-foreground)">靶机</div>
+              <div class="mono" style="font-size:11px;margin-top:3px">http://127.0.0.1:8047 <span class="badge ok">凭据已配</span></div>
+              <div class="rf" style="margin-top:9px;padding-top:8px"><span class="grow"></span>
+                <button class="btn sm pri">确认（确认前发不出去）</button></div>
+            </div>
+          </div>
+          <div class="sub" style="margin-top:7px"><b>当时说的好处</b>：一次配好整条旅程不打断，和其他模式行为一致。
+            <br><b>真实成本</b>：<s>一处触点</s> → <b>六处</b>；而且它是"向导第一步"，和禁向导的架构约束顶牛。
+            两条加起来，这案不成立。</div>
+        </div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="why"><b>到这里，稿内已经没有等你拍的开放项了。</b>
+    O1（两入口并列）、O3（列表先说几条没过）、O4（不做配置卡）由你拍定，O2 随载体变更作废，
+    模式跨轮保持已实证、粘滞形态不实现，触点预算 5→11 由你拍定接受超支。
+    <div style="margin-top:5px">屏内布局、组件形态、状态色分配、账本分四段、规则合成一张表、富卡与工作台的分工线、异常态的分类方式——
+      这些是设计范围内的事，已经定了写在稿里。<b>现在只剩一件事要你做：从头看一遍，顺不顺。</b>
+      不顺就说哪儿不顺，我回信息架构层改，不是调样式。</div></div>
+</section>
+
+<!-- ═══ 12 ═══ -->
+<section class="step" id="s12">
+  <h2><i>12</i>这一版改了哪些，以及仍可能不顺的地方</h2>
+  <p class="k">上一版工作台侧被判不通过（0021），病因是把工程产物模型按原样投影成了 UI。
+    本节是返工清单和残留风险，不是新设计。</p>
+
+  <div class="screen">
+    <div class="hd">改动清单 · 全部落在展示层，零新增上游触点</div>
+    <div class="bd">
+      <div class="tw"><table>
+        <thead><tr><th style="width:118px">在哪</th><th style="width:200px">上一版</th><th>这一版</th></tr></thead>
+        <tbody>
+          <tr><td><b>§2 账本</b><div class="sub">0021 必改 1</div></td>
+            <td>九格并排，是 <code>stepper()</code> 七项 + 待补两项的直译</td>
+            <td>四段：接入与澄清 / 用例 / 执行 / 收口，段内格子点开可见。
+              段状态由段内格子汇总，不存盘。原则（产物推导 / 无 step 字段 / 无百分比 / 任意前缀合法）一字未改。</td></tr>
+          <tr><td><b>§2 首屏顺序</b></td><td>页签 → 九格 → 说明 → 该你做的</td>
+            <td>页签 → <b>该你做的</b> → 四段 → 说明。这一屏只回答"现在轮到我做什么"，答案排第一。</td></tr>
+          <tr><td><b>§3 + §5</b><div class="sub">0021 必改 2</div></td>
+            <td>规则实体投影三次：澄清表（依据）、分析面板（例子）、覆盖页签（覆盖）</td>
+            <td>合成一张规则表，依据 / 覆盖 / 关联用例三列并存，例子进行展开，理由横跨整行摊开。
+              §5 段②③只留摘要与入口。<b>规则全站一个权威视图。</b></td></tr>
+          <tr><td><b>§1 列表卡</b><div class="sub">0021 必改 3</div></td>
+            <td>lead 徽标 + 九格微条 + 第二行灰字</td>
+            <td>lead 徽标 + 第二行灰字。进度拓扑只在详情页看。</td></tr>
+          <tr><td><b>§4 结果表</b><div class="sub">0021 建议 4</div></td>
+            <td>「断到哪层」+「证据」两列</td>
+            <td>合成「证据强度」一列，四档标签把话写在脸上，副行给证据明细。六列 → 五列。</td></tr>
+          <tr><td><b>§0 问题表</b><div class="sub">0021 判据 1</div></td>
+            <td>屏 1 挂三个问题，屏 4 三个，屏 6 四个</td>
+            <td>每屏一个问题，各屏 <code>目标</code> 行跟着收敛到同一句。</td></tr>
+          <tr><td><b>各屏</b><div class="sub">0021 建议 5</div></td>
+            <td>术语散落，无解释</td>
+            <td>随用随教：<code>.gloss</code> 只在术语首次出现那一屏解释一次，不每屏全量摆。</td></tr>
+        </tbody></table></div>
+      <div class="note ok"><b>没动的</b>：聊天侧 §6a–6g 形态维持（它做对的正是压缩）；
+        O1 两入口并列、O3 列表口径、O4 不做配置卡、载体=正式 Capability、预算 11 —— 全部维持。
+        后端契约零改动，上游触点表 §10 一行未增。</div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">红线六条 · 逐条自查</div>
+    <div class="bd">
+      <div class="tw"><table>
+        <thead><tr><th style="width:220px">红线</th><th style="width:64px">状态</th><th>压缩后落在哪</th></tr></thead>
+        <tbody>
+          <tr><td>覆盖三态 + 逐行理由摊开，不进 tooltip</td><td><span class="badge ok">在</span></td>
+            <td>规则表三态徽标照旧；理由改为<b>横跨整行</b>常驻显示——比原来的窄列更宽、更不可能被折叠。</td></tr>
+          <tr><td>探测项不进分母，且与挂起严格分色</td><td><span class="badge ok">在</span></td>
+            <td>§4 汇总条那句"探测的 2 条不在分母里"原样保留；探测紫 / 挂起琥珀，结论列与证据强度列两处都不共用视觉。</td></tr>
+          <tr><td>挂起必须带子因</td><td><span class="badge ok">在</span></td>
+            <td>TC-004 结论列的子因文字未动；证据强度列副行再补一句「缺页面证据」。合列没有吃掉子因。</td></tr>
+          <tr><td>写确认默认零勾选</td><td><span class="badge ok">在</span></td>
+            <td>§6e 卡四，在冻结的聊天侧，本轮未触碰。</td></tr>
+          <tr><td>结论落账后不可编辑</td><td><span class="badge ok">在</span></td>
+            <td>§4 状态流转行原样：界面无任何编辑入口，要改只能改用例重跑。</td></tr>
+          <tr><td>成对错误态分开说</td><td><span class="badge ok">在</span></td>
+            <td>「没装」vs「装了但坏了」（§1）、「没跑起来」vs「跑了没过」（§8 异常一）、
+              trace 三种原因（§8 异常四）、需求拉不到三种（§5）—— 一处没合并。</td></tr>
+        </tbody></table></div>
+      <div class="note warn"><b>压缩与红线撞过一次，记下来</b>：必改 2 要求合表，合表让列变多变窄；
+        红线要求理由摊开不折叠。<b>没有靠折叠理由列去偷空间</b>——解法是把理由从"一列"改成"横跨整行的一块"，
+        列宽问题和可见性问题各归各的排版维度，两条都不牺牲。</div>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="hd">仍可能被判"不顺"的三处 · 我自己不确定的地方</div>
+    <div class="bd tight">
+      <div class="note warn"><b>一、四段的"用例"段可能仍显冗余。</b>它段内三格（生成 / 采纳 / 编译），
+        但对用户来说"编译"是采纳后自动发生的、不需要他知道的事。
+        如果你看下来觉得四段里这一段最没用，那说明<b>该合的是三段（接入 → 用例 → 结论），不是四段</b>——
+        这是投影粒度还能再压一档的信号，改法很轻。</div>
+      <div class="note warn"><b>二、规则表主行 + 摊开行的双行结构，行数多了一倍时不知道还好不好扫。</b>
+        本稿画的是 9 条规则、其中 3 条带理由行。真实需求若有 30 条规则、20 条带理由，
+        这张表会很长。<b>没有做分页或分组，是刻意的</b>——收口要求逐条看完；
+        但如果实测下来长到扫不动，正确的改法是"按覆盖状态分组（先红后琥珀后绿）"，不是折叠理由。</div>
+      <div class="note warn"><b>三、§1 列表与 §2 详情之间可能还差一层。</b>
+        列表卡现在只说"这条要你做什么"，详情页第一行也说"轮到你了"。
+        两句话内容接近，可能会让人觉得点进去没拿到新东西。
+        真绊到了，正确的改法是<b>让详情页第一行说得更具体</b>（带上"12 条里有 2 条是探测性"这类只有详情页才知道的信息），
+        而不是把列表卡加回去。</div>
+      <div class="note flat"><b>还有一条不在我能压的范围内</b>：0021 写明，
+        若这一轮压缩之后你仍觉得不顺，问题就不在投影层，而在概念模型本身——
+        <b>旅程 / 批次 / 趟三层，或者聊天与工作台的双入口分工</b>。
+        那种情况要重开的是模型讨论，不是再做一轮表现层压缩。<b>我这一轮能做的压缩已经做完了。</b></div>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+document.getElementById('th').onclick=e=>{
+  const b=e.target.closest('button'); if(!b) return;
+  [...e.currentTarget.children].forEach(x=>x.removeAttribute('data-on'));
+  b.dataset.on='';
+  const r=document.documentElement, t=b.dataset.t;
+  r.className = t==='dark' ? 'dark' : t==='snow' ? 'theme-snow' : t==='glass' ? 'dark theme-glass' : '';
+};
+document.querySelectorAll('.tabs').forEach(g=>g.onclick=e=>{
+  const b=e.target.closest('button'); if(!b) return;
+  [...g.children].forEach(x=>x.removeAttribute('data-on')); b.dataset.on='';
+});
+document.querySelectorAll('.opts').forEach(g=>g.onclick=e=>{
+  const b=e.target.closest('.opt'); if(!b) return;
+  [...g.children].forEach(x=>x.classList.remove('on')); b.classList.add('on');
+});
+</script>

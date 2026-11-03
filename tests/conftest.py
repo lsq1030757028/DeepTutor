@@ -89,6 +89,29 @@ def _guard_legacy_multi_user_migration(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _isolate_llm_trace_sidecar(tmp_path_factory, monkeypatch):
+    """Keep captured prompts out of the developer's real data tree.
+
+    Every chat turn now writes its request header to a per-session sidecar
+    under ``data/user/llm-trace``. Without this, running the suite would grow
+    that tree with fixture prompts, and the dedup cache would carry state from
+    one test into the next (the counted assertions in
+    ``tests/core/test_trace_sidecar.py`` depend on starting empty).
+
+    Patches the module attribute, so a test that imported ``sidecar_root``
+    directly still sees the real one — which is how the "not under the
+    workspace" assertion stays honest.
+    """
+    from deeptutor.core.observability import trace_sidecar
+
+    root = tmp_path_factory.mktemp("llm-trace")
+    monkeypatch.setattr(trace_sidecar, "sidecar_root", lambda: root)
+    trace_sidecar.reset_registry()
+    yield
+    trace_sidecar.reset_registry()
+
+
 # ---------------------------------------------------------------------------
 # StreamBus
 # ---------------------------------------------------------------------------

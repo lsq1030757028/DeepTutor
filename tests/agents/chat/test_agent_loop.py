@@ -777,6 +777,74 @@ async def test_ask_user_pause_resumes_and_streams_interleaved(
 
 
 @pytest.mark.asyncio
+async def test_real_ask_user_resume_records_a_journey_write_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from deeptutor.services.test_journey.trust import (
+        TrustedJourneyContext,
+        bind_trusted_journey_context,
+        current_resolved_user_decision,
+    )
+
+    question_id = "journey_write_confirm:b-20260813-abcdef:acs-1"
+    question = {
+        "id": question_id,
+        "prompt": "Authorize selected writes?",
+        "multi_select": True,
+        "allow_free_text": False,
+        "options": [{"label": "case/R1-C001", "description": "sha256:x | write"}],
+    }
+
+    class _PausingRegistry(_Registry):
+        async def execute(self, name: str, **kwargs):
+            if name == "ask_user":
+                return ToolResult(
+                    content="Asked.", success=True, pause_for_user={"questions": [question]}
+                )
+            return await super().execute(name, **kwargs)
+
+    client = _ScriptedChatClient(
+        [
+            [
+                _llm_chunk(
+                    tool_calls=[
+                        {
+                            "id": "ask-call",
+                            "name": "ask_user",
+                            "arguments": json.dumps({"questions": [question]}),
+                        }
+                    ]
+                )
+            ],
+            [_llm_chunk(content="Done")],
+        ]
+    )
+    pipeline = AgenticChatPipeline(language="en")
+    pipeline.registry = _PausingRegistry()
+    monkeypatch.setattr(pipeline, "_compose_enabled_tools", lambda _context: ["ask_user"])
+    monkeypatch.setattr(pipeline, "_build_openai_client", lambda: client)
+
+    async def _waiter():
+        return {"answers": [{"questionId": question_id, "text": "case/R1-C001"}]}
+
+    trusted = TrustedJourneyContext("owner-a", "s1", "t1", "test", "capability")
+    with bind_trusted_journey_context(trusted):
+        await _run(
+            pipeline,
+            UnifiedContext(
+                session_id="s1",
+                user_message="run tests",
+                enabled_tools=["ask_user"],
+                metadata={"wait_for_user_reply": _waiter},
+            ),
+        )
+        decision = current_resolved_user_decision()
+        assert decision is not None
+        assert decision.ask_user_tool_call_id == "ask-call"
+        assert decision.answers[0]["text"] == "case/R1-C001"
+
+
+@pytest.mark.asyncio
 async def test_unresolved_ask_user_halts_turn(monkeypatch: pytest.MonkeyPatch) -> None:
     class _PausingRegistry(_Registry):
         async def execute(self, name: str, **kwargs):
@@ -969,3 +1037,84 @@ def test_build_llm_tool_schemas_kb_name_enum_matches_attached() -> None:
     )
 
     assert schemas[0]["function"]["parameters"]["additionalProperties"] is False
+
+
+@pytest.mark.asyncio
+async def test_stage_and_tool_events_are_paired_and_lead_the_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC9 (spec r3) — the structural half of "something visible within 5s".
+
+    AC9's own wording is a wall-clock judgement ("<=5s after the user message,
+    product-side motion appears") and its behavioural half only a real session
+    can prove. What is provable here is the structure that makes it possible:
+
+    1. the turn's *first* event is product-side and self-initiated
+       (``stage_start``), emitted before any LLM-derived content — so the first
+       feedback never waits on the model's first token;
+    2. ``stage_start`` / ``stage_end`` come in pairs per stage name — a stage
+       that opens and never closes leaves the UI spinner stuck;
+    3. every ``tool_call`` has its ``tool_result`` (matched by ``call_id``) —
+       an unanswered tool call is the same stuck-spinner shape one level down.
+
+    Scope note (not a failure, a boundary): a chat turn runs a single
+    ``responding`` stage. The nine-cell per-stage begin/end pairing AC9 also
+    names lives in the journey stepper on the test-partner side, not in this
+    loop; this test does not cover it.
+    """
+    registry = _Registry()
+    client = _ScriptedChatClient(
+        [
+            [
+                _llm_chunk(content="Searching."),
+                _llm_chunk(
+                    tool_calls=[
+                        {
+                            "id": "call-1",
+                            "name": "web_search",
+                            "arguments": json.dumps({"query": "Fourier transform"}),
+                        }
+                    ]
+                ),
+            ],
+            [_llm_chunk(content="Found what was needed.")],
+        ]
+    )
+    pipeline = AgenticChatPipeline(language="en")
+    pipeline.registry = registry
+    monkeypatch.setattr(pipeline, "_compose_enabled_tools", lambda _context: ["web_search"])
+    monkeypatch.setattr(pipeline, "_build_openai_client", lambda: client)
+
+    events = await _run(
+        pipeline,
+        UnifiedContext(
+            session_id="s1", user_message="Look up Fourier", enabled_tools=["web_search"]
+        ),
+    )
+
+    # The scenario actually exercised a tool round (otherwise (3) is vacuous).
+    assert [e["name"] for e in registry.executed] == ["web_search"]
+
+    # (1) First motion is the product's own, ahead of anything the model said.
+    assert events[0].type == StreamEventType.STAGE_START
+    types = [e.type for e in events]
+    assert types.index(StreamEventType.STAGE_START) < types.index(StreamEventType.CONTENT)
+
+    # (2) Stage begin/end pair up per stage name, and no end precedes its start.
+    starts = [e.stage for e in events if e.type == StreamEventType.STAGE_START]
+    ends = [e.stage for e in events if e.type == StreamEventType.STAGE_END]
+    assert starts and sorted(starts) == sorted(ends), f"unpaired stages: {starts} vs {ends}"
+    open_stages: list[str] = []
+    for event in events:
+        if event.type == StreamEventType.STAGE_START:
+            open_stages.append(event.stage)
+        elif event.type == StreamEventType.STAGE_END:
+            assert event.stage in open_stages, f"stage_end without start: {event.stage}"
+            open_stages.remove(event.stage)
+    assert not open_stages, f"stages left open at turn end: {open_stages}"
+
+    # (3) Every tool call is answered; correlation is by call_id, not by order.
+    called = [e.metadata["call_id"] for e in events if e.type == StreamEventType.TOOL_CALL]
+    returned = [e.metadata["call_id"] for e in events if e.type == StreamEventType.TOOL_RESULT]
+    assert called, "the tool round emitted no tool_call event"
+    assert sorted(called) == sorted(returned), f"unanswered tool calls: {called} vs {returned}"

@@ -259,6 +259,9 @@ def test_a_run_goes_through_the_real_executor_contract(root):
     assert call["env"] == "测试环境"                     # 传的是环境名，不是凭据
     assert call["case_ids"] == ["TC-001"]
     assert call["delivery_dir"] == os.path.join(root, name)   # 报告并进批次目录
+    # 报告合法根必须跟着台账的根走：不传的话执行层按 MCP 线的模块常量判定，
+    # 用户 scope 下的批次目录会被误拒、报告落不进批次（容器里实测踩过的缺陷）。
+    assert call["deliveries_root"] == os.path.abspath(root)
     assert call["title"] == "订单域用例"
     assert [c["case_id"] for c in call["cases"]] == ["TC-001", "TC-002"]
     assert "variables" not in call                       # 值从来不经过工作台
@@ -311,6 +314,38 @@ def test_a_second_run_on_the_same_batch_is_refused_while_one_is_live(root):
         runs.start(delivery_id=name, env="测试环境", case_ids=["TC-001"])
     assert exc.value.code == "RUN_IN_PROGRESS"
     gate.set()
+
+
+def test_concurrent_starts_on_the_same_batch_admit_exactly_one(root):
+    """The active check and registration are one atomic admission decision."""
+    import threading
+
+    name = make_batch(root)
+    release = threading.Event()
+    fake = FakeExecutor(block=release)
+    runs = RunRegistry(executor=fake, deliveries_root_dir=root)
+    barrier = threading.Barrier(8)
+    admitted = []
+    refused = []
+
+    def attempt():
+        barrier.wait()
+        try:
+            admitted.append(runs.start(
+                delivery_id=name, env="测试环境", case_ids=["TC-001"]))
+        except WorkbenchError as exc:
+            refused.append(exc.code)
+
+    callers = [threading.Thread(target=attempt) for _ in range(8)]
+    for caller in callers:
+        caller.start()
+    for caller in callers:
+        caller.join(timeout=5)
+
+    assert len(admitted) == 1
+    assert refused == ["RUN_IN_PROGRESS"] * 7
+    assert len(fake.calls) == 1
+    release.set()
 
 
 def test_an_executor_that_refuses_shows_up_as_an_error_run(root):

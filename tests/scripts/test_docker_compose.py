@@ -73,6 +73,28 @@ def test_compose_files_do_not_consume_legacy_env_names() -> None:
         assert "DEEPTUTOR_DOCKER_BACKEND_PORT" in content
 
 
+def test_journey_bridge_secret_has_fail_closed_runtime_contract() -> None:
+    """The release template and both Compose paths must require one host secret.
+
+    The value stays outside the repository.  Compose must reject an unset or
+    empty value instead of starting a container whose Journey calls all fail at
+    first use.
+    """
+    root = Path(__file__).resolve().parents[2]
+    missing: list[str] = []
+    env_template = (root / ".env.example").read_text(encoding="utf-8")
+    if "\nTEST_JOURNEY_BRIDGE_SECRET=\n" not in f"\n{env_template}":
+        missing.append(".env.example declaration")
+
+    required_interpolation = "TEST_JOURNEY_BRIDGE_SECRET=${TEST_JOURNEY_BRIDGE_SECRET:?"
+    for name in ("compose.yaml", "docker-compose.yml"):
+        content = (root / name).read_text(encoding="utf-8")
+        if required_interpolation not in content:
+            missing.append(f"{name} required runtime injection")
+
+    assert not missing, f"Journey bridge secret contract missing: {', '.join(missing)}"
+
+
 def test_dockerfile_is_json_driven_without_bundle_sed() -> None:
     """The image no longer rewrites the built bundle at startup (the runtime
     ``sed -i`` broke under a read-only rootfs). URL/auth knowledge is JSON-driven:
@@ -89,6 +111,36 @@ def test_dockerfile_is_json_driven_without_bundle_sed() -> None:
     assert "DEEPTUTOR_IGNORE_PROCESS_ENV_OVERRIDES=1" in content
     assert 'unset "$key"' in content
     assert "export_runtime_settings_to_env" in content
+
+
+def test_dockerfile_uses_tls_and_retries_for_debian_packages() -> None:
+    """Every apt stage must survive transient mirror/proxy failures.
+
+    The Debian slim images currently ship ``http://deb.debian.org`` sources.
+    A transient HTTP 502 used to abort the entire candidate-image build before
+    project code was copied, even though an HTTPS update against the same base
+    succeeded. Builder and production stages promote their inherited sources
+    to TLS; development inherits the production source file. All three apt
+    stages apply retries to both metadata and archive downloads.
+    """
+    root = Path(__file__).resolve().parents[2]
+    content = (root / "Dockerfile").read_text(encoding="utf-8")
+
+    assert content.count("sed -i 's|http://deb.debian.org|https://deb.debian.org|g'") == 2
+    assert "http://deb.debian.org/debian" not in content
+    assert content.count("apt-get -o Acquire::Retries=5 update") == 3
+    assert content.count("apt-get -o Acquire::Retries=5 install") == 3
+    assert "curl --retry 5 --retry-all-errors --connect-timeout 30" in content
+    assert "RUSTUP_MAX_RETRIES=5 sh -s -- -y --profile=minimal" in content
+
+
+def test_production_image_records_immutable_source_revision() -> None:
+    """A release tag is mutable; the image itself must expose its source SHA."""
+    root = Path(__file__).resolve().parents[2]
+    content = (root / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "ARG DEEPTUTOR_BUILD_REVISION=unknown" in content
+    assert 'org.opencontainers.image.revision="${DEEPTUTOR_BUILD_REVISION}"' in content
 
 
 def test_supervisord_runs_as_root_with_unprivileged_children() -> None:

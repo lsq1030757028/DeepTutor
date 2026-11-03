@@ -158,6 +158,9 @@ services:
     environment:
       # Time zone — picked up by Python (time.tzset) and Next.js at boot.
       - TZ=${TZ:-UTC}
+      # Required for signed Test Journey calls. No repository default: fail
+      # before container start when deployment secret injection is missing.
+      - TEST_JOURNEY_BRIDGE_SECRET=${TEST_JOURNEY_BRIDGE_SECRET:?TEST_JOURNEY_BRIDGE_SECRET must be set}
       # Local LLM (LM Studio / Ollama / vLLM) base URLs in
       # data/user/settings/model_catalog.json should use
       # `http://host.containers.internal:PORT` (podman) — NOT localhost,

@@ -21,6 +21,11 @@ permissions:
 jobs:
   build-and-push:
     name: Build and Push Multi-Platform Docker Image
+    # [fork] 仓库名精确闸：本工作流已改推本仓 GHCR 命名空间（见下方 images 注释，
+    # 决策 0008 的回滚命令依赖它），发布仍是人工特权动作（release published 才触发）。
+    # 加此闸后，任何再 fork/复制本仓的副本不会误触发推镜像；不新增任何权限。
+    # 同步上游时：保留本行，其余取上游。
+    if: github.repository == 'lsq1030757028/DeepTutor'
     runs-on: ubuntu-latest
 
     steps:

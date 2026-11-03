@@ -122,10 +122,17 @@ class DeferredToolLoader:
         session_id: str,
         loaded: set[str],
         allowed: set[str] | None = None,
+        preloaded: set[str] | None = None,
     ) -> None:
         self._registry = registry
         self._session_id = session_id
         self._loaded = set(loaded)
+        # Tools this turn leads with: in the window from the first call, but
+        # deliberately NOT folded into ``_loaded``. ``_loaded`` is session
+        # state that gets persisted, and a per-turn policy decision must not
+        # leak into it — otherwise turning the policy off would leave the
+        # tools loaded forever for every session that ever saw it.
+        self._preloaded = set(preloaded or ())
         # ``None`` = every deferred tool is loadable; a set restricts the
         # loadable pool (e.g. a partner's configured MCP tool whitelist).
         # Enforced here, not only at manifest time, so the model cannot load
@@ -138,7 +145,7 @@ class DeferredToolLoader:
 
     @property
     def loaded_names(self) -> set[str]:
-        return set(self._loaded)
+        return self._loaded | self._preloaded
 
     def bind_live_schemas(self, schemas: list[dict[str, Any]]) -> None:
         """Attach the turn's live ``tool_schemas`` list (mutated in place)."""
@@ -148,10 +155,13 @@ class DeferredToolLoader:
         """Schemas for tools already loaded in this session (manifest-validated)."""
         schemas: list[dict[str, Any]] = []
         stale: set[str] = set()
-        for name in sorted(self._loaded):
+        for name in sorted(self._loaded | self._preloaded):
             tool = self._registry.get(name)
             if tool is None or not getattr(tool, "deferred", False):
-                stale.add(name)
+                # Only session state can go stale; a preloaded name that no
+                # longer resolves is simply not offered this turn.
+                if name in self._loaded:
+                    stale.add(name)
                 continue
             if not self._is_allowed(name):
                 continue
@@ -171,7 +181,7 @@ class DeferredToolLoader:
             name = str(raw or "").strip()
             if not name:
                 continue
-            if name in self._loaded:
+            if name in self._loaded or name in self._preloaded:
                 already.append(name)
                 continue
             tool = self._registry.get(name)

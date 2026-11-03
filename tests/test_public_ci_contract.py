@@ -1,0 +1,97 @@
+"""Static safety contract for DeepTutor public GitHub-hosted CI."""
+
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+ROOT_WEB = ROOT / ".github" / "workflows" / "tests.yml"
+TEST_PARTNER = ROOT / ".github" / "workflows" / "test-partner.yml"
+CHECKOUT_SHA = "11d5960a326750d5838078e36cf38b85af677262"
+UPLOAD_ARTIFACT_SHA = "ea165f8d65b6e75b540449e92b4886f43607fa02"
+PUBLIC_RUNNER = "runs-on: ubuntu-latest"
+
+
+def _read(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def test_both_required_workflows_use_public_runner_safe_automatic_triggers():
+    for path in (ROOT_WEB, TEST_PARTNER):
+        text = _read(path)
+        trigger = text.split("permissions:", maxsplit=1)[0]
+        assert "pull_request:" in trigger
+        assert "push:" in trigger
+        assert "branches:\n      - main" in trigger
+        assert "workflow_dispatch:" in trigger
+        assert "pull_request_target:" not in trigger
+        assert "permissions:\n  contents: read" in text
+        assert PUBLIC_RUNNER in text
+        assert "self-hosted" not in text.lower()
+        assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
+
+
+def test_public_ci_does_not_read_business_credentials():
+    text = (_read(ROOT_WEB) + "\n" + _read(TEST_PARTNER)).lower()
+    forbidden = (
+        "secrets.",
+        "tapd_token",
+        "tapd_access_token",
+        "openai_api_key",
+        "anthropic_api_key",
+        "coding_token",
+    )
+    for marker in forbidden:
+        assert marker not in text
+
+
+def test_checkout_is_bound_to_the_event_full_sha_and_actions_are_pinned():
+    for path in (ROOT_WEB, TEST_PARTNER):
+        text = _read(path)
+        assert "github.event.pull_request.head.sha" in text
+        assert "github.sha" in text
+        assert "^[0-9a-f]{40}$" in text
+        assert 'test "$(git rev-parse HEAD)" = "$SOURCE_SHA"' in text
+        assert f"actions/checkout@{CHECKOUT_SHA}" in text
+        assert "actions/checkout@v" not in text
+        assert f"actions/upload-artifact@{UPLOAD_ARTIFACT_SHA}" in text
+        assert "actions/upload-artifact@v" not in text
+        assert "persist-credentials: false" in text
+
+
+def test_deeptutor_gate_keeps_the_agreed_regression_surface():
+    # Asserted surface: root pytest, the four web npm scripts, and the two
+    # Test Partner pytest commands. The historical ruff / multi-Python matrix /
+    # windows-latest checks are intentionally NOT asserted here; whether they
+    # rejoin the required gate is a separate pending decision.
+    root_web = _read(ROOT_WEB)
+    partner = _read(TEST_PARTNER)
+
+    assert "python -m pytest -q tests deeptutor/learning/tests" in root_web
+    for command in (
+        "npm run test:node",
+        "npm run i18n:parity",
+        "npm run build",
+        "npm run perf:check",
+    ):
+        assert command in root_web
+
+    assert '-k "not test_ui_track_real_browser"' in partner
+    assert "tests/test_journey_exec.py::test_ui_track_real_browser" in partner
+
+
+def test_required_workflows_have_no_release_or_deployment_side_effects():
+    text = (_read(ROOT_WEB) + "\n" + _read(TEST_PARTNER)).lower()
+    forbidden = (
+        "docker push",
+        "docker login",
+        "docker compose",
+        "kubectl ",
+        "helm ",
+        "rsync ",
+        "scp ",
+        "gh release",
+        "npm publish",
+        "twine upload",
+    )
+    for marker in forbidden:
+        assert marker not in text

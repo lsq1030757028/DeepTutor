@@ -45,15 +45,17 @@ collection 里的断言已经被编译成 pm.test 的 JS 文本，反解等于�
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import logging
 import os
 import re
+import tempfile
 import threading
 import time
-from typing import Any
+from typing import Any, Iterator
 
-from server import delivery, execute
+from server import case_validate, delivery, execute
 
 log = logging.getLogger("test-partner.gateway")
 
@@ -213,6 +215,37 @@ def _as_text_list(value: Any) -> list[str]:
     return []
 
 
+def required_vars(request: Any) -> list[str]:
+    """一条用例要用到的变量名（去重保序）。`baseUrl` 不算——它来自环境的地址栏，
+    不是变量表里的一项，混进去会让用户以为自己还差配一个变量。
+
+    复用 `execute.missing_vars` 而不是另写一个正则：那个函数是执行层判"变量缺失
+    不发请求"的同一个实现，两处若各写各的，界面说"齐了"而执行说"缺"就成了必然。
+    传空 mapping 即得到"全部被引用的变量"。
+    """
+    if not isinstance(request, dict):
+        return []
+    texts = [str(request.get("url") or "")]
+    headers = request.get("headers")
+    if isinstance(headers, (list, tuple)):
+        for h in headers:
+            if isinstance(h, dict):
+                texts.append(str(h.get("value", "")))
+            elif isinstance(h, str):
+                texts.append(h)
+    body = request.get("body")
+    if isinstance(body, dict) and body.get("raw") is not None:
+        raw = body["raw"]
+        texts.append(raw if isinstance(raw, str)
+                     else json.dumps(raw, ensure_ascii=False))
+    out: list[str] = []
+    for text in texts:
+        for name in execute.missing_vars(text, {}):
+            if name != execute.BASE_URL_VAR and name not in out:
+                out.append(name)
+    return out
+
+
 def _case_row(case: Any, index: int) -> dict[str, Any]:
     """一条用例 → 表格行 + 展开详情。**请求块原样带出，`{{变量}}` 不解析。**
 
@@ -238,6 +271,12 @@ def _case_row(case: Any, index: int) -> dict[str, Any]:
         "request": request if isinstance(request, dict) else None,
         "executable": isinstance(request, dict) and _assertion_count(request) > 0,
         "assertion_count": _assertion_count(request),
+        # 这条用例引用了哪些变量。**页面拿它与所选环境的键名做差集**算"还缺哪些"——
+        # 差集在前端算，切换环境下拉框就能立刻更新，不必回后端再问一次。
+        "required_vars": required_vars(request),
+        # 这条是模型写的还是人改过的（0012 ADR-2 的留痕）。缺字段的旧批次按 ai 处理：
+        # 它们成文时还没有编辑功能，不可能是人改的。
+        "origin": str(case.get("origin") or "ai"),
         "broken": False,
     }
 
@@ -342,6 +381,283 @@ def load_cases_for_execution(delivery_id: str, root: str | None = None) -> tuple
     return dir_path, list(rows), _login_request_of(payload)
 
 
+# ── 变量反查：这个变量被谁用着（闭环稿 B2 屏） ──────────────────────────────
+
+def variable_usage(root: str | None = None) -> dict[str, Any]:
+    """扫全部批次 →「变量名 → 哪些批次的哪几条用例在用它」。
+
+    为什么要有它：变量在配置页是个孤立的键值对，用户问的是"我配这个有什么用"。
+    没有这张反查表，答案只能靠人去每个批次里翻。
+
+    实现上就是把每个批次的 `required_vars` 汇总反转。全表扫描——批次是几十个量级，
+    每个 cases.json 几十 KB，一次扫描远快于为它建索引再维护索引一致性。
+    真到了慢的那天，缓存的键是 deliveries 目录的 mtime，不是现在该做的事。
+    """
+    base = deliveries_root(root)
+    usage: dict[str, dict[str, Any]] = {}
+    if not os.path.isdir(base):
+        return {"ok": True, "usage": {}}
+    for name in sorted(os.listdir(base)):
+        dir_path = os.path.join(base, name)
+        if not os.path.isdir(dir_path):
+            continue
+        payload = _read_json(os.path.join(dir_path, delivery.CASES_FILE))
+        rows = payload.get("cases") if isinstance(payload, dict) else payload
+        if not isinstance(rows, (list, tuple)):
+            continue
+        title = str((payload or {}).get("title") or name) if isinstance(payload, dict) else name
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            case_id = str(row.get("case_id") or "")
+            for var in required_vars(row.get("request")):
+                slot = usage.setdefault(var, {"delivery_count": 0, "case_count": 0,
+                                              "deliveries": []})
+                entry = next((d for d in slot["deliveries"] if d["id"] == name), None)
+                if entry is None:
+                    entry = {"id": name, "title": title, "case_ids": []}
+                    slot["deliveries"].append(entry)
+                    slot["delivery_count"] += 1
+                if case_id and case_id not in entry["case_ids"]:
+                    entry["case_ids"].append(case_id)
+                    slot["case_count"] += 1
+    return {"ok": True, "usage": usage}
+
+
+# ── 用例编辑（闭环稿 D 屏 · 0012 ADR-2） ────────────────────────────────────
+
+#: 允许被编辑的顶层字段。**白名单而不是黑名单**：漏掉一个该禁的字段，
+#: 后果是让调用方改到 case_id 这种身份字段，比漏掉一个该放的严重得多。
+EDITABLE_FIELDS = ("title", "module", "priority", "case_type", "preconditions",
+                   "steps", "expected", "test_data", "endpoints", "request")
+_CASE_UPDATE_THREAD_LOCK = threading.Lock()
+
+
+@contextmanager
+def _case_update_lock(cases_path: str) -> Iterator[None]:
+    """Lock the complete read/validate/write mutation across threads/processes."""
+    lock_path = cases_path + ".lock"
+    with _CASE_UPDATE_THREAD_LOCK:
+        with open(lock_path, "a+b") as lock_file:
+            lock_file.seek(0, os.SEEK_END)
+            if lock_file.tell() == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _write_cases_atomic(cases_path: str, payload: Any) -> None:
+    fd, tmp = tempfile.mkstemp(
+        prefix=f".{os.path.basename(cases_path)}.", suffix=".tmp",
+        dir=os.path.dirname(cases_path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, cases_path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+
+
+def _update_case_locked(safe_id: str, cases_path: str, case_id: str,
+                        patch: dict[str, Any]) -> dict[str, Any]:
+    payload = _read_json(cases_path)
+    rows = payload.get("cases") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        raise WorkbenchError(f"{delivery.CASES_FILE} 读不出用例数组。",
+                             code="CASES_JSON_BROKEN")
+
+    wanted = str(case_id or "").strip()
+    index = next((i for i, r in enumerate(rows)
+                  if isinstance(r, dict) and str(r.get("case_id") or "") == wanted), -1)
+    if index < 0:
+        raise WorkbenchError(f"批次里没有编号「{wanted}」的用例。", code="CASE_NOT_FOUND")
+
+    updated = dict(rows[index])
+    updated.update(patch)
+    updated["origin"] = "human"
+    verdict = case_validate.validate_cases([updated])
+    errors = [e for e in (verdict.get("errors") or [])]
+    if errors:
+        raise WorkbenchError(
+            "改完之后这条用例不合格，没有保存："
+            + "；".join(str(e.get("message") or e) for e in errors[:3]),
+            code="CASE_INVALID")
+
+    rows[index] = updated
+    if isinstance(payload, dict):
+        payload["cases"] = rows
+        payload["last_edited_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        payload = rows
+    try:
+        _write_cases_atomic(cases_path, payload)
+    except OSError as exc:
+        raise WorkbenchError(
+            f"改动没能写进批次目录：{type(exc).__name__}: {exc}。"
+            "常见原因是该批次目录不是当前服务进程建的（属主不同），"
+            "用例本身没有被改动。", code="CASES_WRITE_FAILED") from exc
+
+    log.info("workbench: 批次 %s 的用例 %s 已被人工修改（%d 个字段）",
+             safe_id, wanted, len(patch))
+    return {"ok": True, "case": _case_row(updated, index),
+            "warnings": [str(w.get("message") or w)
+                         for w in (verdict.get("warnings") or [])[:5]]}
+
+
+def update_case(delivery_id: str, case_id: str, patch: Any,
+                root: str | None = None) -> dict[str, Any]:
+    """就地改一条已采纳用例，并标记为人工修改。
+
+    **改完立刻按 `validate_cases` 复校，不合法直接拒、不落盘**——
+    这是 0010 硬约束二的延伸：那道闸管"不合格的别进库"，
+    没有理由允许合格的东西被改成不合格之后留在库里。
+
+    只改 `cases.json`（执行与页面都读它）。导出产物不同步重写：
+    它们是某一次导出动作的快照，改了用例就重新导出一次即可——
+    偷偷改掉用户已经拿去评审的那份 xlsx 更糟。
+    """
+    safe_id = safe_delivery_id(delivery_id)
+    dir_path = os.path.join(deliveries_root(root), safe_id)
+    cases_path = os.path.join(dir_path, delivery.CASES_FILE)
+    if not os.path.isfile(cases_path):
+        raise WorkbenchError("这个批次没有结构化用例数据，改不了。", code="NO_CASES_JSON")
+    if not isinstance(patch, dict) or not patch:
+        raise WorkbenchError("没给出要改的内容。", code="EMPTY_PATCH")
+
+    rejected = sorted(set(patch) - set(EDITABLE_FIELDS))
+    if rejected:
+        raise WorkbenchError(
+            f"这些字段不允许编辑：{'、'.join(rejected)}。"
+            f"可改的是：{'、'.join(EDITABLE_FIELDS)}。", code="FIELD_NOT_EDITABLE")
+
+    with _case_update_lock(cases_path):
+        return _update_case_locked(safe_id, cases_path, case_id, patch)
+
+
+# ── 导出（设计稿第 7 屏） ───────────────────────────────────────────────────
+
+#: 页面上四张导出卡对应的单格式名（`delivery.FORMATS` 里的组合值不在此列：
+#: 页面是多选卡片，组合由本函数自己拼）
+EXPORT_FORMATS = ("xlsx", "csv", "markdown", "postman")
+
+
+def export_delivery(delivery_id: str, formats: Any,
+                    root: str | None = None,
+                    redact_pii: bool = True) -> dict[str, Any]:
+    """把批次的结构化用例（重新）写成所选格式，落在**批次目录内**。
+
+    与 `save_delivery` 的分工：那边是"采纳时建批次"（新目录 + 收据），
+    这边是"对既有批次补产物"——同名文件直接覆盖，重导出即刷新。
+    不写收据也不动 `cases.json`：收据记录的是采纳那一笔，导出只是投影。
+
+    产物内容来自 `cases.json` 原文（与执行同一份），标题与来源指纹也取自它——
+    导出的 markdown/collection 里写的指纹必须和采纳时一致，换了就不是同一批用例。
+    """
+    safe_id = safe_delivery_id(delivery_id)
+    dir_path, cases, _ = load_cases_for_execution(safe_id, root)
+
+    wanted: list[str] = []
+    for raw in (formats if isinstance(formats, (list, tuple)) else [formats]):
+        try:
+            normalized = delivery.normalize_format(raw)
+        except delivery.DeliveryError as exc:
+            raise WorkbenchError(str(exc.message), code="FORMAT_UNSUPPORTED") from exc
+        for one in normalized.split("+"):
+            if one not in wanted:
+                wanted.append(one)
+    if not wanted:
+        raise WorkbenchError("一种导出格式都没选。", code="NO_FORMAT_SELECTED")
+
+    meta = _read_json(os.path.join(dir_path, delivery.CASES_FILE))
+    meta = meta if isinstance(meta, dict) else {}
+    title = str(meta.get("title") or describe_delivery(dir_path)["title"])
+    source_fingerprint = str(meta.get("source_fingerprint") or "")
+
+    # 与 save_delivery 同一条纪律：导出产物脱敏，cases.json 原样不动（BB-424）。
+    # 这里的输入就是 cases.json 的原文，所以脱敏只影响本次写出的产物。
+    export_cases, pii_hits = (delivery.scrub_cases_for_export(cases) if redact_pii
+                              else (list(cases), {}))
+    rows, index = delivery.to_rows(export_cases)
+    if not rows:
+        raise WorkbenchError("这批用例没有一条能落成表格行，无可导出内容。",
+                             code="CASES_ALL_INVALID")
+
+    generated_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    slug = delivery.slugify(title)
+    filenames = {"xlsx": "cases.xlsx", "csv": "cases.csv", "markdown": "cases.md",
+                 "postman": f"{slug}.postman_collection.json"}
+    files: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for one in wanted:
+        product = os.path.join(dir_path, filenames[one])
+        if one == "xlsx":
+            delivery._write_xlsx(product, rows)
+        elif one == "csv":
+            delivery._write_csv(product, rows)
+        elif one == "markdown":
+            delivery._write_markdown(product, rows, index, title, generated_at,
+                                     source_fingerprint)
+        else:
+            stats = delivery._write_postman(product, export_cases, title,
+                                            source_fingerprint)
+            if stats.get("placeholder_count"):
+                warnings.append(
+                    f"{stats['placeholder_count']}/{stats['item_count']} "
+                    "条用例没有 request 块，collection 里是占位 item")
+            if stats.get("items_without_test"):
+                warnings.append(
+                    f"{stats['items_without_test']} 条用例没有可执行断言，"
+                    "导入后跑完无从判定成败")
+        files.append({"name": filenames[one], "path": os.path.abspath(product),
+                      "bytes": os.path.getsize(product)})
+
+    log.info("workbench: 批次 %s 导出 %s（%d 条用例，脱敏 %s）",
+             safe_id, "+".join(wanted), len(rows), "开" if redact_pii else "关")
+    return {"ok": True, "format": "+".join(wanted), "case_count": len(rows),
+            "files": files, "warnings": warnings,
+            # 命中数一路回传到界面：静默替换会让用户以为产物里还是原值
+            "pii_redaction": {"applied": bool(redact_pii), "hits": pii_hits}}
+
+
+def delivery_file_path(delivery_id: str, filename: str,
+                       root: str | None = None) -> str:
+    """批次目录内某个产物的绝对路径（给下载端点用）。
+
+    文件名走与批次 id 同一套白名单校验：只能是目录下的一级文件名，
+    带路径分隔符或上跳的直接拒——这是下载端点，路径穿越在这里就是任意文件读。
+    """
+    safe_id = safe_delivery_id(delivery_id)
+    name = str(filename or "").strip()
+    if not name or _UNSAFE_ID_RE.search(name) or os.path.isabs(name):
+        raise WorkbenchError(f"文件名「{name}」不合法。", code="BAD_FILENAME")
+    full = os.path.join(deliveries_root(root), safe_id, name)
+    if not os.path.isfile(full):
+        raise WorkbenchError(f"批次「{safe_id}」里没有文件「{name}」。",
+                             code="FILE_NOT_FOUND")
+    return os.path.abspath(full)
+
+
 # ── 执行（后台线程 + 轮询） ─────────────────────────────────────────────────
 
 class RunRegistry:
@@ -356,9 +672,19 @@ class RunRegistry:
     要看历史就去看报告。
     """
 
-    def __init__(self, executor: Any = None, deliveries_root_dir: str | None = None):
-        #: 注入点：测试用假执行器，不发任何真实请求
-        self._executor = executor if executor is not None else execute.execute_cases
+    def __init__(self, executor: Any, deliveries_root_dir: str | None = None):
+        #: 注入点：测试用假执行器不发真实请求；宿主线传的是已绑好**当前用户金库**的
+        #: `partial(execute_cases, env_store=...)`。
+        #:
+        #: **executor 必填，没有默认值。** 曾经默认取裸的 `execute.execute_cases`，
+        #: 那条路径不带 env_store，执行时会回落到进程级全局配置根——在多用户形态下
+        #: 就是 A 的执行读了全机共用的凭据表。所有调用点本来就都显式传了，
+        #: 这个默认值只是个等人踩的坑，去掉它零成本。
+        if executor is None:
+            raise ValueError(
+                "RunRegistry 需要显式的 executor：宿主线必须传绑好当前用户金库的执行器，"
+                "否则环境解析会回落到全局配置根（决策 0009 的隔离就是假的）。")
+        self._executor = executor
         self._root = deliveries_root_dir
         self._runs: dict[str, dict[str, Any]] = {}
         self._order: list[str] = []
@@ -416,13 +742,18 @@ class RunRegistry:
                 "一并存进批次），或者改选「跟随环境」并在环境里配好 token 变量。",
                 code="NO_LOGIN_REQUEST")
 
-        busy = self.active_run_for(safe_id)
-        if busy:
-            raise WorkbenchError(
-                f"这个批次上还有一轮执行没跑完（{busy['done']}/{busy['total']}）。"
-                "等它结束再点。", code="RUN_IN_PROGRESS")
-
         with self._lock:
+            # Check and register under the same lock.  The former
+            # active_run_for() -> start() sequence left a TOCTOU window where
+            # two concurrent POSTs could both pass the check, fire duplicate
+            # requests, and overwrite the same execution_report files.
+            busy = next((self._runs[run_id] for run_id in reversed(self._order)
+                         if self._runs[run_id]["delivery_id"] == safe_id
+                         and self._runs[run_id]["state"] == "running"), None)
+            if busy:
+                raise WorkbenchError(
+                    f"这个批次上还有一轮执行没跑完（{busy['done']}/{busy['total']}）。"
+                    "等它结束再点。", code="RUN_IN_PROGRESS")
             self._seq += 1
             run_id = f"run-{int(time.time())}-{self._seq}"
             run: dict[str, Any] = {
@@ -483,7 +814,11 @@ class RunRegistry:
             result = self._executor(
                 cases, case_ids=case_ids, env=env, timeout_s=timeout_s,
                 delivery_dir=delivery_dir, title=title, progress=progress,
-                auth=auth, login_request=login_request)
+                auth=auth, login_request=login_request,
+                # 报告合法根 = 本台账扫批次用的同一个根。不传的话执行层按
+                # MCP 线的模块常量判定，用户 scope 下的批次目录会被误拒
+                # （报告落不进批次，实测踩过）。
+                deliveries_root=deliveries_root(self._root))
         except Exception as exc:  # noqa: BLE001 - 后台线程里的异常必须收进 run
             self._update(run_id, state="error",
                          error=f"{type(exc).__name__}: {exc}",

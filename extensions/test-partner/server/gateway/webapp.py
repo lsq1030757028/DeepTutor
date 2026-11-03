@@ -111,6 +111,7 @@ import json
 import logging
 import re
 import secrets as secrets_module
+from functools import partial
 from typing import Any
 
 from starlette.applications import Starlette
@@ -121,6 +122,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
+from server import execute
 from server.gateway.config import (EnvironmentConfigError, GatewayConfig,
                                    default_config, normalize_variables)
 from server.gateway.deeptutor_client import DeepTutorClient, DeepTutorError
@@ -195,7 +197,15 @@ class GatewayApp:
         #: 工作台看的批次根目录（测试指到临时目录，真身是 <repo>/deliveries）
         self.deliveries_dir = deliveries_dir
         #: 执行台账。`executor` 是注入点：测试塞假执行器，一个真实请求都不发。
-        self.runs = RunRegistry(executor=executor, deliveries_root_dir=deliveries_dir)
+        #:
+        #: 不传时**在这里显式绑定本机配置中心**，而不是让 RunRegistry 去兜底：
+        #: 单页是单机形态（一台机器一个人），用全局根是它的正确语义；
+        #: 但"正确"要写在这一层说出来。RunRegistry 自己不再有默认执行器——
+        #: 宿主线是多用户的，那里兜底就等于所有人共用一张凭据表（决策 0009）。
+        self.runs = RunRegistry(
+            executor=(executor if executor is not None
+                      else partial(execute.execute_cases, env_store=self.config)),
+            deliveries_root_dir=deliveries_dir)
 
     # ── 状态组装 ────────────────────────────────────────────────────────────
 
@@ -576,6 +586,8 @@ async def _read_json(request: Request) -> dict[str, Any]:
 def create_app(**kwargs: Any) -> Starlette:
     """造配置页的 ASGI 应用。kwargs 透传给 `GatewayApp`。"""
     gateway = GatewayApp(**kwargs)
+    from server.gateway.journey_console import JourneyConsole
+    _journey = JourneyConsole()
 
     routes = [
         Route("/", gateway.index, methods=["GET"]),
@@ -597,6 +609,13 @@ def create_app(**kwargs: Any) -> Starlette:
         Route("/api/deliveries/{delivery_id}/execute", gateway.api_delivery_execute,
               methods=["POST"]),
         Route("/api/runs/{run_id}", gateway.api_run, methods=["GET"]),
+        # M1 批次工作台（journey 线）：批次是唯一状态对象，本组是其工作台投影。
+        # 挂 gateway（extensions 侧，0 上游触点）；(workspace) 批次页以此为数据后端。
+        Route("/journey", _journey.page, methods=["GET"]),
+        Route("/api/journey/batches", _journey.api_batches, methods=["GET"]),
+        Route("/api/journey/batches/{batch_id}", _journey.api_batch, methods=["GET"]),
+        Route("/api/journey/runs/{run_id}/trace-open", _journey.api_trace_open,
+              methods=["POST"]),
     ]
 
     async def guard(request: Request, call_next):  # type: ignore[no-untyped-def]

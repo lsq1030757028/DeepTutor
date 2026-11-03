@@ -21,6 +21,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   PenLine,
+  Route,
   Settings,
   type LucideIcon,
 } from "lucide-react";
@@ -118,6 +119,20 @@ const SECONDARY_NAV: NavEntry[] = [
     label: "Test Workbench",
     icon: ClipboardCheck,
     tooltipKey: "Test Workbench tooltip",
+  },
+  {
+    // [fork] 二开扩展 · 旅程线。与上一条并列而不是合并（决策 0017 O1）：
+    // Test Workbench 管的是「交付件」（一批用例导出去给人用），
+    // Test Journey 管的是「一条需求从接入到收口的过程」——两者的状态对象不同，
+    // 合成一个入口会让"我要看哪一批用例"和"这条需求测到哪了"互相盖住。
+    //
+    // 机制约束：SECONDARY_NAV 是模块级常量、(workspace) 与 (utility) 两组侧栏共用
+    // （消费方 WorkspaceSidebar.tsx / UtilitySidebar.tsx），**不存在"只给一组加一项"
+    // 的写法**。所以两个入口的文案必须能区分——这也是上面那段注释存在的原因。
+    href: "/test-journey",
+    label: "Test Journey",
+    icon: Route,
+    tooltipKey: "Test Journey tooltip",
   },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

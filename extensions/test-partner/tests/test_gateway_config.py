@@ -11,10 +11,13 @@ import json
 import os
 
 import pytest
-
 from server.gateway import config as cfgmod
-from server.gateway.config import (EnvironmentConfigError, GatewayConfig,
-                                   mask_secret, normalize_variables)
+from server.gateway.config import (
+    EnvironmentConfigError,
+    GatewayConfig,
+    mask_secret,
+    normalize_variables,
+)
 
 TOKEN = "tapd-pat-9f8e7d6c5b4a39281706abcdef012345"
 ENV_TOKEN = "eyJhbGciOiJIUzI1NiJ9.env-secret-value-987654321"
@@ -192,6 +195,16 @@ def test_public_state_reports_configured_and_length(cfg):
 def test_public_state_lists_every_allowed_secret(cfg):
     keys = set(cfg.public_state()["secrets"])
     assert keys == set(cfgmod.ALLOWED_SECRETS)
+
+
+def test_bridge_secret_is_whitelisted_but_public_state_reports_presence_only(cfg):
+    secret = "test-only-bridge-secret-" + "x" * 32
+    cfg.set_secret("TEST_JOURNEY_BRIDGE_SECRET", secret)
+
+    entry = cfg.public_state()["secrets"]["TEST_JOURNEY_BRIDGE_SECRET"]
+
+    assert entry == {"configured": True}
+    assert secret not in json.dumps(cfg.public_state(), ensure_ascii=False)
 
 
 # ── 测试环境：增删改查 ──────────────────────────────────────────────────────

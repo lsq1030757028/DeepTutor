@@ -26,6 +26,8 @@ from __future__ import annotations
 
 from contextlib import suppress
 from dataclasses import dataclass, field
+import hashlib
+import json
 import logging
 import re
 from typing import TYPE_CHECKING, Any
@@ -33,10 +35,17 @@ from typing import TYPE_CHECKING, Any
 from deeptutor.agents._shared.capability_result import emit_capability_result
 from deeptutor.agents.chat.context_budget import LLMRequestSnapshot
 from deeptutor.agents.chat.dsml_tool_calls import extract_dsml_tool_calls, has_dsml_tool_calls
+from deeptutor.agents.chat.text_tool_calls import (
+    extract_text_tool_calls,
+    has_text_tool_call_markup,
+)
 from deeptutor.core.agentic.messages import assistant_message_with_tool_calls
 from deeptutor.core.agentic.tool_dispatch import DispatchOutcome
 from deeptutor.core.agentic.usage import message_content_chars, record_streamed_usage
 from deeptutor.core.context import UnifiedContext
+from deeptutor.core.observability.diagnostics import Elapsed, diag
+from deeptutor.core.observability.stop_reason import classify_exception, stop_completed
+from deeptutor.core.observability.trace_sidecar import record_header_async, unavailable_ref
 from deeptutor.core.stream_bus import StreamBus
 from deeptutor.core.trace import build_trace_metadata, merge_trace_metadata, new_call_id
 from deeptutor.services.llm import clean_thinking_tags
@@ -142,10 +151,18 @@ class LoopOutcome:
     terminator tool's content). ``completed`` is False only when the turn
     halted on an unresolved ``ask_user`` pause — the pending question is then
     the turn's final artefact.
+
+    ``last_step`` names the loop-level outcome of the step that ended the turn
+    (``pause`` / ``terminator`` / ``forced_budget`` / ``forced_error``). Those
+    four are decided *after* the LLM call they follow has already reported
+    ``call_status/complete``, so they cannot be carried on that event without
+    delaying it past the round's tool dispatch; they ride the turn's ``stop``
+    envelope instead. A plain finish leaves this ``None``.
     """
 
     final_text: str = ""
     completed: bool = False
+    last_step: dict[str, Any] | None = None
 
 
 class AgentLoop:
@@ -168,6 +185,21 @@ class AgentLoop:
         self.enabled_tools = enabled_tools
         self.tool_schemas = tool_schemas
         self._last_request: LLMRequestSnapshot | None = None
+        # Turn/step double numbering. One user turn is one AgentLoop, so the
+        # turn index is read off the history this turn was built from (the
+        # count of user messages already in the conversation) and every LLM
+        # call inside the loop takes the next step index.
+        self._turn_index = _count_user_turns(context)
+        self._step_index = 0
+        # Provider-compat retries spent inside this turn (stream_options /
+        # tool-schema / image fallbacks). Reported on the turn's ``stop`` so a
+        # failure that took three attempts does not read like a first-try one.
+        self._provider_retries = 0
+        # Prompt-block breakdown, measured once. The system prompt is
+        # byte-stable for the whole turn by design (``prompt_blocks``), so
+        # re-tokenising it every round would burn CPU to produce the same
+        # numbers.
+        self._prompt_segments_cache: list[dict[str, Any]] | None = None
 
     async def run(self) -> None:
         state = AgentLoopState()
@@ -178,6 +210,11 @@ class AgentLoop:
             self.context, self.stream
         )
         async with self.stream.stage(LOOP_STAGE, source="chat"):
+            # First row of this turn's trace: what the capability-assembly step
+            # managed to put on the table, before the model gets a say. Without
+            # it, "the model did not call the tool" and "the tool was never
+            # offered" look identical after the fact.
+            await self.pipeline.emit_channel_health(self.stream, stage=LOOP_STAGE)
             seed_block = await self.pipeline._retrieve_kb_seed_block(self.context, self.stream)
             capability_seed = self.pipeline._capability_pre_loop_seed(self.context)
             seed_block = "\n\n".join(
@@ -214,6 +251,14 @@ class AgentLoop:
             "engine": "agent_loop",
             "rounds": state.rounds,
             "tool_steps": state.tool_steps,
+            # Reaching here means the loop ended on its own terms, which is the
+            # ``completed`` row ``turns.status`` will carry. The cancelled and
+            # failed terminal states never get this far — they are stamped on
+            # the turn-terminal error event in ``turn_runtime``.
+            "stop": stop_completed(
+                retries=self._provider_retries or None,
+                step_outcome=outcome.last_step,
+            ),
         }
         if self._last_request is not None:
             budget = self.pipeline.measure_context_budget(self._last_request)
@@ -256,6 +301,7 @@ class AgentLoop:
                     trace_role="explore",
                     max_tokens=self.pipeline.loop_max_tokens,
                     tool_schemas=self.tool_schemas,
+                    can_nudge=not nudged_empty_finish,
                 )
             except Exception as exc:
                 # A mid-loop LLM failure (timeout / transient network) must not
@@ -334,7 +380,11 @@ class AgentLoop:
                 if not resumed:
                     # The pending question is already the turn's final
                     # artefact (or the user abandoned the turn) — stop.
-                    return LoopOutcome(final_text="", completed=False)
+                    return LoopOutcome(
+                        final_text="",
+                        completed=False,
+                        last_step=self._last_step("pause"),
+                    )
                 # The user's answers were substituted into the matching
                 # ``role=tool`` message; the next round sees them in-protocol.
                 continue
@@ -351,6 +401,7 @@ class AgentLoop:
                 return LoopOutcome(
                     final_text=str(payload.get("content") or ""),
                     completed=True,
+                    last_step=self._last_step("terminator"),
                 )
 
         # Round budget ran out while still requesting tools — force a finish.
@@ -400,6 +451,7 @@ class AgentLoop:
             metadata={"trace_kind": "warning"},
         )
         messages.append({"role": "user", "content": self.pipeline._finish_exhausted_instruction()})
+        outcome_kind = "forced_error" if reason == "error" else "forced_budget"
         try:
             result = await self._call_llm(
                 messages=messages,
@@ -408,17 +460,39 @@ class AgentLoop:
                 trace_role="response",
                 max_tokens=self.pipeline.loop_max_tokens,
                 tool_schemas=None,  # tools disabled so the model must finish
+                outcome_hint=outcome_kind,
+                outcome_detail=reason,
             )
         except Exception as exc:
             # The salvage call itself failed (e.g. the provider is still
             # stalling). Don't bubble up and lose the turn — emit the graceful
             # fallback answer instead.
             logger.warning("forced-finish LLM call failed: %s", exc)
-            return await self._finalize_finish("")
+            return await self._finalize_finish(
+                "", last_step=self._last_step(outcome_kind, detail=reason)
+            )
         state.rounds += 1
-        return await self._finalize_finish(result.text)
+        return await self._finalize_finish(
+            result.text, last_step=self._last_step(outcome_kind, detail=reason)
+        )
 
-    async def _finalize_finish(self, raw_text: str) -> LoopOutcome:
+    def _last_step(self, kind: str, *, detail: str = "") -> dict[str, Any]:
+        """Loop-level outcome of the step that is ending the turn."""
+        step: dict[str, Any] = {
+            "kind": kind,
+            "turn_index": self._turn_index,
+            "step_index": max(0, self._step_index - 1),
+        }
+        if detail:
+            step["detail"] = detail
+        return step
+
+    async def _finalize_finish(
+        self,
+        raw_text: str,
+        *,
+        last_step: dict[str, Any] | None = None,
+    ) -> LoopOutcome:
         final_text = self._clean(raw_text)
         if not final_text:
             # The finish round produced no usable text; nothing streamed to
@@ -431,7 +505,7 @@ class AgentLoop:
                 ),
             )
             await self.pipeline._emit_protocol_fallback_final_response(self.stream, final_text)
-        return LoopOutcome(final_text=final_text, completed=True)
+        return LoopOutcome(final_text=final_text, completed=True, last_step=last_step)
 
     # ---- LLM call ----------------------------------------------------------
 
@@ -444,9 +518,14 @@ class AgentLoop:
         trace_role: str,
         max_tokens: int,
         tool_schemas: list[dict[str, Any]] | None = None,
+        can_nudge: bool = False,
+        outcome_hint: str | None = None,
+        outcome_detail: str = "",
     ) -> LLMCallResult:
         await self.pipeline._guard_context_window(messages, self.stream)
         stage = LOOP_STAGE
+        step_index = self._step_index
+        self._step_index += 1
         call_id = new_call_id(f"chat-{stage}")
         trace_meta = build_trace_metadata(
             call_id=call_id,
@@ -463,7 +542,12 @@ class AgentLoop:
             stage=stage,
             metadata=merge_trace_metadata(
                 trace_meta,
-                {"trace_kind": "call_status", "call_state": "running"},
+                {
+                    "trace_kind": "call_status",
+                    "call_state": "running",
+                    "turn_index": self._turn_index,
+                    "step_index": step_index,
+                },
             ),
         )
 
@@ -493,6 +577,24 @@ class AgentLoop:
             carried = self._last_request.tool_schemas
         self._last_request = LLMRequestSnapshot(messages=list(messages), tool_schemas=carried)
 
+        # What this call was given, recorded before it is made. The bodies go
+        # to the session sidecar (off the business database, out of the
+        # model's reach); the event carries only the reference.
+        header_ref = await self._record_header(
+            kwargs=kwargs,
+            messages=messages,
+            tool_schemas=tool_schemas,
+            step_index=step_index,
+        )
+        await self._emit_model_input(
+            trace_meta=trace_meta,
+            stage=stage,
+            step_index=step_index,
+            messages=messages,
+            tool_schemas=tool_schemas,
+            header_ref=header_ref,
+        )
+
         # Providers (esp. Gemini OpenAI-compat) may attach ``usage`` to more
         # than one stream chunk. Keep the latest frame; it is recorded once
         # after the stream via ``record_streamed_usage``.
@@ -520,7 +622,30 @@ class AgentLoop:
                         segment, source="chat", stage=stage, metadata=chunk_meta
                     )
 
-        response_stream = await self._create_response_stream(kwargs, trace_meta, stage)
+        diag(
+            "llm.call.start",
+            call_id=call_id,
+            turn_index=self._turn_index,
+            step_index=step_index,
+            call_kind=call_kind,
+            model=self.pipeline.model,
+            tools_offered=len(tool_schemas or []),
+            messages=len(messages),
+            header_mode=header_ref.get("mode"),
+        )
+        clock = Elapsed()
+        try:
+            response_stream = await self._create_response_stream(kwargs, trace_meta, stage)
+        except Exception as exc:
+            diag(
+                "llm.call.error",
+                call_id=call_id,
+                turn_index=self._turn_index,
+                step_index=step_index,
+                elapsed_ms=clock.ms,
+                stop=classify_exception(exc, retries=self._provider_retries),
+            )
+            raise
         try:
             async for chunk in response_stream:
                 usage = getattr(chunk, "usage", None)
@@ -556,7 +681,10 @@ class AgentLoop:
                     # whether to render it as narration or as the answer.
                     # Inline <think> segments are split off to the thinking
                     # channel so the content stream stays user-facing.
-                    if not dsml_stream_active and has_dsml_tool_calls("".join(text_parts)):
+                    if not dsml_stream_active and (
+                        has_dsml_tool_calls("".join(text_parts))
+                        or has_text_tool_call_markup("".join(text_parts))
+                    ):
                         dsml_stream_active = True
                     segments = think_filter.feed(content)
                     if dsml_stream_active:
@@ -618,7 +746,23 @@ class AgentLoop:
             if dsml_calls:
                 tool_calls = dsml_calls
                 text = cleaned_text
+        # Same shape for the text-protocol ``<tool_call>`` block a text-only
+        # relay asks the model to write (BB-717): parsed into tool calls when
+        # well-formed or mechanically repairable; otherwise stripped, so raw
+        # protocol JSON never becomes the answer and an empty round gets the
+        # loop's normal nudge instead.
+        if not tool_calls and has_text_tool_call_markup(text):
+            text_calls, cleaned_text = extract_text_tool_calls(text)
+            tool_calls = text_calls
+            text = cleaned_text
 
+        step_outcome = self._step_outcome(
+            tool_calls=tool_calls,
+            text=text,
+            can_nudge=can_nudge,
+            outcome_hint=outcome_hint,
+            outcome_detail=outcome_detail,
+        )
         await self.stream.progress(
             "",
             source="chat",
@@ -631,10 +775,168 @@ class AgentLoop:
                     # A round with tool calls is narration; a tool-less round
                     # is the finish whose text is the user-facing answer.
                     "call_role": "narration" if tool_calls else "finish",
+                    "turn_index": self._turn_index,
+                    "step_index": step_index,
+                    # Verbatim from the provider — ``stop`` / ``tool_calls`` /
+                    # ``length`` / ``content_filter`` / "" — deliberately not
+                    # normalised: "the provider sent nothing" is itself a lead.
+                    "finish_reason": finish_reason,
+                    "step_outcome": step_outcome,
+                    "tool_calls_requested": [call["name"] for call in tool_calls],
+                    "tools_offered": len(tool_schemas or []),
+                    "header_ref": header_ref,
                 },
             ),
         )
+        diag(
+            "llm.call.end",
+            call_id=call_id,
+            turn_index=self._turn_index,
+            step_index=step_index,
+            elapsed_ms=clock.ms,
+            finish_reason=finish_reason,
+            step_outcome=step_outcome.get("kind"),
+            tool_calls_requested=[call["name"] for call in tool_calls],
+            text_chars=len(text),
+            output_chars=output_chars,
+            retries=self._provider_retries or None,
+        )
         return LLMCallResult(text=text, tool_calls=tool_calls, finish_reason=finish_reason)
+
+    # ---- what the model was given -----------------------------------------
+
+    async def _record_header(
+        self,
+        *,
+        kwargs: dict[str, Any],
+        messages: list[dict[str, Any]],
+        tool_schemas: list[dict[str, Any]] | None,
+        step_index: int,
+    ) -> dict[str, Any]:
+        """Write this call's three header parts to the session sidecar."""
+        try:
+            return await record_header_async(
+                session_id=self.context.session_id,
+                parts=_header_parts(self.pipeline.binding, kwargs, messages, tool_schemas),
+                turn_index=self._turn_index,
+                step_index=step_index,
+            )
+        except Exception:  # pragma: no cover - recording must never sink a turn
+            logger.debug("header capture skipped", exc_info=True)
+            return unavailable_ref()
+
+    async def _emit_model_input(
+        self,
+        *,
+        trace_meta: dict[str, Any],
+        stage: str,
+        step_index: int,
+        messages: list[dict[str, Any]],
+        tool_schemas: list[dict[str, Any]] | None,
+        header_ref: dict[str, Any],
+    ) -> None:
+        """One ``model_input`` event per LLM call: the shape of the request.
+
+        Shape only. The prompt text and the tool schemas are in the sidecar,
+        reachable through ``header_ref`` — putting them here would double them
+        into ``turn_events`` and the assistant message both.
+
+        ``content`` is empty for the same reason ``channel_health``'s is: a
+        ``progress`` event with content and a non-``call_status`` trace_kind is
+        rendered as conversation. The readable line rides ``status_key``.
+        """
+        try:
+            loader = getattr(self.pipeline, "_deferred_loader", None)
+            loaded = sorted(getattr(loader, "loaded_names", set()) or set())
+            pool_size = len(getattr(self.pipeline, "_deferred_pool", []) or [])
+            await self.stream.progress(
+                "",
+                source="chat",
+                stage=stage,
+                metadata=merge_trace_metadata(
+                    trace_meta,
+                    {
+                        "trace_kind": "model_input",
+                        "status_key": "model_input",
+                        "turn_index": self._turn_index,
+                        "step_index": step_index,
+                        "prompt_segments": self._prompt_segments(),
+                        # The direct answer to "what did it have in hand" —
+                        # the whole list, not a count, because the question is
+                        # always about one specific tool.
+                        "tools_in_window": [_schema_name(item) for item in tool_schemas or []],
+                        "tools_loaded": loaded,
+                        "tools_deferred_count": max(0, pool_size - len(loaded)),
+                        "messages_skeleton": [_message_skeleton(item) for item in messages],
+                        "header_ref": header_ref,
+                    },
+                ),
+            )
+        except Exception:  # pragma: no cover - informational extra
+            logger.debug("model_input event not emitted", exc_info=True)
+
+    def _prompt_segments(self) -> list[dict[str, Any]]:
+        """``[{name, tokens, sha12}]`` for the blocks the prompt was built from.
+
+        ``name`` is the block's own name, not the context-budget segment it
+        rolls up into: the budget deliberately merges several blocks into one
+        line for the composer, and merging them here would hide which block
+        moved.
+        """
+        if self._prompt_segments_cache is not None:
+            return self._prompt_segments_cache
+        segments: list[dict[str, Any]] = []
+        try:
+            counter = _token_counter()
+            for block in getattr(self.pipeline, "_last_prompt_blocks", []) or []:
+                content = (block.content or "").strip()
+                if not content:
+                    continue
+                segments.append(
+                    {
+                        "name": block.name,
+                        "tokens": counter(content),
+                        "sha12": hashlib.sha256(content.encode("utf-8")).hexdigest()[:12],
+                    }
+                )
+        except Exception:  # pragma: no cover - informational extra
+            logger.debug("prompt segment breakdown unavailable", exc_info=True)
+        self._prompt_segments_cache = segments
+        return segments
+
+    def _step_outcome(
+        self,
+        *,
+        tool_calls: list[dict[str, Any]],
+        text: str,
+        can_nudge: bool,
+        outcome_hint: str | None,
+        outcome_detail: str,
+    ) -> dict[str, Any]:
+        """Why this LLM call ended, as the loop reads it.
+
+        Deliberately parallel to ``finish_reason`` rather than merged with it:
+        the provider's word and the loop's own reading disagreeing is exactly
+        the kind of thing worth being able to see.
+
+        Only the outcomes decidable *at call completion* appear here. A round
+        whose tool dispatch later pauses or terminates the turn is still
+        ``narration`` from this call's point of view; that turn-level ending
+        rides ``stop.step_outcome`` (see :class:`LoopOutcome`).
+        """
+        if outcome_hint:
+            outcome: dict[str, Any] = {"kind": outcome_hint}
+            if outcome_detail:
+                outcome["detail"] = outcome_detail
+            return outcome
+        if tool_calls:
+            return {"kind": "narration"}
+        if can_nudge and not self._clean(text):
+            # Matches the loop's own nudge condition: a tool-less round whose
+            # text cleans away to nothing gets one prod to act instead of
+            # ending the turn on an empty answer.
+            return {"kind": "nudge_empty"}
+        return {"kind": "finish"}
 
     async def _create_response_stream(
         self,
@@ -646,10 +948,14 @@ class AgentLoop:
             return await self.client.chat.completions.create(**kwargs)
         except Exception as exc:
             if "stream_options" in kwargs and is_stream_options_unsupported(exc):
+                self._provider_retries += 1
+                diag("llm.compat_retry", reason="stream_options", attempt=self._provider_retries)
                 retry_kwargs = dict(kwargs)
                 retry_kwargs.pop("stream_options", None)
                 return await self.client.chat.completions.create(**retry_kwargs)
             if kwargs.get("tools") and is_tool_schema_unsupported(exc):
+                self._provider_retries += 1
+                diag("llm.compat_retry", reason="tool_schema", attempt=self._provider_retries)
                 await self.stream.progress(
                     self.pipeline._t(
                         "notices.tool_schema_fallback",
@@ -672,6 +978,8 @@ class AgentLoop:
                 self.pipeline.model,
                 kwargs.get("messages") or [],
             ):
+                self._provider_retries += 1
+                diag("llm.compat_retry", reason="image_input", attempt=self._provider_retries)
                 strip_image_parts_inplace(kwargs["messages"])
                 await self.stream.progress(
                     self.pipeline._t(
@@ -687,6 +995,114 @@ class AgentLoop:
                 )
                 return await self.client.chat.completions.create(**kwargs)
             raise
+
+
+def _header_parts(
+    binding: str,
+    kwargs: dict[str, Any],
+    messages: list[dict[str, Any]],
+    tool_schemas: list[dict[str, Any]] | None,
+) -> dict[str, str]:
+    """The three independently-hashed parts of one request header.
+
+    Split this way because they change at completely different rates: the
+    system prompt is usually constant for a whole session while the tool
+    schemas move a few times, so hashing them together would rewrite the
+    prompt every time a tool appeared.
+
+    ``messages`` are NOT a part. User and assistant text is already stored in
+    full in the messages table, and tool results — the one genuinely new
+    exposure — are deliberately out of scope for now.
+    """
+    system = ""
+    if messages and messages[0].get("role") == "system":
+        content = messages[0].get("content")
+        if isinstance(content, str):
+            system = content
+    config = {
+        "binding": binding,
+        **{
+            key: value
+            for key, value in kwargs.items()
+            if key not in {"messages", "tools", "tool_choice", "stream", "stream_options"}
+        },
+    }
+    return {
+        "system": system,
+        "tools": json.dumps(tool_schemas or [], ensure_ascii=False, sort_keys=True, default=str),
+        # Masked as insurance only: the API key travels on the client, not in
+        # these kwargs. Cheap here, and this is the one part a provider-
+        # specific extra kwarg could ever surface a credential through.
+        "config": _redact(json.dumps(config, ensure_ascii=False, sort_keys=True, default=str)),
+    }
+
+
+def _redact(text: str) -> str:
+    from deeptutor.core.observability.redaction import redact_text
+
+    return redact_text(text)
+
+
+def _schema_name(schema: Any) -> str:
+    if not isinstance(schema, dict):
+        return ""
+    function = schema.get("function")
+    if isinstance(function, dict):
+        return str(function.get("name") or "")
+    return str(schema.get("name") or "")
+
+
+def _message_skeleton(message: dict[str, Any]) -> dict[str, Any]:
+    """One message's shape — role, size, and what kind of parts it carries.
+
+    No bodies: the point is to be able to say "round 3 carried a 40k-character
+    tool result" without copying the tool result.
+    """
+    content = message.get("content")
+    chars = 0
+    has_image = False
+    if isinstance(content, str):
+        chars = len(content)
+    elif isinstance(content, list):
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text":
+                chars += len(str(part.get("text") or ""))
+            else:
+                has_image = True
+    return {
+        "role": str(message.get("role") or ""),
+        "chars": chars,
+        "has_image": has_image,
+        "has_tool_calls": bool(message.get("tool_calls")),
+    }
+
+
+def _token_counter():
+    # Imported lazily for the same reason context_budget does it: the context
+    # builder pulls in the agent base classes.
+    try:
+        from deeptutor.services.session.context_builder import count_tokens
+
+        return count_tokens
+    except Exception:  # pragma: no cover - fall back to a size proxy
+        return lambda text: max(1, len(text) // 4)
+
+
+def _count_user_turns(context: UnifiedContext) -> int:
+    """Zero-based index of this turn within its session.
+
+    One user turn is one :class:`AgentLoop`, so the turn's own index is the
+    number of user messages already in the history it was built from. Read off
+    the context rather than kept in a counter: the loop is constructed fresh
+    per turn and has nowhere durable to count.
+    """
+    try:
+        history = context.conversation_history or []
+        return sum(1 for item in history if (item or {}).get("role") == "user")
+    except Exception:  # pragma: no cover - an index is informational
+        return 0
 
 
 def _last_context_checkpoint_summary(dispatch: DispatchOutcome) -> str:

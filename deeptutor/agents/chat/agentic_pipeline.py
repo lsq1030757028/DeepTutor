@@ -33,6 +33,7 @@ from deeptutor.core.agentic import (
 )
 from deeptutor.core.agentic.tool_dispatch import MAX_PARALLEL_TOOL_CALLS
 from deeptutor.core.context import UnifiedContext
+from deeptutor.core.observability.diagnostics import diag
 from deeptutor.core.stream_bus import StreamBus
 from deeptutor.core.tool_protocol import ToolLookup
 from deeptutor.core.trace import (
@@ -43,7 +44,15 @@ from deeptutor.core.trace import (
 )
 from deeptutor.knowledge.manifest import KbManifest, render_manifest_note
 from deeptutor.runtime.providers import ToolScope
-from deeptutor.runtime.providers.view import ProviderToolView, build_tool_view
+from deeptutor.runtime.providers.view import (
+    REASON_ERROR,
+    STAGE_TOOL_VIEW,
+    Degradation,
+    ProviderToolView,
+    ToolViewHealth,
+    build_tool_view,
+    owner_scope_timeout_s,
+)
 from deeptutor.runtime.registry.deferred_tools import DeferredToolLoader
 from deeptutor.runtime.registry.tool_registry import get_tool_registry
 from deeptutor.services.cli_apps.models import TOOL_PREFIX as CLI_APP_TOOL_PREFIX
@@ -367,6 +376,7 @@ class AgenticChatPipeline:
             notebook_manifest=self._build_notebook_manifest(),
             workspace_note=self._workspace_system_note(context),
             capability_blocks=self._capability_system_blocks(context),
+            channel_health_note=self._channel_health_note(),
             include_tool_manifest=include_tool_manifest,
         )
         return self._prompt_assembler.render(self._last_prompt_blocks)
@@ -497,12 +507,160 @@ class AgenticChatPipeline:
             # in depth because it is the turn's first await — a failure here
             # would kill the turn before a single stream event is emitted.
             logger.warning("deferred-tool preparation failed", exc_info=True)
-            view = ProviderToolView.empty(self.registry)
+            view = ProviderToolView.empty(
+                self.registry,
+                ToolViewHealth().with_degradation(
+                    Degradation(stage=STAGE_TOOL_VIEW, reason=REASON_ERROR),
+                ),
+            )
         self._tool_view = view
         self._deferred_loader = view.loader
         # Kept as a plain list: the context-budget chip counts the provider
         # tools whose schemas never entered the window.
         self._deferred_pool = list(view.pool)
+
+    # ---- channel health -------------------------------------------------
+
+    def _tool_view_health(self) -> ToolViewHealth:
+        view = getattr(self, "_tool_view", None)
+        health = getattr(view, "health", None)
+        return health if isinstance(health, ToolViewHealth) else ToolViewHealth()
+
+    def _channel_health_note(self) -> str:
+        """The assembly block that goes into this turn's system prompt.
+
+        Written for BOTH outcomes on purpose. If only the degraded turn got a
+        block, then "no block" would still be ambiguous between "assembly was
+        fine" and "nobody told me" — which is the exact misreading this whole
+        change exists to close.
+
+        The wording states what the assembly layer did and stops there. A
+        per-user MCP scope that missed a 3s ceiling is a scope that was slow
+        during assembly; calling that "the channel is down" in the model's own
+        context would be reproducing the false report with better plumbing.
+        """
+        try:
+            health = self._tool_view_health()
+            tools_available = len(getattr(self, "_deferred_pool", []) or [])
+            if not health.degraded:
+                return self._t(
+                    "channel_health.ok",
+                    default=(
+                        "Extended-tool assembly for this turn completed normally. "
+                        "{count} extended tool(s) are listed for this turn."
+                    ),
+                ).format(count=tools_available)
+            lines = [
+                self._t(
+                    "channel_health.degraded_header",
+                    default=(
+                        "Extended-tool assembly for this turn did NOT complete in full. "
+                        "What the assembly layer observed:"
+                    ),
+                )
+            ]
+            for degradation in health.degradations:
+                lines.append(
+                    self._t(
+                        "channel_health.degraded_item",
+                        default="- stage `{stage}`: {reason}{detail}",
+                    ).format(
+                        stage=degradation.stage,
+                        reason=degradation.reason,
+                        detail=f" ({degradation.detail})" if degradation.detail else "",
+                    )
+                )
+            lines.append(
+                self._t(
+                    "channel_health.degraded_footer",
+                    default=(
+                        "Consequence: the extended-tool list you were given for this turn "
+                        "may be incomplete. This describes the assembly step only; it is "
+                        "not a finding about whether those servers are reachable now."
+                    ),
+                )
+            )
+            return "\n".join(lines)
+        except Exception:
+            logger.debug("channel health note unavailable", exc_info=True)
+            return ""
+
+    def _mcp_server_rows(self) -> list[dict[str, Any]]:
+        """Per-server connection rows for the owning account, masked.
+
+        Reuses ``manager.status`` rather than growing a second health model;
+        the per-tool listing it carries is dropped (it is the manifest again,
+        by another route) and ``error`` is masked at this write point.
+        """
+        try:
+            from deeptutor.core.observability.redaction import redact_text
+            from deeptutor.services.mcp import get_mcp_manager
+
+            rows = get_mcp_manager().status(self._current_owner_id())
+            return [
+                {
+                    "name": str(row.get("name") or ""),
+                    "transport": str(row.get("transport") or ""),
+                    "status": str(row.get("status") or ""),
+                    "error": redact_text(str(row.get("error") or ""), max_chars=300),
+                }
+                for row in rows or []
+            ]
+        except Exception:
+            logger.debug("mcp status unavailable for channel health", exc_info=True)
+            return []
+
+    async def emit_channel_health(self, stream: StreamBus, *, stage: str = "") -> None:
+        """One ``channel_health`` progress event per turn, degraded or not.
+
+        Called by the loop as its stage opens rather than the moment assembly
+        returns: the turn's first emitted event has to stay the product's own
+        ``stage_start`` (``tests/agents/chat/test_agent_loop.py``'s
+        first-motion assertion), and this event carries the same information
+        either way — it still precedes the turn's first LLM call.
+
+        Contractually non-raising, like everything else on the observation
+        path: a turn must not fail because its own bookkeeping did.
+
+        ``content`` is deliberately empty. A ``progress`` event with non-empty
+        content and a ``trace_kind`` other than ``call_status`` is treated as
+        conversation-worthy substance by the trace panel, and this event is
+        diagnostics, not conversation — the human-readable line is carried as
+        ``status_key`` and rendered by the frontend, the same way deep
+        research already carries ``research_status_key``.
+        """
+        try:
+            health = self._tool_view_health()
+            degradations = health.as_dicts()
+            call_id = new_call_id("chat-assembly")
+            metadata = build_trace_metadata(
+                call_id=call_id,
+                phase="assembling",
+                label=self._t("labels.channel_health", default="Capability assembly"),
+                call_kind="channel_health",
+                trace_id=call_id,
+                trace_kind="channel_health",
+                assembly_state=health.state,
+                degradations=degradations,
+                mcp_servers=self._mcp_server_rows(),
+                tools_available=len(getattr(self, "_deferred_pool", []) or []),
+                owner_scope_timeout_s=owner_scope_timeout_s(),
+                status_key=("channel_health_degraded" if health.degraded else "channel_health_ok"),
+                degraded_stages=[item["stage"] for item in degradations],
+            )
+            await stream.progress("", source="chat", stage=stage, metadata=metadata)
+            diag(
+                "assembly.result",
+                state=health.state,
+                degradations=degradations,
+                tools_available=metadata["tools_available"],
+                mcp_servers=[
+                    {"name": row["name"], "status": row["status"]}
+                    for row in metadata["mcp_servers"]
+                ],
+            )
+        except Exception:
+            logger.debug("channel health event not emitted", exc_info=True)
 
     def _tool_scope(self, context: UnifiedContext) -> ToolScope:
         """Per-turn policy inputs for the provider layer."""
@@ -513,6 +671,7 @@ class AgenticChatPipeline:
             owner_id=self._current_owner_id(),
             is_partner=self._is_partner_turn(context),
             session_id=context.session_id,
+            active_capability=context.active_capability or "chat",
             caller_whitelist=(
                 frozenset(str(name) for name in raw_filter)
                 if isinstance(raw_filter, list)
@@ -884,6 +1043,13 @@ class AgenticChatPipeline:
         if raw_reply is None:
             return False
         reply_text, answers = _normalise_user_reply(raw_reply)
+        from deeptutor.services.test_journey.trust import record_resolved_user_decision
+
+        record_resolved_user_decision(
+            ask_user_tool_call_id=str(dispatch.pause_tool_call_id or ""),
+            ask_user_payload=ask_user,
+            answers=answers,
+        )
         body_text = _format_user_reply_body(
             reply_text,
             answers,

@@ -1,0 +1,1421 @@
+# -*- coding: utf-8 -*-
+"""tools — 九原子工具的**对外调用面**（M2 第 0 号施工项，ADR-M2-01）。
+
+## 这个模块存在的理由
+
+M1 把九原子工具做完了，但**没有任何对外调用面**：`@mcp.tool()` 只暴露 7 个非 journey
+工具，gateway 只有 3 个只读端点 + 1 个 trace 端点，唯一驱动方是 demo 与测试的进程内直调。
+即「M1 的闭环能跑，但没人能从 DT 侧调它」。M2 的三件主事——TAPD 全链、`(workspace)` 薄壳、
+聊天人闸——全部压在这条缺失的面上。
+
+本模块是那条面的**服务端半边**：把 `server/journey/*` 的纯函数包成
+「统一信封 + 可信 owner + 幂等闸 + 错误码」的形态，再由 `server/main.py` 挂成 MCP 工具。
+
+## 三条形态约束
+
+1. **返回体首字段固定 `{ok, code, ...}`**（ADR-M2-01 第 3 条）。MCP 适配器会把
+   TextContent 拼成字符串，消费方靠约定解析——所以约定必须简单到不会解错。
+2. **原子，不做编排**。这里没有 `journey_run_all`。默认组合由聊天 agent 按档位决定，
+   不由服务端固化（M1 §1「禁向导式流水线」）。
+3. **副作用工具过幂等闸**（`adopt` / `compile` / `execute`），判断类工具不过——
+   重跑一次 `analyze` 只是多花点时间，重跑一次 `execute` 会多打一遍被测系统。
+"""
+from __future__ import annotations
+
+from functools import wraps
+import json
+import os
+from typing import Any
+
+from server.journey import (
+    adopt as _adopt,
+)
+from server.journey import (
+    analyze as _analyze,
+)
+from server.journey import (
+    defect_exit as _defect_exit,
+)
+from server.journey import (
+    retier as _retier,
+)
+from server.journey import (
+    artifacts,
+    decision_auth,
+    gate,
+    idempotency,
+    oracle,
+)
+from server.journey import (
+    clarify as _clarify,
+)
+from server.journey import (
+    compile_bundle as _compile,
+)
+from server.journey import (
+    coverage as _coverage,
+)
+from server.journey import (
+    draft_cases as _draft,
+)
+from server.journey import (
+    execute_run as _execute,
+)
+from server.journey import (
+    ingest as _ingest,
+)
+from server.journey import (
+    project_verdicts as _project,
+)
+from server.journey import pw_runtime as _runtime
+from server.journey.digest import sha256_digest
+
+#: 判断类工具（聊天 agent 驱动）与机械类工具（薄壳 / 链式调用）的分工，
+#: 与 SSOT「动作分流」一致：判断类从聊天发起，机械类在工作台。
+JUDGEMENT_TOOLS = ("ingest", "clarify", "analyze", "draft_cases", "adopt")
+MECHANICAL_TOOLS = ("compile", "execute", "project", "coverage")
+READ_TOOLS = ("list_batches", "get_batch", "open_trace")
+
+#: 九原子 + 两个读接口。`main.py` 的挂载数与本元组对拍（ADR-M2-01 G2），
+#: 防「加了工具忘了挂 MCP 面」与「挂了未声明的工具」两向漂移。
+TOOL_NAMES: tuple[str, ...] = JUDGEMENT_TOOLS + MECHANICAL_TOOLS + READ_TOOLS
+
+#: 人闸类：写确认落账。**不算九原子之一**——九原子是旅程的业务工序，
+#: 它是人闸的服务端半边（记录用户答案）。混进 JUDGEMENT_TOOLS 会让
+#: 「九原子一个都不能少」那条断言从"业务工序齐不齐"变成"工具总数对不对"，
+#: 而后者随便加个工具就会红，红几次就没人看了。
+#: 但它们确实挂在 MCP 面上，所以要在对拍集合里明说——否则 G2 的断言会因为
+#: "多出一个没声明的工具"而红，或者被人顺手放宽成 `>=`。
+#: `change_tier` 同理：改档是轻确认（ADR-3），不是旅程业务工序。
+#: `collect_defects` 是执行后的缺陷汇集出口（ADR-4）：机械派生 + 一次性上浮，
+#: 不是第十道工序（没有失败用例的 run 根本不该有这一步）。
+#: `prepare_adoption`（2026-09-05，BB-714）：采纳卡的**签发**从 `adopt` 里拆出来。
+#: 此前采纳卡由 `journey_adopt(prepare_adoption=true)` 签发，于是轨迹里在采纳卡
+#: 出现之前必然先出现一次 `journey_adopt`——用户看到的是「还没勾选就调了采纳」，
+#: 而"这次是空调用"只有读服务端参数才知道。拆开之后 `journey_adopt` 只剩一条路：
+#: 带经验签的用户决定落账；采纳卡出现之前，任何 `journey_adopt` 调用都被拒。
+GATE_TOOLS: tuple[str, ...] = (
+    "write_confirm", "change_tier", "collect_defects", "prepare_adoption",
+)
+
+#: 自由能力面（批次 7 / spec Delta AC25-AC29）：**不依附任何批次**的只读排查动作。
+#: 它们既不是九原子，也不是人闸——不建批次、不写 events.jsonl、不产九格产物，
+#: 逐次调用只进观测日志（`free_surface.observation_log_path()`）。
+#:
+#: 名字仍以 `journey_` 打头看着与"不入账本"矛盾，但在 DT 侧
+#: `trust.py:is_test_journey_tool` 里这个前缀是**能力边界令牌**：不带它，
+#: 工具就落进普通插件池，chat / Playground 模式也会看见 = 能力边界泄漏。
+#: 所以**不许为了"名副其实"改名**。
+FREE_SURFACE_TOOLS: tuple[str, ...] = ("probe_http", "db_query")
+
+#: MCP 面上 `journey_*` 的**完整**集合。G2 断言的对象就是它。
+MCP_TOOL_NAMES: tuple[str, ...] = TOOL_NAMES + GATE_TOOLS + FREE_SURFACE_TOOLS
+
+#: 有副作用、必须过幂等闸的三个。
+SIDE_EFFECT_TOOLS = ("adopt", "compile", "execute")
+
+
+def _ok(code: str = "OK", **rest: Any) -> dict[str, Any]:
+    return {"ok": True, "code": code, **rest}
+
+
+def _err(code: str, message: str, *, machine: str = "", **rest: Any) -> dict[str, Any]:
+    """拒绝信封。**`message` 给人看，`machine` 给模型看。**
+
+    2026-08-29 UAT 实测（V5）：6 条拒绝原样出现在用户对话区，其中包含
+    `<urlopen error [WinError 10054] 远程主机强迫关闭了一个现有的连接。>` 这种
+    Python 异常串，以及「请按提示修正后，用同一 batch_id 重新提交 journey_clarify」
+    这种**写给模型的整改指令**。用户既看不懂，也不该看到——他没有 batch_id，
+    也不会去调 journey_clarify。
+
+    BB-685（0828）把 message 从行话短语改成了完整句子，方向对但没走完：完整的
+    中文句子仍然可以是**说给模型听的**。这一层把两个读者拆开：
+
+    * `message`：一句人话状态——出了什么事 + 我正在怎么办。会被聊天层渲染。
+    * `machine`：怎么修、调哪个工具、参数长什么样。模型读，不许念给用户。
+
+    `machine` 为空时不进信封：没有机器指令的拒绝（如权限类）不该多一个空字段。
+    """
+    out: dict[str, Any] = {"ok": False, "code": code, "message": message, **rest}
+    if str(machine or "").strip():
+        out["machine"] = machine
+    return out
+
+
+#: 探活失败原因 → 人话归因。原始串（含 Python 异常）留在 `machine` 与 `detail`。
+#:
+#: 三种原因三条不同的下一步（AC3 的本意），但 AC3 被实现成了「把原始 reason 拼进
+#: message」——于是用户读到的是 WinError。归因分类由这里做，原文留给模型。
+_PROBE_REASON_HUMAN = (
+    ("重定向", "这个地址会跳转到另一个站点"),
+    ("http(s)", "这个地址不是合法的 http/https 地址"),
+    ("格式非法", "这个地址格式不对"),
+    ("用户名或密码", "这个地址里嵌了账号密码，不能用"),
+    ("query", "这个地址带了查询参数，不能用"),
+)
+
+
+def _humanize_probe_reason(reason: str) -> str:
+    text = str(reason or "")
+    for needle, human in _PROBE_REASON_HUMAN:
+        if needle in text:
+            return human
+    return "这个地址连不上（网络不通，或者服务没起来）"
+
+
+def _requires_trusted_owner(fn):
+    """Make every production tool call run in one server-trusted partition.
+
+    ``owner`` is accepted only as a server-side keyword from ``main.py``.  The
+    MCP wrapper overwrites model/browser identity fields after bridge
+    verification; direct unit tests must pass an explicit owner as well.
+    """
+    @wraps(fn)
+    def wrapped(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raw_owner = str(kwargs.pop("owner", "") or "").strip()
+        if not raw_owner or raw_owner == artifacts.DEFAULT_OWNER:
+            return _err("E_OWNER_REQUIRED", "可信 owner 缺失，拒绝访问旅程产物。")
+        try:
+            with artifacts.trusted_owner(raw_owner, root=kwargs.get("root")):
+                return fn(*args, **kwargs)
+        except artifacts.CredentialSuspectedError as exc:
+            # 凭据误判不是权限问题。分开报，用户与模型才知道该做什么
+            # （2026-08-29 Round 3：它一直显示成 E_OWNER_REQUIRED）。
+            previews = [str(row.get("token_preview") or "") for row in exc.findings]
+            return _err(
+                "E_CREDENTIAL_SUSPECTED",
+                "有一段内容被误判成了密码或密钥，我换个写法重来一次，你不用操作。",
+                machine=f"{exc} 被判为凭据的片段：{previews or '（未记录）'}。"
+                        "确认不是凭据就改写该处措辞后重提；真是凭据则改成 "
+                        "{{变量名}} 占位符,绝不要把凭据原值写进产物。",
+                detail={"findings": exc.findings})
+        except artifacts.ArtifactError as exc:
+            return _err("E_OWNER_REQUIRED", str(exc))
+    return wrapped
+
+
+def _serializes_batch_mutation(fn):
+    """Keep one batch's state transitions ordered while other batches can run."""
+    @wraps(fn)
+    def wrapped(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        batch_id = str(kwargs.get("batch_id") or "")
+        root = kwargs.get("root")
+        # Preserve the tool's own E_NO_BATCH contract.  Invalid or missing
+        # batches are validated by ``_guarded``; trying to derive a lock path
+        # first would make the outer owner wrapper misclassify that failure.
+        try:
+            artifacts.load_batch(batch_id, root=root)
+        except artifacts.ArtifactError:
+            return fn(*args, **kwargs)
+        with artifacts.batch_mutation_lock(batch_id, root=root):
+            return fn(*args, **kwargs)
+    return wrapped
+
+
+def _log_call(batch_id: str, tool: str, caller_surface: str,
+              root: str | None = None) -> None:
+    """把调用面记进 events.jsonl（DoD#8e-3：**信号，不当闸**）。
+
+    UAT 时可回看「有没有轮子在 chat 模式下摸过这些工具」。
+    刻意不做成闸——调用面是调用方自报的，自报的东西当闸就是假闸。
+    """
+    try:
+        artifacts.append_event(batch_id, {
+            "type": "tool_call", "tool": f"journey_{tool}",
+            "caller_surface": gate.normalize_surface(caller_surface)}, root=root)
+    except artifacts.ArtifactError:
+        pass
+
+
+def _guarded(batch_id: str, tool: str, caller_surface: str,
+             root: str | None = None) -> dict[str, Any] | None:
+    """非 ingest 工具的统一前置：批次必须既存（G5 第二半）。"""
+    check = gate.require_batch(batch_id, root=root)
+    if not check["ok"]:
+        return _err(check["code"], check["message"])
+    _log_call(batch_id, tool, caller_surface, root)
+    return None
+
+
+def _environment_pending(batch_id: str, root: str | None) -> dict[str, Any] | None:
+    """执行前的环境闸。**这是探活闸下移之后的落点**（2026-08-29 闸位重定标）。
+
+    接入阶段允许 `environment_status="pending"`：澄清、分析、用例草稿都是对着需求
+    正文做的，不需要环境。真要打被测系统那一刻才必须有真地址——闸放在这里，
+    「环境还没好」就有一条诚实的路可走，模型不必编一个地址去骗过接入闸。
+    """
+    try:
+        profile = artifacts.load_artifact(batch_id, "intake_profile", root=root)
+    except artifacts.ArtifactError:
+        return None
+    if str(profile.get("environment_status") or "") != "pending":
+        return None
+    return _err(
+        "E_ENVIRONMENT_PENDING",
+        "这个批次的测试环境地址还没定，所以不能真跑。用例都在，补上地址就能执行。",
+        machine="intake_profile.environment_status=pending。补真实地址的办法："
+                "用真实 base_url 重开一个批次（带 supersedes 指向本批次），"
+                "已确认的澄清项可以复用。在那之前不要调 journey_execute，"
+                "也不要编一个占位地址。",
+        detail={"environment_status": "pending",
+                "environment_note": _ingest.ENVIRONMENT_PENDING_NOTE})
+
+
+def _batch_partition(batch_id: str, root: str | None) -> str:
+    """从已落盘批次取幂等/执行分区，不信任调用方自报 owner。"""
+    batch = artifacts.load_batch(batch_id, root=root)
+    return artifacts.safe_owner(batch.get("partition") or batch.get("owner"))
+
+
+def _artifact_state_digest(batch_id: str, kind: str,
+                           root: str | None = None) -> str:
+    return sha256_digest(artifacts.load_artifact(batch_id, kind, root=root))
+
+
+def _bundle_state(batch_id: str, root: str | None = None) -> dict[str, str]:
+    path = os.path.join(artifacts.batch_dir(batch_id, root=root), "bundle", "bundle.json")
+    with open(path, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    return {
+        "bundle_sha256": sha256_digest(manifest),
+        "caseset_id": str(manifest.get("caseset_id") or ""),
+        "compiler_version": str(manifest.get("compiler_version") or ""),
+    }
+
+
+def _selected_authorized_write_risk(batch_id: str,
+                                    case_ids: list[str] | None, *,
+                                    owner: str,
+                                    root: str | None = None) -> bool:
+    """Whether this exact execute request may send a confirmed write."""
+    try:
+        caseset = artifacts.load_artifact(
+            batch_id, "approved_caseset", owner=owner, root=root)
+    except artifacts.ArtifactError:
+        return False
+    selected = set(case_ids or [
+        str(case.get("case_id") or "") for case in caseset.get("cases") or []])
+    authorized = _execute.write_authorization(
+        batch_id, owner=owner, root=root)["authorized"]
+    return any(
+        str(case.get("case_id") or "") in selected
+        and str(case.get("case_id") or "") in authorized
+        and _runtime.effective_write_risk({
+            "writes": bool((case.get("side_effects") or {}).get("writes")),
+            "actions": list(
+                (((case.get("automation") or {}).get("recipe") or {}).get(
+                    "actions"
+                ) or [])
+            ),
+        })
+        for case in caseset.get("cases") or [])
+
+
+def _recover_completed_execute(batch_id: str, intent: dict[str, Any], *,
+                               owner: str, root: str | None = None
+                               ) -> dict[str, Any] | None:
+    """Recover the post-receipt/pre-ledger crash window without re-running."""
+    run_id = str(intent.get("run_id") or "")
+    try:
+        receipt_path = os.path.join(artifacts.run_dir(
+            run_id, owner=owner, root=root), "receipt.json")
+        with open(receipt_path, encoding="utf-8") as fh:
+            receipt = json.load(fh)
+    except (artifacts.ArtifactError, OSError, ValueError):
+        return None
+    if not isinstance(receipt, dict) or \
+            str(receipt.get("run_id") or "") != run_id or \
+            str(receipt.get("batch_id") or "") != batch_id or \
+            str(receipt.get("owner_partition") or owner) != owner or \
+            int(receipt.get("credential_scan_passes") or 0) < 2:
+        return None
+    artifacts.append_run_id(batch_id, run_id, owner=owner, root=root)
+    return _ok(run_id=run_id, receipt=receipt, recovered=True)
+
+
+# ── 1. ingest（唯一能创建批次；fail-closed 于可信 bridge）───────────────────
+
+
+def _inherited_requirement(batch_id: str, root: str | None) -> dict[str, Any]:
+    """从既存批次接需求正文与出处。查不到就如实说查不到，不编。
+
+    正文冻在批次目录的 `requirement.txt`（`ingest` 落的快照），出处在
+    `intake_profile.source`。两者一起接，接过来的 digest 由 `ingest` 重算，
+    所以不存在"接了正文但锚不上"的中间态。
+    """
+    try:
+        path = os.path.join(artifacts.batch_dir(batch_id, root=root),
+                            "requirement.txt")
+        if not os.path.isfile(path):
+            return {"ok": False}
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        if not text.strip():
+            return {"ok": False}
+        source: dict[str, Any] = {}
+        try:
+            profile = artifacts.load_artifact(batch_id, "intake_profile", root=root)
+            source = dict(profile.get("source") or {})
+        except artifacts.ArtifactError:
+            source = {}
+        return {"ok": True, "requirement_text": text,
+                "source_kind": str(source.get("kind") or ""),
+                "source_ref": str(source.get("ref") or "")}
+    except (artifacts.ArtifactError, OSError):
+        return {"ok": False}
+
+
+@_requires_trusted_owner
+def ingest(*, title: str, base_url: str, source_kind: str = "tapd",
+           source_ref: str = "", environment_status: str = "",
+           workspace_id: str = "", story_id: str = "",
+           requirement_text: str = "", environment_ref: str = "",
+           tier: str = "", tier_confirmed_via: str = "", owner: str = "",
+           requirement_entity: str = "",
+           requirement_entity_confirmed_via: str = "",
+           prepare_requirement_entity: bool = False,
+           intake_context: str = "",
+           supersedes: str = "",
+           decision_context: str = "", _bridge_claims: Any = None,
+           _decision_arguments: dict[str, Any] | None = None,
+           caller_surface: str = "unknown",
+           root: str | None = None) -> dict[str, Any]:
+    """接入 + 定档。可信 bridge 已在 MCP wrapper 中先于本函数验完。"""
+
+    entity = str(requirement_entity or "").strip()
+    entity_via = str(requirement_entity_confirmed_via or "").strip()
+    if bool(entity) != bool(entity_via):
+        return _err(
+            "E_USER_DECISION_REQUIRED",
+            "需求实体及其确认来源必须成对提供；来源字符串本身不产生授权。",
+        )
+    effective_args = {
+        "title": title, "base_url": base_url,
+        "workspace_id": workspace_id, "story_id": story_id,
+        "requirement_text": requirement_text, "source_kind": source_kind,
+        "source_ref": source_ref, "environment_ref": environment_ref,
+        "environment_status": environment_status,
+        "tier": tier, "tier_confirmed_via": tier_confirmed_via,
+        "requirement_entity": requirement_entity,
+        "requirement_entity_confirmed_via": requirement_entity_confirmed_via,
+        "prepare_requirement_entity": prepare_requirement_entity,
+        "intake_context": intake_context,
+        "supersedes": supersedes,
+    }
+
+    oracle_source: dict[str, Any] = {}
+    text = requirement_text
+    if workspace_id and story_id:
+        # warm_up 治的是 DT 插件通道的 MCP 冷启动坑，只在那条通道上才需要；
+        # tapd_rest 直连官方 API，没有"未连接"冷启动态，预热只是白打一次 DT。
+        if (oracle.channel_config().get("transport") or "") == "deeptutor_plugins":
+            oracle.warm_up()
+        try:
+            story = oracle.fetch_story(workspace_id, story_id)
+        except oracle.OracleError as exc:
+            # fail-closed：错误串绝不当需求正文快照下来（ADR-M2-02 第 5 条）
+            return exc.as_payload()
+        text = oracle.plain_text(str(story.get("description") or ""))
+        oracle_source = {"_story": story, "_workspace_id": workspace_id,
+                         "_story_id": story_id}
+    elif not text and supersedes:
+        # 升档/换档要开新批次时，正文从被替代的那个批次继承（2026-08-29 Round 2
+        # 卡点 B）：实测模型在同一会话里先按原文列了 10 条规则，开新批次时却说
+        # 「我没有渠道拿到需求正文，请你粘贴」——正文明明就冻在上一个批次目录里。
+        # 让用户去 TAPD 复制粘贴他刚看过的东西,是这条链上最没道理的一次打断。
+        inherited = _inherited_requirement(supersedes, root)
+        if inherited["ok"]:
+            text = inherited["requirement_text"]
+            source_kind = source_kind or inherited["source_kind"]
+            source_ref = source_ref or inherited["source_ref"]
+        else:
+            return _err("E_ORACLE_NOT_FOUND",
+                        "我手上没有这条需求的正文，也没能从上一个批次接过来。",
+                        machine=f"supersedes={supersedes} 的批次里没有 "
+                                "requirement.txt。给 workspace_id + story_id 让服务端"
+                                "取数,或传 requirement_text;先用 journey_list_batches "
+                                "/ journey_get_batch 查同需求的历史批次,"
+                                "get_batch 的返回体里就有 requirement_text。")
+    elif not text:
+        return _err("E_ORACLE_NOT_FOUND",
+                    "我还没拿到这条需求的正文，先取到正文再开始。",
+                    machine="既没给 workspace_id + story_id,也没给 requirement_text。"
+                            "先用 journey_list_batches / journey_get_batch 查同一需求"
+                            "有没有历史批次——get_batch 的返回体里带 requirement_text,"
+                            "能接就接,别让用户手工粘贴。都没有再向用户要。")
+
+    owner_partition = artifacts.current_trusted_owner() or ""
+    if _bridge_claims is None or str(
+            getattr(_bridge_claims, "owner", "") or "") != owner_partition:
+        if prepare_requirement_entity or entity:
+            return _err(
+                "E_USER_DECISION_REQUIRED",
+                "需求实体必须来自同一 Test 会话内真实完成的交互确认卡。",
+            )
+
+    signed_args = _decision_arguments or effective_args
+    if prepare_requirement_entity:
+        if entity or entity_via or intake_context or decision_context:
+            return _err(
+                "E_USER_DECISION_INVALID",
+                "冻结需求实体卡时不得提前填写实体或复用旧的上下文。",
+            )
+        pending_env = str(environment_status or "").strip().lower() == "pending"
+        validated_target = ({"ok": True, "url": ""} if pending_env
+                            else _ingest.redlines.safe_target_url(base_url))
+        if not validated_target["ok"]:
+            return _err("E_INGEST_REJECTED", validated_target["error"])
+        if tier not in _ingest.TIERS:
+            return _err("E_INGEST_REJECTED", f"tier 必须是 {_ingest.TIERS} 之一")
+        from server.journey.gates import credential_scan
+
+        for label, value in (("title", title), ("requirement", text)):
+            if not credential_scan.scan_text_content(str(value or ""), label=label)["ok"]:
+                return _err(
+                    "E_INGEST_REJECTED",
+                    f"{label} 疑似包含凭据，未生成用户确认卡。",
+                )
+        probe = ({"reachable": False, "skipped": True}
+                 if pending_env else _ingest.probe_target(validated_target["url"]))
+        if not probe.get("reachable") and not pending_env:
+            # 失败原因必须带出去（AC3）。「接入终点不可达」这五个字对用户没有
+            # 任何行动价值：域名解析不了、被重定向到别的站、协议不对——
+            # 三种原因三条不同的下一步，糊成一句等于让用户自己猜。
+            reason = str(probe.get("error") or "").strip() or "未知原因"
+            return _err("E_INGEST_REJECTED",
+                        f"{_humanize_probe_reason(reason)}："
+                        f"{validated_target['url']}，所以还没开始接入。",
+                        machine=f"探活失败原文：{reason}。要么换一个真实可达的地址，"
+                                "要么传 environment_status=\"pending\" 且不传 base_url，"
+                                "先出用例（推荐，用户不必现在去配环境）。",
+                        detail={"base_url": validated_target["url"],
+                                "probe_error": reason})
+        try:
+            prepared = decision_auth.issue_intake_context(
+                bridge=_bridge_claims,
+                arguments=signed_args,
+                requirement_text=text,
+            )
+        except decision_auth.DecisionAuthError as exc:
+            return _err("E_USER_DECISION_INVALID", str(exc))
+        return _ok(
+            "NEEDS_GATE", needs_gate="requirement_entity",
+            card=prepared["card"], intake_context=prepared["intake_context"],
+            intake_digest=prepared["intake_digest"],
+            requirement_digest=prepared["requirement_digest"],
+        )
+
+    entity_decision: dict[str, Any] = {}
+    if entity:
+        try:
+            intake = decision_auth.verify_intake_context(
+                intake_context,
+                bridge=_bridge_claims,
+                arguments=signed_args,
+                requirement_text=text,
+            )
+            entity_decision = decision_auth.verify_requirement_entity_context(
+                decision_context,
+                bridge=_bridge_claims,
+                intake=intake,
+                requirement_entity=entity,
+                arguments=signed_args,
+            )
+        except decision_auth.DecisionAuthError as exc:
+            return _err("E_USER_DECISION_INVALID", str(exc))
+
+    def consume_entity_decision() -> dict[str, Any] | None:
+        if not entity_decision:
+            return None
+        if artifacts.consume_owner_decision_receipt(
+                owner=owner_partition, decision_jti=entity_decision["jti"],
+                gate="requirement_entity", root=root):
+            return None
+        return {
+            "ok": False,
+            "code": "E_USER_DECISION_REPLAYED",
+            "error": "这份需求实体决定已经消费过，不能重复创建批次。",
+        }
+
+    result = _ingest.ingest(title, base_url, source_kind=source_kind,
+                            source_ref=source_ref or (
+                                f"tapd:{workspace_id}/{story_id}"
+                                if story_id else ""),
+                            requirement_text=text,
+                            environment_ref=environment_ref,
+                            environment_status=environment_status, tier=tier,
+                            tier_confirmed_via=tier_confirmed_via,
+                            requirement_entity=requirement_entity,
+                            requirement_entity_confirmed_via=(
+                                requirement_entity_confirmed_via
+                            ),
+                            requirement_entity_decision={
+                                "decision_hash": sha256_digest(
+                                    entity_decision.get("jti", "")),
+                                "decision_session": entity_decision.get("session", ""),
+                                "decision_turn": entity_decision.get("turn", ""),
+                                "ask_user_tool_call_id": entity_decision.get(
+                                    "ask_user_tool_call_id", ""),
+                            } if entity_decision else {},
+                            before_create=consume_entity_decision,
+                            supersedes=supersedes,
+                            owner=owner)
+    if not result.get("ok"):
+        if result.get("need") == "tier_confirmation":
+            return _ok("NEEDS_GATE", needs_gate="stage_tier", probe=result["probe"],
+                       card=result["card"], proposed_tier=result["proposed_tier"],
+                       score=result["score"], reasons=result["reasons"])
+        raw = str(result.get("error") or "接入被拒")
+        if "接入终点不可达" in raw:
+            reason = str((result.get("probe") or {}).get("error") or "").strip()
+            return _err(
+                "E_INGEST_REJECTED",
+                f"{_humanize_probe_reason(reason)}，所以还没开始接入。",
+                machine=f"探活失败原文：{reason or '未知原因'}。要么换一个真实可达的"
+                        "地址，要么传 environment_status=\"pending\" 且不传 base_url，"
+                        "先出用例（推荐，用户不必现在去配环境）。",
+                detail=result)
+        return _err(str(result.get("code") or "E_INGEST_REJECTED"), raw,
+                    machine=str(result.get("machine") or ""), detail=result)
+
+    bid = result["batch_id"]
+    _log_call(bid, "ingest", caller_surface, root)
+
+    if oracle_source:
+        src = oracle.snapshot(bid, oracle_source["_story"],
+                              workspace_id=oracle_source["_workspace_id"],
+                              story_id=oracle_source["_story_id"], root=root)
+        profile = artifacts.load_artifact(bid, "intake_profile", root=root)
+        profile["oracle_source"] = src
+        profile["source"] = {"kind": "tapd", "ref": f"tapd:{workspace_id}/{story_id}",
+                             "content_digest": src["content_digest"]}
+        artifacts.save_artifact(bid, "intake_profile", profile, root=root)
+        result["intake_profile"] = profile
+    return _ok(batch_id=bid, intake_profile=result["intake_profile"])
+
+
+# ── 2–5. 判断类 ─────────────────────────────────────────────────────────────
+
+
+@_requires_trusted_owner
+@_serializes_batch_mutation
+def clarify(*, batch_id: str, rules: list[dict[str, Any]],
+            confirmed_facts_md: str, clarifications: list[dict[str, Any]] | None = None,
+            caller_surface: str = "unknown",
+            root: str | None = None) -> dict[str, Any]:
+    blocked = _guarded(batch_id, "clarify", caller_surface, root)
+    if blocked:
+        return blocked
+    r = _clarify.clarify(batch_id, rules=rules, clarifications=clarifications,
+                         confirmed_facts_md=confirmed_facts_md)
+    # BB-685：message 会被原样渲染进用户对话区——必须是说清「哪里不对+下一步」的
+    # 完整句子，不是给模型看的行话。错误码保留作溯源。
+    return _ok(business_frame=r["business_frame"]) if r.get("ok") else \
+        _err("E_CLARIFY_REJECTED",
+             "澄清材料还有几处没达标，我按提示改一版再提交，你不用操作。",
+             machine="detail 逐条列出缺哪一节、哪一栏不达标以及可照抄的形状；"
+                     "confirmed_facts_md 的合法骨架见 journey_clarify 工具描述里的"
+                     "可照抄示例。修正后用同一 batch_id 重新调用 journey_clarify，"
+                     "已确认的内容不会丢失。",
+             detail=r, fix_example=_clarify.CONFIRMED_FACTS_EXAMPLE,
+             clarification_example=_clarify.CLARIFICATION_EXAMPLE)
+
+
+@_requires_trusted_owner
+@_serializes_batch_mutation
+def analyze(*, batch_id: str, example_map: list[dict[str, Any]],
+            analysis_md: str, caller_surface: str = "unknown",
+            root: str | None = None) -> dict[str, Any]:
+    blocked = _guarded(batch_id, "analyze", caller_surface, root)
+    if blocked:
+        return blocked
+    r = _analyze.analyze(batch_id, example_map=example_map, analysis_md=analysis_md)
+    return _ok(test_analysis=r["test_analysis"]) if r.get("ok") else \
+        _err("E_ANALYZE_REJECTED",
+             "分析材料还有几处没达标，我按提示改一版再提交，你不用操作。",
+             machine="detail.problems 逐条说明问题（引用了未知规则、规则缺 Example，"
+                     "或 analysis_md 缺「下游消费面盘点」节）；analysis_md 的合法骨架"
+                     "见 journey_analyze 工具描述里的可照抄示例。修正后用同一 batch_id "
+                     "重新调用 journey_analyze。",
+             detail=r, fix_example=_analyze.ANALYSIS_MD_EXAMPLE,
+             example_map_example=_analyze.EXAMPLE_MAP_EXAMPLE)
+
+
+@_requires_trusted_owner
+@_serializes_batch_mutation
+def draft_cases(*, batch_id: str, cases: list[dict[str, Any]],
+                uncovered_rules: list[dict[str, Any]] | None = None,
+                caller_surface: str = "unknown",
+                root: str | None = None) -> dict[str, Any]:
+    blocked = _guarded(batch_id, "draft_cases", caller_surface, root)
+    if blocked:
+        return blocked
+    r = _draft.draft(batch_id, cases=cases, uncovered_rules=uncovered_rules)
+    if not r.get("ok"):
+        n = len(r.get("errors") or [])
+        # BB-685（人话 message）+ BB-688b（拒绝返回带可照抄示例）：
+        # fix_example / uncovered_example 与 schema 校验同源、被单测钉住合法，
+        # 模型照抄形状即可，不必再逐字段试错。
+        return _err(
+            "E_DRAFT_REJECTED",
+            f"用例草稿有 {n} 处不达标，我按提示改一版再提交，你不用操作。",
+            machine="detail.errors 逐条给了位置（where）与原因（problem）；"
+                    "fix_example 是可直接照抄的最小合法用例，uncovered_example 是"
+                    "不覆盖声明的合法形状。修正后用同一 batch_id 重新调用 "
+                    "journey_draft_cases，不需要从头开始。",
+            detail=r,
+            fix_example=_draft.MINIMAL_CASE_EXAMPLE,
+            uncovered_example=_draft.UNCOVERED_EXAMPLE)
+    return _ok(case_draft=r["case_draft"], coverage=r.get("coverage"),
+               warnings=r.get("warnings"))
+
+
+def _adopt_write_disclosure(case_draft: dict[str, Any],
+                            selected_draft_ids: list[str]) -> list[dict[str, Any]]:
+    """采纳卡的披露源（AC6）：写用例逐条给 cleanup/authorization/write_scope。
+
+    三个字段是 `schema.py` S29 强制的（写用例必填非空），这里只是原样取出——
+    披露的是 schema 已经保证存在的真话，不是现编的安抚文案。
+    """
+    rows: list[dict[str, Any]] = []
+    for case in decision_auth.adopt_selection(case_draft, selected_draft_ids):
+        side = case.get("side_effects") or {}
+        writes = _runtime.effective_write_risk({
+            "writes": bool(side.get("writes")),
+            "actions": list((((case.get("automation") or {}).get("recipe") or {}
+                              ).get("actions")) or []),
+        })
+        if not writes:
+            continue
+        rows.append({
+            "draft_id": str(case.get("draft_id") or ""),
+            "title": str(case.get("title") or ""),
+            # 逐条内容摘要从卡面搬到这里（2026-08-29）：模型仍拿得到，
+            # 用户不必在授权卡上逐行读 64 位十六进制。
+            "content_digest": decision_auth.adopt_draft_digest(case),
+            "cleanup": str(side.get("cleanup") or ""),
+            "authorization": str(side.get("authorization") or ""),
+            "write_scope": str(side.get("write_scope") or ""),
+        })
+    return rows
+
+
+#: 披露字段为空时卡上显示的占位（只可能出现在闸收紧之前起草的老批次上）。
+BLANK_DISCLOSURE_FIELD = "（草稿未填写——采纳前请让我补齐）"
+
+
+def _render_adopt_disclosure_md(case_draft: dict[str, Any],
+                                selected_draft_ids: list[str],
+                                disclosure: list[dict[str, Any]]) -> str:
+    """采纳卡导语的**完整**披露文本（BB-715）。
+
+    2026-09-05 UAT：d6/d8 的写入/清理披露在采纳卡上被截断成「…」——模型把三字段
+    改写进 `ask_user` 的 intro，而 intro 曾有 400 字上限。这里由服务端把披露渲染
+    成一段可原样贴进 intro 的 markdown：每条写用例三行（写什么 / 怎么清理 / 凭什么），
+    一字不截。模型照贴即可，不需要自己"概括"。
+    """
+    by_id = {str(c.get("draft_id") or ""): c for c in case_draft.get("cases") or []}
+    rows_by_id = {str(r.get("draft_id") or ""): r for r in disclosure}
+    lines: list[str] = []
+    for draft_id in dict.fromkeys(str(d or "") for d in selected_draft_ids or []):
+        case = by_id.get(draft_id) or {}
+        title = str(case.get("title") or draft_id)
+        row = rows_by_id.get(draft_id)
+        if row is None:
+            lines.append(f"- {draft_id} {title}：只读，不写数据")
+            continue
+        lines.append(f"- {draft_id} {title}：**会写数据**")
+        # 三行永远齐（BB-715 补修，2026-09-05）：草稿闸现在三字段都必填；
+        # 老批次里仍可能有空值，空值要在卡上**看得见**是空的，而不是一行空白
+        # 让模型顺手删掉——那正是 d3~d8 缺"写什么"行的来路。
+        lines.append(f"  - 写什么：{row['write_scope'] or BLANK_DISCLOSURE_FIELD}")
+        lines.append(f"  - 怎么清理：{row['cleanup'] or BLANK_DISCLOSURE_FIELD}")
+        lines.append(f"  - 凭什么授权：{row['authorization'] or BLANK_DISCLOSURE_FIELD}")
+    return "\n".join(lines)
+
+
+@_requires_trusted_owner
+def prepare_adoption(*, batch_id: str, selected_draft_ids: list[str],
+                     _bridge_claims: Any = None,
+                     caller_surface: str = "unknown",
+                     root: str | None = None) -> dict[str, Any]:
+    """签发采纳卡（硬闸的第一步，BB-714 拆分）。**不落任何产物，不进 adopt 幂等账。**
+
+    服务端算出可信采纳卡（`card`）+ 写用例披露（`disclosure`，AC6 三字段）+
+    可原样贴进 `ask_user` intro 的完整披露文本（`disclosure_md`）。
+    模型把卡传给 `ask_user`，用户答复后才调 `journey_adopt`。
+
+    只在可信 Test 会话内可用：工作台面没有采纳卡（写授权走独立写确认卡）。
+    """
+    blocked = _guarded(batch_id, "prepare_adoption", caller_surface, root)
+    if blocked:
+        return blocked
+    if _bridge_claims is None:
+        return _err("E_USER_DECISION_REQUIRED",
+                    "采纳卡准备只在可信 Test 会话内进行。")
+    owner = _batch_partition(batch_id, root)
+    if str(getattr(_bridge_claims, "owner", "") or "") != owner:
+        return _err("E_USER_DECISION_INVALID", "用户决定不属于当前批次 owner。")
+    if not artifacts.has_artifact(batch_id, "case_draft", root=root):
+        return _err("E_NO_CASE_DRAFT",
+                    "还没有用例草稿，采纳无从谈起——先起草再采纳。")
+    case_draft = artifacts.load_artifact(batch_id, "case_draft", root=root)
+    try:
+        card = decision_auth.expected_adopt_question(
+            batch_id, case_draft, selected_draft_ids)
+    except decision_auth.DecisionAuthError as exc:
+        if "最多能披露" in str(exc):
+            return _err(
+                "E_TOO_MANY_WRITE_CASES",
+                f"会写数据的用例超过一张卡能放下的数量（上限 "
+                f"{decision_auth.MAX_WRITE_CHOICES} 条），我分两批请你确认。",
+                machine=f"{exc} 把采纳集拆成多个批次分别采纳,"
+                        "每批写用例不超过上限;不要为了塞进一张卡而减少披露。")
+        return _err("E_USER_DECISION_INVALID", str(exc))
+    disclosure = _adopt_write_disclosure(case_draft, selected_draft_ids)
+    return _ok("NEEDS_GATE", needs_gate="adoption", card=card,
+               disclosure=disclosure,
+               disclosure_md=_render_adopt_disclosure_md(
+                   case_draft, selected_draft_ids, disclosure))
+
+
+@_requires_trusted_owner
+@_serializes_batch_mutation
+def adopt(*, batch_id: str, selected_draft_ids: list[str], caseset_slug: str = "",
+          adopted_via: str = "workbench_selection", confirmed_by: str = "",
+          idempotency_key: str = "", skip_drift_check: bool = False,
+          authorized_write_draft_ids: list[str] | None = None,
+          decision_context: str = "", _bridge_claims: Any = None,
+          _decision_arguments: dict[str, Any] | None = None,
+          caller_surface: str = "unknown", root: str | None = None) -> dict[str, Any]:
+    """采纳冻结。**漂移闸在这里**（ADR-M2-02 第 6 条）。
+
+    ## 采纳是唯一硬闸（ADR-2，批次 4 接线）
+
+    经可信桥接（capability 面）调用时，采纳必须携带经 `decision_auth` 验签的
+    用户决定：卡 id 绑整个采纳集的内容摘要、选项逐条绑写用例摘要、jti 防重放。
+    两步走（与 `journey_ingest` 的实体卡同构），**两步是两个工具**（BB-714）：
+
+    1. `journey_prepare_adoption`：服务端算出可信采纳卡 + 写用例披露
+       （AC6 三字段），不落任何产物；
+    2. 模型把卡传给 `ask_user`，用户答复后带 `decision_context` +
+       `authorized_write_draft_ids` 调本工具——采纳与写授权一口气落账，
+       派生 `write_confirm` 事件（`via="adopt_card"`，2026-08-19 Delta 裁决
+       复用事件类型），`execute_run.write_authorization` 的取数口零改动。
+
+    可信 Test 会话里**没有决定就没有采纳**：`decision_context` 为空直接拒
+    （E_USER_DECISION_REQUIRED），不落账、不起草。采纳卡出现之前本工具没有任何
+    合法调用路径，轨迹里在卡之前出现 `journey_adopt` 即是异常。
+
+    工作台面（无桥接声明）保持既有语义：采纳照旧、写授权走独立
+    `journey_write_confirm` 卡——两面各自完整，互不留洞。
+
+    `skip_drift_check` 只服务单测与离线回放，**不是给调用方的绕过开关**：
+    MCP 工具面不暴露这个参数（见 `main.py` 的签名），所以从 DT 侧调不到它。
+    """
+    requested_writes = list(dict.fromkeys(
+        str(d or "") for d in authorized_write_draft_ids or []))
+    capability_call = _bridge_claims is not None
+    if capability_call and not str(decision_context or "").strip():
+        # 在 _guarded 之前拒：没有决定的采纳连 tool_call 事件都不该留——
+        # 那条事件正是 BB-714 里用户看到的「采纳前调了采纳」。
+        check = gate.require_batch(batch_id, root=root)
+        if not check["ok"]:
+            return _err(check["code"], check["message"])
+        return _err(
+            "E_USER_DECISION_REQUIRED",
+            "采纳必须先经过你在采纳卡上的确认，我先把采纳卡发给你。",
+            machine="先调 journey_prepare_adoption 取采纳卡与披露，把 card 原样传给 "
+                    "ask_user；用户答复后再调 journey_adopt（selected_draft_ids 不变，"
+                    "authorized_write_draft_ids 用用户勾选的写用例草稿号）。")
+
+    blocked = _guarded(batch_id, "adopt", caller_surface, root)
+    if blocked:
+        return blocked
+
+    owner = _batch_partition(batch_id, root)
+    if capability_call and str(getattr(_bridge_claims, "owner", "") or "") != owner:
+        return _err("E_USER_DECISION_INVALID", "用户决定不属于当前批次 owner。")
+
+    decision: dict[str, Any] = {}
+    if capability_call:
+        if not artifacts.has_artifact(batch_id, "case_draft", root=root):
+            return _err("E_NO_CASE_DRAFT",
+                        "还没有用例草稿，采纳无从谈起——先起草再采纳。")
+        case_draft = artifacts.load_artifact(batch_id, "case_draft", root=root)
+        consumed = {
+            str(event.get("decision_jti") or "")
+            for event in artifacts.read_events(batch_id, root=root)
+            if str(event.get("decision_jti") or "")
+        }
+        try:
+            decision = decision_auth.verify_adopt_context(
+                decision_context,
+                bridge=_bridge_claims,
+                batch_id=batch_id,
+                case_draft=case_draft,
+                selected_draft_ids=list(selected_draft_ids or []),
+                authorized_write_draft_ids=requested_writes,
+                arguments=_decision_arguments or {
+                    "batch_id": batch_id,
+                    "selected_draft_ids": list(selected_draft_ids or []),
+                    "caseset_slug": caseset_slug,
+                    "adopted_via": adopted_via,
+                    "confirmed_by": confirmed_by,
+                    "idempotency_key": idempotency_key,
+                    "authorized_write_draft_ids": list(
+                        authorized_write_draft_ids or []),
+                },
+                consumed_jtis=consumed,
+            )
+        except decision_auth.DecisionAuthError as exc:
+            code = "E_USER_DECISION_REPLAYED" if "已经消费过" in str(exc) \
+                else "E_USER_DECISION_INVALID"
+            return _err(code, str(exc))
+    elif requested_writes or decision_context:
+        return _err("E_USER_DECISION_REQUIRED",
+                    "写授权派生只在可信 Test 会话的采纳卡上进行；"
+                    "工作台面的写授权走独立写确认卡。")
+
+    if not skip_drift_check:
+        drift = oracle.check_drift(batch_id, root=root)
+        if not drift["ok"]:
+            return _err(drift["code"], drift["message"], detail=drift.get("detail"))
+
+    params = {"selected_draft_ids": sorted(selected_draft_ids or []),
+              "caseset_slug": caseset_slug,
+              "case_draft_sha256": _artifact_state_digest(
+                  batch_id, "case_draft", root),
+              "intake_profile_sha256": _artifact_state_digest(
+                  batch_id, "intake_profile", root)}
+    with idempotency.reservation(batch_id, "adopt", params, idempotency_key,
+                                 owner=owner, root=root) as (key, replay):
+        if replay is not None:
+            return replay
+        if decision:
+            # 原子重放闸（owner 级台账，与 ingest 实体决定同一机制）：
+            # 事件扫描是软层，这里才是硬层——两层都在，忘一层另一层兜底。
+            if not artifacts.consume_owner_decision_receipt(
+                    owner=owner, decision_jti=decision["jti"],
+                    gate="adopt", root=root):
+                return _err("E_USER_DECISION_REPLAYED",
+                            "这份采纳决定已经消费过，不能重复采纳。")
+        r = _adopt.adopt(batch_id, selected_draft_ids=selected_draft_ids,
+                         caseset_slug=caseset_slug, adopted_via=adopted_via,
+                         confirmed_by=confirmed_by)
+        if not r.get("ok"):
+            return _err("E_ADOPT_REJECTED",
+                        "有用例没达到采纳标准，我先把它们修好再重新发起采纳。",
+                        machine="detail 说明哪些用例不达标；先用 journey_draft_cases "
+                                "修正用例草稿，再重新发起采纳。",
+                        detail=r)
+        # The bundle is a pure derivative of the approved caseset.  Keeping an
+        # older bundle after re-adoption would let execute run the previous
+        # cases while the UI shows the new frozen set.
+        artifacts.invalidate_bundle(batch_id, owner=owner, root=root)
+        derived_event: dict[str, Any] | None = None
+        if decision:
+            # 派生写授权：草稿摘要 → 冻结摘要的换算靠 adopt_confirm 事件里的
+            # identities（draft_id → case_id），digests 取冻结态
+            # source_case_digest——write_authorization 逐条比对的就是它。
+            caseset = artifacts.load_artifact(
+                batch_id, "approved_caseset", owner=owner, root=root)
+            by_case_id = {c.get("case_id"): c for c in caseset.get("cases") or []}
+            draft_to_case: dict[str, str] = {}
+            for event in reversed(artifacts.read_events(
+                    batch_id, owner=owner, root=root)):
+                if event.get("type") == "adopt_confirm" and \
+                        event.get("caseset_id") == caseset.get("caseset_id"):
+                    for identity in event.get("identities") or []:
+                        draft_to_case[str(identity.get("draft_id") or "")] = \
+                            str(identity.get("case_id") or "")
+                    break
+            authorized_case_ids = [draft_to_case[d] for d in requested_writes
+                                   if d in draft_to_case]
+            write_case_ids = {
+                cid for cid, c in by_case_id.items()
+                if _runtime.effective_write_risk({
+                    "writes": bool((c.get("side_effects") or {}).get("writes")),
+                    "actions": list((((c.get("automation") or {}).get("recipe")
+                                      or {}).get("actions")) or []),
+                })}
+            derived_event = artifacts.append_event(batch_id, {
+                "type": "write_confirm",
+                "caseset_id": caseset.get("caseset_id", ""),
+                "case_ids": authorized_case_ids,
+                "digests": {cid: by_case_id[cid].get("source_case_digest", "")
+                            for cid in authorized_case_ids},
+                "decision": ("authorized_some" if authorized_case_ids
+                             else "authorized_none"),
+                "declined": sorted(write_case_ids - set(authorized_case_ids)),
+                "via": "adopt_card",
+                "decided_by": confirmed_by,
+                "decision_jti": decision["jti"],
+                "decision_session": decision["session"],
+                "decision_turn": decision["turn"],
+                "ask_user_tool_call_id": decision["ask_user_tool_call_id"],
+            }, root=root)
+        out = _ok(approved_caseset=r.get("approved_caseset"),
+                  cases_gate=r.get("cases_gate"), idempotency_key=key,
+                  write_authorization=derived_event)
+        idempotency.record(batch_id, key, "adopt", out, params=params,
+                          owner=owner, root=root)
+        return out
+
+
+@_requires_trusted_owner
+@_serializes_batch_mutation
+def write_confirm(*, batch_id: str, case_ids: list[str] | None = None,
+                  decided_by: str = "", confirmed_via: str = "ask_user_card",
+                  decision_context: str = "", _bridge_claims: Any = None,
+                  _decision_arguments: dict[str, Any] | None = None,
+                  caller_surface: str = "unknown",
+                  root: str | None = None) -> dict[str, Any]:
+    """写确认落账（人闸卡四的服务端半边，0028）。
+
+    ## 这个工具为什么是补出来的
+
+    `pw_runtime.py:88` 在执行时查 `events.jsonl` 里该用例的 `write_confirm`，
+    查不到就 `SKIP_WRITE_UNCONFIRMED`。但生产侧**从来没有任何地方写过这种事件**
+    （当时只产出 adopt_confirm / tier_confirm / tool_call 三种）。
+    即：卡能弹、用户能答「4 条都允许」，**写用例照样被拦**，且用户无感知。
+    与 BB-502 同形——挂载面与运行时能力面不一致，中间那段是哑的。
+
+    ## 三条落法上的取舍
+
+    1. **空选是合法答案，不是错误。** 交互稿卡四的默认就是一条都不勾，
+       「都跳过，只跑只读的 8 条」是三个选项之一。空选要落一条**显式的**
+       「什么都不授权」事件——它与「没答过」在账本上必须可分：前者是用户
+       看过并拒绝了，后者是这道闸还没走。
+    2. **只认写用例，且只认当前采纳集里的。** 给一个不写数据的用例授权是无意义的，
+       给一个不存在的 case_id 授权是拼错——两者都判红而不是静默忽略：
+       静默忽略的症状是「我明明点了允许，它还是跳过」，最难查的那一类。
+    3. **逐条记 `source_case_digest`。** 授权的是**这批用例的内容**，不是一串 id。
+       用例改了以后旧确认自动失效（判定在 `execute_run.write_authorization`），
+       这是设计稿 §5.2 第 2 条「写确认不因重生成而复用上一次的确认」的落点。
+    """
+    blocked = _guarded(batch_id, "write_confirm", caller_surface, root)
+    if blocked:
+        return blocked
+    if not artifacts.has_artifact(batch_id, "approved_caseset", root=root):
+        return _err("E_NO_CASESET",
+                    "还没有采纳集，写确认无从谈起——先采纳再确认写操作。")
+
+    caseset = artifacts.load_artifact(batch_id, "approved_caseset", root=root)
+    by_id = {c.get("case_id"): c for c in caseset.get("cases") or []}
+    write_ids = {cid for cid, c in by_id.items()
+                 if _runtime.effective_write_risk({
+                     "writes": bool((c.get("side_effects") or {}).get("writes")),
+                     "actions": list((
+                         ((c.get("automation") or {}).get("recipe") or {}).get(
+                             "actions") or [])),
+                 })}
+
+    requested = list(dict.fromkeys(case_ids or []))   # 去重且保序
+    unknown = [c for c in requested if c not in by_id]
+    if unknown:
+        return _err("E_UNKNOWN_CASE",
+                    "有几条用例不在这次的采纳集里，我核对一下再来。",
+                    machine=f"这些 case_id 不在当前采纳集里：{unknown}。"
+                            "静默忽略会变成「我明明点了允许它还是跳过」,所以判红。")
+    non_write = [c for c in requested if c not in write_ids]
+    if non_write:
+        return _err("E_NOT_A_WRITE_CASE",
+                    "有几条用例根本不写数据，不需要你给写授权，我把它们去掉。",
+                    machine=f"这些用例不写数据,给写授权没有意义：{non_write}。"
+                            "通常是卡上勾错了行,或 side_effects.writes 标错了。")
+
+    if _bridge_claims is None:
+        return _err("E_USER_DECISION_REQUIRED",
+                    "写授权必须来自同一 Test 会话内真实完成的交互确认卡。")
+    if str(getattr(_bridge_claims, "owner", "") or "") != _batch_partition(
+            batch_id, root):
+        return _err("E_USER_DECISION_INVALID",
+                    "用户决定不属于当前批次 owner。")
+    try:
+        decision = decision_auth.verify_decision_context(
+            decision_context,
+            bridge=_bridge_claims,
+            batch_id=batch_id,
+            caseset=caseset,
+            requested_case_ids=requested,
+            arguments=_decision_arguments or {
+                "batch_id": batch_id,
+                "case_ids": list(case_ids or []),
+                "decided_by": decided_by,
+                "confirmed_via": confirmed_via,
+            },
+        )
+    except decision_auth.DecisionAuthError as exc:
+        return _err("E_USER_DECISION_INVALID", str(exc))
+    prior_jtis = {
+        str(event.get("decision_jti") or "")
+        for event in artifacts.read_events(batch_id, root=root)
+        if event.get("type") == "write_confirm"
+    }
+    if decision["jti"] in prior_jtis:
+        return _err("E_USER_DECISION_REPLAYED",
+                    "这份用户决定已经消费过，不能重复授权。")
+
+    event = artifacts.append_event(batch_id, {
+        "type": "write_confirm",
+        "caseset_id": caseset.get("caseset_id", ""),
+        "case_ids": requested,
+        # 逐条记内容指纹：授权的是内容不是 id（见上文取舍 3）
+        "digests": {c: by_id[c].get("source_case_digest", "") for c in requested},
+        # 空选是显式答案：这一栏让「看过并拒绝」与「还没走这道闸」可分
+        "decision": "authorized_some" if requested else "authorized_none",
+        "declined": sorted(write_ids - set(requested)),
+        "via": confirmed_via,
+        "decided_by": decided_by,
+        "decision_jti": decision["jti"],
+        "decision_session": decision["session"],
+        "decision_turn": decision["turn"],
+        "ask_user_tool_call_id": decision["ask_user_tool_call_id"],
+    }, root=root)
+    return _ok(event=event, authorized=requested,
+               declined=sorted(write_ids - set(requested)),
+               write_case_total=len(write_ids))
+
+
+@_requires_trusted_owner
+@_serializes_batch_mutation
+def change_tier(*, batch_id: str, new_tier: str, via: str = "",
+                caller_surface: str = "unknown",
+                root: str | None = None) -> dict[str, Any]:
+    """改档（ADR-3 / AC5）。采纳前允许；三格作废、intake_profile 保留、事件带来源。
+
+    「重生成」是模型的活（clarify/analyze/draft 是判断产物）；这里只负责作废与
+    账本一致性。失败整体回退，不留半新半旧。
+    """
+    blocked = _guarded(batch_id, "change_tier", caller_surface, root)
+    if blocked:
+        return blocked
+    r = _retier.change_tier(batch_id, new_tier=new_tier, via=via, root=root)
+    if not r.get("ok"):
+        return _err(r.get("code", "E_RETIER_REJECTED"), r["error"],
+                    detail={k: v for k, v in r.items()
+                            if k not in ("ok", "code", "error")})
+    return _ok(prior_tier=r["prior_tier"], tier=r["tier"],
+               invalidated=r["invalidated"], event=r["event"],
+               preserved_clarifications=r["preserved_clarifications"],
+               preserved_question_ledger=r["preserved_question_ledger"])
+
+
+@_requires_trusted_owner
+def collect_defects(*, batch_id: str, run_id: str,
+                    caller_surface: str = "unknown",
+                    root: str | None = None) -> dict[str, Any]:
+    """缺陷汇集出口（ADR-4 / AC20）：run 收据之后，失败 → 结构化缺陷候选。
+
+    只汇集不提交：草稿落批次目录 `defect_draft.json`，root_cause 留空标
+    pending_human（自动生成的根因是"把没查包装成查过了"）。blocked/observed/
+    skipped 逐类计数留痕——"这轮为什么只有 N 条草稿"必须可被追问。
+    提交动作不在本工具（0027 §2：写工具与确认闸同批放行，未到批次）。
+    """
+    blocked = _guarded(batch_id, "collect_defects", caller_surface, root)
+    if blocked:
+        return blocked
+    import os as _os
+    rd = artifacts.run_dir(run_id, root=root)
+    if not _os.path.isfile(_os.path.join(rd, "receipt.json")):
+        # 与 stepper 同口径：run_receipt 的存在性 = run 目录下 receipt.json
+        return _err("E_NO_RUN_RECEIPT",
+                    "该 run 还没有执行收据，缺陷汇集无从谈起——先执行再汇集。")
+    try:
+        r = _defect_exit.build_drafts(batch_id, run_id, root=root)
+    except artifacts.ArtifactError as exc:
+        return _err("E_DEFECT_COLLECT_REJECTED", str(exc))
+    return _ok(defect_draft=r["defect_draft"], count=r["count"],
+               excluded_counts=r["excluded_counts"])
+
+
+# ── 6–9. 机械类 ─────────────────────────────────────────────────────────────
+
+
+@_requires_trusted_owner
+@_serializes_batch_mutation
+def compile_bundle(*, batch_id: str, idempotency_key: str = "",
+                   caller_surface: str = "unknown",
+                   root: str | None = None) -> dict[str, Any]:
+    blocked = _guarded(batch_id, "compile", caller_surface, root)
+    if blocked:
+        return blocked
+    owner = _batch_partition(batch_id, root)
+    params = {"approved_caseset_sha256": _artifact_state_digest(
+        batch_id, "approved_caseset", root)}
+    with idempotency.reservation(batch_id, "compile", params, idempotency_key,
+                                 owner=owner, root=root) as (key, replay):
+        if replay is not None:
+            return replay
+        r = _compile.compile_bundle(batch_id)
+        if not r.get("ok"):
+            return _err("E_COMPILE_REJECTED",
+                        "有用例还不能转成可自动执行的形式，我先修正它们再编一次。",
+                        machine="detail 说明哪些用例无法编译成可执行配方；"
+                                "修正对应用例后重新调用 journey_compile。",
+                        detail=r)
+        out = _ok(bundle=r, idempotency_key=key)
+        idempotency.record(batch_id, key, "compile", out, params=params,
+                           owner=owner, root=root)
+        return out
+
+
+@_requires_trusted_owner
+@_serializes_batch_mutation
+def execute(*, batch_id: str, variables: dict[str, Any] | None = None,
+            case_ids: list[str] | None = None, base_url_override: str = "",
+            resume_run_id: str = "", timeout_s: int = 900,
+            idempotency_key: str = "", triggered_by: str = "fresh",
+            caller_surface: str = "unknown", root: str | None = None) -> dict[str, Any]:
+    """执行。副作用最重的一个，幂等闸的主战场。
+
+    `variables` 只把不可逆摘要纳入 key；既避免凭据落台账，也避免不同执行输入被
+    错误重放。timeout 与执行范围同样属于 key，triggered_by 仍只作审计说明。
+    """
+    try:
+        normalized_timeout = int(timeout_s)
+    except (TypeError, ValueError):
+        return _err("E_INVALID_TIMEOUT",
+                    "执行超时设置不是个有效的秒数，我改回默认值再跑。",
+                    machine=f"timeout_s 必须是 {_execute.MIN_TIMEOUT_S}.."
+                            f"{_execute.MAX_TIMEOUT_S} 的整数。")
+    if not _execute.MIN_TIMEOUT_S <= normalized_timeout <= _execute.MAX_TIMEOUT_S:
+        return _err("E_INVALID_TIMEOUT",
+                    f"执行超时只能设在 {_execute.MIN_TIMEOUT_S} 到 "
+                    f"{_execute.MAX_TIMEOUT_S} 秒之间，我调进范围再跑。",
+                    machine=f"timeout_s 超出 {_execute.MIN_TIMEOUT_S}.."
+                            f"{_execute.MAX_TIMEOUT_S} 秒。")
+    blocked = _guarded(batch_id, "execute", caller_surface, root)
+    if blocked:
+        return blocked
+    pending = _environment_pending(batch_id, root)
+    if pending:
+        return pending
+    owner = _batch_partition(batch_id, root)
+    write_decision = _execute.write_authorization(
+        batch_id, owner=owner, root=root
+    )["decision_state"]
+    params = {"case_ids": sorted(case_ids or []),
+              "base_url_override": base_url_override,
+              "resume_run_id": resume_run_id,
+              "timeout_s": normalized_timeout,
+              "variables_sha256": sha256_digest(variables or {}),
+              "write_decision_sha256": sha256_digest(write_decision),
+              **_bundle_state(batch_id, root)}
+    with idempotency.reservation(batch_id, "execute", params, idempotency_key,
+                                 owner=owner, root=root) as (key, replay):
+        if replay is not None:
+            return replay
+        request_digest = sha256_digest(params)
+        run_id = resume_run_id or artifacts.new_run_id()
+        intent, created = idempotency.begin_execution_intent(
+            batch_id, key, request_digest, run_id,
+            write_risk=_selected_authorized_write_risk(
+                batch_id, case_ids, owner=owner, root=root),
+            owner=owner, root=root)
+        if str(intent.get("request_digest") or "") != request_digest:
+            return _err(
+                "E_IDEMPOTENCY_CONFLICT",
+                "这个执行 key 已绑定另一组输入；本次没有执行。",
+                idempotency_key=key)
+        recovered = _recover_completed_execute(
+            batch_id, intent, owner=owner, root=root)
+        if recovered is None and intent.get("status") == "complete":
+            candidate = intent.get("result")
+            if isinstance(candidate, dict):
+                recovered = dict(candidate)
+                recovered["recovered"] = True
+        if recovered is not None:
+            recovered["idempotency_key"] = key
+            recovered["triggered_by"] = triggered_by
+            idempotency.update_execution_intent(
+                batch_id, key, status="complete", result=recovered,
+                owner=owner, root=root)
+            idempotency.record(batch_id, key, "execute", recovered, params=params,
+                               owner=owner, root=root)
+            return recovered
+        if intent.get("status") in {"effect_started", "corrupt"} \
+                and bool(intent.get("write_risk")):
+            return _err(
+                "E_EXECUTION_RECONCILIATION_REQUIRED",
+                "上次执行可能已经向被测系统发送写请求，但没有留下完整收据。"
+                "为避免自动重复写入，本次已停止；请先人工核对目标系统后再决定。",
+                run_id=intent.get("run_id"), idempotency_key=key)
+        retry_resume = ""
+        reserved_run_id = str(intent.get("run_id") or run_id)
+        if not created and intent.get("status") == "effect_started":
+            retry_resume = reserved_run_id
+
+        def mark_effect_boundary() -> None:
+            idempotency.update_execution_intent(
+                batch_id, key, status="effect_started",
+                owner=owner, root=root)
+
+        r = _execute.execute(batch_id, variables=variables, case_ids=case_ids,
+                             resume_run_id=resume_run_id or retry_resume,
+                             base_url_override=base_url_override,
+                             timeout_s=normalized_timeout,
+                             triggered_by=triggered_by, root=root,
+                             reserved_run_id=reserved_run_id,
+                             on_effect_boundary=mark_effect_boundary)
+        if not r.get("ok"):
+            return _err("E_EXECUTE_FAILED", str(r.get("error") or "执行失败"), detail=r)
+        out = _ok(run_id=r.get("run_id"), receipt=r.get("receipt"),
+                  idempotency_key=key, triggered_by=triggered_by)
+        idempotency.update_execution_intent(
+            batch_id, key, status="complete", result=out,
+            owner=owner, root=root)
+        idempotency.record(batch_id, key, "execute", out, params=params,
+                           owner=owner, root=root)
+        return out
+
+
+@_requires_trusted_owner
+def project(*, run_id: str, caller_surface: str = "unknown",
+            root: str | None = None) -> dict[str, Any]:
+    r = _project.project(run_id)
+    if not r.get("ok"):
+        return _err("E_PROJECT_REJECTED",
+                    "这一趟的结论还立不住：证据或机械校验没过，我查一下缺什么。",
+                    machine="投影没过 evidence_gate / mechanical_check;"
+                            "detail 里是逐条问题。",
+                    detail=r)
+    return _ok(**{k: v for k, v in r.items() if k != "ok"})
+
+
+def _trace_handle(run_dir: str, verdict: dict[str, Any]) -> str | None:
+    """Return a relative, existing trace handle; never leak an absolute path."""
+    from server.journey.pw_harness import case_slug
+    ident = str(verdict.get("id") or "").split("/")[-1]
+    suffix = case_slug(ident)
+    try:
+        names = os.listdir(run_dir)
+    except OSError:
+        return None
+    for name in names:
+        if not name.endswith(suffix):
+            continue
+        candidate = os.path.join(run_dir, name, "trace.zip")
+        if os.path.isfile(candidate):
+            return os.path.join(name, "trace.zip").replace("\\", "/")
+    return None
+
+
+@_requires_trusted_owner
+@_serializes_batch_mutation
+def coverage(*, batch_id: str, run_id: str = "", caller_surface: str = "unknown",
+             root: str | None = None) -> dict[str, Any]:
+    blocked = _guarded(batch_id, "coverage", caller_surface, root)
+    if blocked:
+        return blocked
+    r = _coverage.build_coverage(batch_id, run_id)
+    if not r.get("ok"):
+        return _err("E_COVERAGE_NOT_DONE",
+                    "还有几条规则没说清是怎么覆盖的，我补齐之后再收口。",
+                    machine="detail 列出缺口清单；逐条补判别用例，或补一条带"
+                            "「谁覆盖+不覆盖的后果」的不覆盖声明。",
+                    detail=r)
+    return _ok(**{k: v for k, v in r.items() if k != "ok"})
+
+
+# ── 读接口（薄壳的数据来源）─────────────────────────────────────────────────
+
+
+@_requires_trusted_owner
+def list_batches(*, owner: str = "", caller_surface: str = "unknown",
+                 root: str | None = None) -> dict[str, Any]:
+    rows = artifacts.list_batches(owner=owner or None, root=root)
+    return _ok(batches=[{
+        "batch_id": b["batch_id"], "title": b.get("title", ""),
+        "base_url": b.get("base_url", ""), "owner": b.get("owner", ""),
+        "created_at": b.get("created_at", ""),
+        "run_count": len(b.get("run_ids") or []),
+        "stepper": b.get("stepper", []),
+    } for b in rows], stepper_definition=stepper_definition())
+
+
+def stepper_definition() -> list[dict[str, str]]:
+    """九格的**完整定义**（kind + 展示名 + 顺序）。
+
+    前端与调试面都只渲染服务端给的这份，不再各持常量——这就是 §9 第 3 条
+    「消灭第二真相」的落点。界面上的四段是它的投影，不是另一个数。
+    """
+    return [{"artifact": k, "label": artifacts.STEP_LABELS.get(k, k)}
+            for k in artifacts.STEPPER_ORDER]
+
+
+@_requires_trusted_owner
+def get_batch(*, batch_id: str, caller_surface: str = "unknown",
+              root: str | None = None) -> dict[str, Any]:
+    check = gate.require_batch(batch_id, root=root)
+    if not check["ok"]:
+        return _err(check["code"], check["message"])
+    meta = artifacts.load_batch(batch_id, root=root)
+    steps = artifacts.stepper(batch_id, root=root)
+    present = {s["artifact"] for s in steps if s["present"]}
+    payload: dict[str, Any] = {}
+    for kind in ("intake_profile", "business_frame", "test_analysis", "case_draft",
+                 "approved_caseset", "coverage_ledger"):
+        if kind in present:
+            payload[kind] = artifacts.load_artifact(batch_id, kind, root=root)
+    runs = []
+    for rid in (meta.get("run_ids") or []):
+        rd = artifacts.run_dir(rid, root=root)
+        receipt_path = os.path.join(rd, "receipt.json")
+        row: dict[str, Any] = {"run_id": rid, "receipt": None, "verdicts": []}
+        if os.path.isfile(receipt_path):
+            import json
+            with open(receipt_path, encoding="utf-8") as fh:
+                row["receipt"] = json.load(fh)
+        row["verdicts"] = _project.read_verdicts(rid)
+        for verdict in row["verdicts"]:
+            verdict["trace_rel"] = _trace_handle(rd, verdict)
+        runs.append(row)
+    # 需求正文随批次详情一起给（BB-672 修复后的补口）：TAPD 路径下正文由宿主取数
+    # 并冻结在 requirement.txt / oracle 快照里，模型侧全程没见过它——而 clarify
+    # 的每条非探测规则都要求带正文引句（source_quote），拿不到正文这条路就死在
+    # 澄清上（2026-08-28 实测:模型只能去打登录墙后的 tapd.cn,然后回头请用户手贴）。
+    # 粘贴路径下模型本来就有正文,多返回一份不构成新的暴露面。
+    requirement_text = ""
+    req_path = os.path.join(artifacts.batch_dir(batch_id, root=root),
+                            "requirement.txt")
+    if os.path.isfile(req_path):
+        with open(req_path, encoding="utf-8") as fh:
+            requirement_text = fh.read()
+    return _ok(batch=meta, stepper=steps, stepper_definition=stepper_definition(),
+               artifacts=payload, runs=runs, requirement_text=requirement_text,
+               events=artifacts.read_events(batch_id, root=root))
+
+
+@_requires_trusted_owner
+def open_trace(*, batch_id: str, run_id: str, trace_rel: str,
+               caller_surface: str = "unknown",
+               root: str | None = None) -> dict[str, Any]:
+    """Open one owner-bound trace after batch/run/path membership checks."""
+    check = gate.require_batch(batch_id, root=root)
+    if not check["ok"]:
+        return _err(check["code"], check["message"])
+    batch = artifacts.load_batch(batch_id, root=root)
+    if run_id not in (batch.get("run_ids") or []):
+        return _err("E_NO_TRACE", "trace 不属于该批次。")
+    rd = artifacts.run_dir(run_id, root=root)
+    candidate = os.path.realpath(os.path.join(rd, str(trace_rel or "")))
+    try:
+        inside = os.path.commonpath([os.path.realpath(rd), candidate]) == \
+            os.path.realpath(rd)
+    except ValueError:
+        inside = False
+    if not inside or os.path.basename(candidate) != "trace.zip" or \
+            not os.path.isfile(candidate):
+        return _err("E_NO_TRACE", "trace 不存在或路径非法。")
+    from server.gateway import journey_console
+    result = journey_console.open_trace(run_id, trace_rel)
+    if not result.get("ok"):
+        return _err(str(result.get("code") or "E_TRACE_SPAWN_FAILED"),
+                    str(result.get("error") or "trace 打开失败"))
+    # MCP/browser payload never returns the server's absolute path.
+    # The host command contains an absolute artifact path. It is useful on the
+    # host-only console but must not cross the authenticated browser/MCP bridge.
+    return _ok(started=bool(result.get("started")),
+               spawn_error=str(result.get("spawn_error") or ""))

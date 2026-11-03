@@ -1,0 +1,51 @@
+{
+  "_note": [
+    "并行施工时各线的独占区声明，由协调方（main）维护，施工线不自己往里加。",
+    "被 scripts/staged_scope_guard.py 读；查不到的 agent 一律 fail closed（退出码 2）。",
+    "前缀是路径前缀匹配，不做 glob：以 / 结尾表示目录，否则表示文件名前缀。",
+    "缘起 BB-518（2026-08-12 同日两起越界：一次全量 add 卷走他人在建文件，一次覆盖他人 SKILL.md）。"
+  ],
+  "agents": {
+    "m2-defect": {
+      "owner": "缺陷出口 skill",
+      "allow": [
+        "extensions/test-partner/skills/defect-filing/",
+        "extensions/test-partner/tests/test_defect_",
+        "extensions/test-partner/scripts/staged_scope_guard.py",
+        "extensions/test-partner/scripts/agent-scopes.json",
+        "extensions/test-partner/tests/test_scope_guard.py"
+      ],
+      "granted_by": "main 2026-08-12 归属裁定"
+    },
+    "m2-build3": {
+      "owner": "主证据 + 白盒 + 镜像复验（后端旅程）",
+      "allow": [
+        "extensions/test-partner/server/journey/",
+        "extensions/test-partner/tests/test_journey_",
+        "extensions/test-partner/tests/test_execute",
+        "extensions/test-partner/tests/test_gate",
+        "extensions/test-partner/scripts/regression_gate.sh",
+        "extensions/test-partner/scripts/deductions.py",
+        "extensions/test-partner/scripts/known-deductions.json",
+        "agent-lab-runs/deeptutor-absorb-m2-20260810/",
+        "Dockerfile"
+      ],
+      "granted_by": "main 2026-08-12 并行分工 + 0032 镜像重建授权 Dockerfile fork 块",
+      "_note": "cases.jsonl 三线共写，只 append；agent-lab-runs 目录三线都写各自证据子目录，暂存冲突靠只 add 具体文件规避"
+    },
+    "m2-i18n": {
+      "owner": "前端 i18n 抽取 + 触点断言守",
+      "allow": [
+        "web/components/test-journey/",
+        "web/app/(workspace)/test-journey/",
+        "web/locales/en/app.json",
+        "web/locales/zh/app.json",
+        "web/components/chat/home/ChatMessages.tsx",
+        "tests/core/test_fork_capabilities_runtime.py"
+      ],
+      "granted_by": "main 2026-08-12 并行分工",
+      "_note": "ChatMessages.tsx 与 locales 是既有登记触点行，i18n 在既有行内改动不新增登记行"
+    }
+  },
+  "_pending": []
+}

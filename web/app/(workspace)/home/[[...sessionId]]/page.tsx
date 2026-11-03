@@ -15,6 +15,7 @@ import {
   BarChart3,
   BrainCircuit,
   Clapperboard,
+  ClipboardCheck,
   Code2,
   Compass,
   Database,
@@ -38,6 +39,13 @@ import type { ContextBudget } from "@/components/chat/home/ContextBudgetChip";
 import { ChatMessageList } from "@/components/chat/home/ChatMessages";
 import { TurnNavigator } from "@/components/chat/home/TurnNavigator";
 import SessionLoadingView from "@/components/chat/home/SessionLoadingView";
+import { SessionViewTabs } from "@/components/chat/trajectory/SessionViewTabs";
+import { TrajectoryPanel } from "@/components/chat/trajectory/TrajectoryPanel";
+import {
+  conversationLayerClass,
+  shouldRenderTurnNavigator,
+  type SessionView,
+} from "@/components/chat/trajectory/view-state";
 // Imported eagerly so the drawer shell is always mounted off-screen —
 // clicking a chip becomes a single CSS class flip, no chunk fetch + double
 // render. The heavy renderers inside still load lazily.
@@ -213,7 +221,15 @@ interface CapabilityDef {
   loopEngine?: boolean;
 }
 
-const CAPABILITIES: CapabilityDef[] = [
+// [fork] `export` 是为了让触点 #9 有机械守：这张表原本写在组件内部、未导出，
+// python 侧与 node 侧都断不到它，漏改的表现是「聊天里选不到测试模式」——
+// 入口直接消失，且没有任何测试会红。判据在 `web/tests/capability-picker.test.ts`：
+// 它 import 这个真数组，喂给真 ChatComposer 渲染 picker，断选项在场。
+// 断源码里出现过 "test" 证明不了 picker 真渲染得出它（BB-508 就是这么漏的）。
+//
+// Next 的 page 类型校验是 `Specific extends AppPageConfig<...>`（结构性、非精确），
+// 多一个具名导出不违反它——`.next/types/validator.ts` 可查。
+export const CAPABILITIES: CapabilityDef[] = [
   {
     value: "",
     label: "Chat",
@@ -276,6 +292,18 @@ const CAPABILITIES: CapabilityDef[] = [
     allowedTools: ["web_search", "code_execution"],
     defaultTools: [],
     loopEngine: true,
+  },
+  {
+    // [fork] 测试旅程载体（决策 0019 案 B）。DT 没有意图路由——本模式**由用户显式
+    // 选中**，不会被自动识别，所以它必须在这张表里才存在。
+    // allowedTools 留空：旅程用的 journey_* 是 MCP 工具，走 build_tool_view 那条链，
+    // 不在这张内置工具表的管辖范围内。填进来只会让用户以为这里能开关它们。
+    value: "test",
+    label: "Test",
+    description: "Take one requirement from intake to sign-off",
+    icon: ClipboardCheck,
+    allowedTools: [],
+    defaultTools: [],
   },
 ];
 
@@ -648,6 +676,15 @@ export default function ChatPage() {
     }
   }, [capabilityNeedsConfig, ensureActivityPanelOpen]);
   const hasMessages = state.messages.length > 0;
+  // ─── Conversation / trajectory ───
+  // Which of the two peer views is on screen. Page state on purpose: not in
+  // the URL and not in session preferences (see SessionViewTabs), and it falls
+  // back to the conversation whenever the session changes.
+  const [sessionView, setSessionView] = useState<SessionView>("conversation");
+  useEffect(() => {
+    setSessionView("conversation");
+  }, [state.sessionId]);
+  const trajectoryOpen = hasMessages && sessionView === "trajectory";
   // Time-of-day greeting: seeded once on mount from the user's local clock so
   // the heading stays stable while they're on the page. State (not useMemo)
   // because the random pick would otherwise mismatch SSR ↔ client hydration.
@@ -1144,15 +1181,22 @@ export default function ChatPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const p = new URLSearchParams(window.location.search);
+    const testBatch = p.get("test_batch")?.trim() ?? "";
     const qc = p.get("capability");
     const qt = p.getAll("tool");
-    if (qc !== null) handleSelectCapability(qc || "");
+    if (/^[A-Za-z0-9._-]{1,128}$/.test(testBatch)) {
+      handleSelectCapability("test");
+      handlePrefillComposer(
+        t("Continue test journey {{batchId}}", { batchId: testBatch }),
+      );
+    } else if (qc !== null) handleSelectCapability(qc || "");
     else if (qt.length) {
       const valid = qt.filter((t): t is ToolName =>
         ALL_TOOLS.some((d) => d.name === t),
       );
       if (valid.length) setTools(Array.from(new Set(valid)));
     }
+    // URL intent is consumed exactly once before the session URL replaces the query.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1969,6 +2013,9 @@ export default function ChatPage() {
               />
             </div>
           </div>
+          {!sessionLoading && hasMessages ? (
+            <SessionViewTabs view={sessionView} onChange={setSessionView} />
+          ) : null}
           <div className="flex w-full flex-1 min-h-0 flex-col">
             {sessionLoading ? (
               <div className="flex w-full flex-1 min-h-0 justify-center px-6">
@@ -1998,8 +2045,14 @@ export default function ChatPage() {
               // inside the masked scroll container (its top/bottom fade
               // would clip the rail's ends).
               <div className="relative flex w-full flex-1 min-h-0 flex-col">
+                {/* The transcript stays mounted whichever tab is on screen —
+                    the trajectory hides it, never unmounts it, so a turn that
+                    streams while the user is reading the trajectory keeps
+                    following its own tail and comes back exactly where they
+                    left it (see conversationLayerClass). */}
                 <div
                   ref={messagesContainerRef}
+                  aria-hidden={trajectoryOpen}
                   data-chat-scroll-root="true"
                   onScroll={handleMessagesScroll}
                   onClick={handleMessagesClick}
@@ -2008,7 +2061,7 @@ export default function ChatPage() {
                   // header and composer (siblings outside this scrollport) on
                   // classic-scrollbar platforms; plain `stable` would shift it
                   // ~half a scrollbar-width left of them.
-                  className={`w-full flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable_both-edges] ${hasMessages ? "pt-6" : "pt-2 pb-6"}`}
+                  className={`w-full flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable_both-edges] ${hasMessages ? "pt-6" : "pt-2 pb-6"} ${conversationLayerClass(sessionView)}`}
                   style={
                     hasMessages
                       ? (() => {
@@ -2055,12 +2108,17 @@ export default function ChatPage() {
                     />
                   </div>
                 </div>
-                <TurnNavigator
-                  entries={chatOutline}
-                  scrollRootRef={messagesContainerRef}
-                  onJump={jumpToTurn}
-                  onJumpToBottom={resumeFollowingLatest}
-                />
+                {shouldRenderTurnNavigator(sessionView) ? (
+                  <TurnNavigator
+                    entries={chatOutline}
+                    scrollRootRef={messagesContainerRef}
+                    onJump={jumpToTurn}
+                    onJumpToBottom={resumeFollowingLatest}
+                  />
+                ) : null}
+                {trajectoryOpen ? (
+                  <TrajectoryPanel messages={state.messages} />
+                ) : null}
               </div>
             )}
 

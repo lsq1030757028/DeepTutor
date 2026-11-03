@@ -37,7 +37,15 @@ py -3 -m venv .venv
 scripts\start_server.cmd
 ```
 
-等价于 `.venv\Scripts\python.exe -m server.main`。前台运行，Ctrl+C 停止，
+启动前必须把同一个 `TEST_JOURNEY_BRIDGE_SECRET`（至少 32 UTF-8 字节）分别写入
+DeepTutor 根目录的 gitignored `.env` 与本目录的 gitignored `config/secrets.env`。
+`start_server.cmd` 会先做只显示键态的同值预检，缺失、过短、重复或不一致都在打开监听前
+失败；不会输出值、长度、掩码或摘要。默认检查 `..\..\.env`，独立目录部署可用非敏感路径
+变量 `DEEPTUTOR_ENV_FILE` 指向 DeepTutor 的实际 `.env`。
+
+预检通过后等价于 `.venv\Scripts\python.exe -m server.main`。`server.main` 还会从
+`config/secrets.env` 再校验并注入当前宿主进程，防止绕过入口时带着缺失或冲突值启动。
+前台运行，Ctrl+C 停止，
 启动时会把配置页地址打在横幅里。首次启动 Windows 防火墙可能弹窗，允许即可
 （需放行专用/专有网络，容器走 Docker NAT 访问宿主；配置面绑回环，与防火墙无关）。
 
@@ -145,7 +153,7 @@ SOUL 提示词即可：
 | 文件 | 内容 | 进版本库？ |
 | --- | --- | --- |
 | `config/gateway.json` | 非敏感：子服务端口、放行工具名、DeepTutor 地址 | 否（每台机器一份） |
-| `config/secrets.env` | 敏感：`TAPD_ACCESS_TOKEN` 等 | **否** |
+| `config/secrets.env` | 敏感：`TAPD_ACCESS_TOKEN`、`TEST_JOURNEY_BRIDGE_SECRET` 等 | **否** |
 | `config/environments.json` | 敏感：测试环境的 `base_url` 与变量键值对（`{{token}}` 的真值） | **否** |
 | `config/secrets.env.example` | 模板与说明 | 是 |
 
@@ -154,6 +162,8 @@ SOUL 提示词即可：
   「已配置 / 未配置」+ 掩码（至多末 4 位）+ 长度出现。这条有硬断言盯着
   （`tests/test_gateway_config.py`、`tests/test_gateway_webapp.py`、
   `tests/test_execute.py` 与 `scripts/verify_server.py`）。
+- `TEST_JOURNEY_BRIDGE_SECRET` 更严格：公开状态只给 `configured` 键态，不给掩码、长度
+  或摘要；真实值只存在上述两个 gitignored 文件及启动后的两个进程环境里。
 - **凭据不经过聊天**：执行用例时传的是**环境名**，不是凭据。解析在网关进程内完成，
   值不进模型上下文、不进聊天历史。`list_environments` 工具连变量键名都不返回。
 - **权限的实话**：0.6 的权限意识止步于「不进版本库、不出本机、不进聊天、不进容器」。

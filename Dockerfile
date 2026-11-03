@@ -72,10 +72,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies. Debian slim currently publishes HTTP mirror URLs;
+# promote them to TLS and retry transient mirror/proxy 5xx responses. Without
+# this, one failed archive fetch aborts an otherwise reproducible image build.
 # Note: libgl1 and libglib2.0-0 are required for OpenCV (used by mineru)
 # Rust is required for building tiktoken and other packages without pre-built wheels
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
+        /etc/apt/sources.list.d/debian.sources \
+    && apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
     curl \
     git \
     build-essential \
@@ -87,7 +92,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/* \
-    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    && curl --retry 5 --retry-all-errors --connect-timeout 30 \
+        --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | RUSTUP_MAX_RETRIES=5 sh -s -- -y --profile=minimal
 
 # Add Rust to PATH
 ENV PATH="/root/.cargo/bin:${PATH}"
@@ -103,9 +110,12 @@ RUN pip install --upgrade pip && \
 # ============================================
 FROM python:3.11-slim AS production
 
+ARG DEEPTUTOR_BUILD_REVISION=unknown
+
 # Labels
 LABEL maintainer="DeepTutor Team" \
-      description="DeepTutor: AI-Powered Personalized Learning Assistant"
+      description="DeepTutor: AI-Powered Personalized Learning Assistant" \
+      org.opencontainers.image.revision="${DEEPTUTOR_BUILD_REVISION}"
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -132,7 +142,10 @@ WORKDIR /app
 #       installs with `pip install git+…`, which shells out to git. It is needed
 #       in *this* image and not in the runner: installing is a privileged
 #       main-app action, running is the runner's (Dockerfile.runner).
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
+        /etc/apt/sources.list.d/debian.sources \
+    && apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
     curl \
     ca-certificates \
     bash \
@@ -174,6 +187,18 @@ COPY scripts/ ./scripts/
 # config/ 是每机一份且含凭据模板，运行时从数据卷取）。
 COPY extensions/test-partner/server/ ./extensions/test-partner/server/
 COPY extensions/test-partner/skills/ ./extensions/test-partner/skills/
+
+# ── [fork] TAPD MCP 运行时：已移除（Delta 二十，TAPD 收敛为单一服务）────────
+#
+# 这里曾经把第三方 mcp-server-tapd==8.0.80 装进镜像（决策 0012 的 B / 0027 执行）。
+# 移除原因不是它坏了，是用户视角里「查 TAPD」本来就是一件事，两个服务把内部结构
+# 泄漏成了使用复杂度：两次连接、两处授权。TAPD 能力现由自有仓 tapd-capability
+# 单一提供（契约工具 + 只读查询），见 vibe-flow 运行目录的 tapd-unify.md。
+#
+# 原块当初就被要求写成「整块可删」（0018 的附加条件），这次正是按那个设计删的——
+# 删掉即回到「容器里没有 TAPD 运行时」，其余一切照跑。
+# ── fork 块结束 ──────────────────────────────────────────────────────────────
+
 COPY pyproject.toml ./
 COPY requirements/ ./requirements/
 COPY requirements.txt ./
@@ -463,7 +488,8 @@ RUN mkdir -p /app/web/.next \
     && chown deeptutor:deeptutor /app/web /app/web/.next
 
 # Install development tools
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
     vim \
     git \
     && rm -rf /var/lib/apt/lists/*

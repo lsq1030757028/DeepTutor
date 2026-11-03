@@ -4,11 +4,10 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import re
 import subprocess
-from pathlib import Path
 from urllib.parse import urlsplit
-
 
 CANONICAL = "lsq1030757028/deeptutor"
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -31,10 +30,7 @@ def repo_from_remote(url: str) -> str:
             raise SystemExit("origin must be github.com")
     else:
         parsed = urlsplit(raw)
-        if (
-            parsed.scheme.lower() != "https"
-            or (parsed.hostname or "").lower() != "github.com"
-        ):
+        if parsed.scheme.lower() != "https" or (parsed.hostname or "").lower() != "github.com":
             raise SystemExit("origin must use https://github.com")
         path = parsed.path
     if path.startswith("/"):

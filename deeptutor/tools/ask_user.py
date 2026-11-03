@@ -24,12 +24,25 @@ from dataclasses import dataclass
 from typing import Any
 
 MAX_QUESTIONS = 4
-MAX_OPTIONS = 8
+# Options past this count are refused (the model gets an error and re-issues
+# the question), never dropped. The old cap of 8 was applied by silent
+# truncation: the Test-mode adoption card carries up to 8 write cases and the
+# model put a "no authorization" row in front of them, so the 9th option —
+# draft d8 — vanished from the write-authorization card without a trace
+# (BB-715, 2026-09-05). A gate card with a missing option is a broken gate.
+MAX_OPTIONS = 12
 MAX_OPTION_CHARS = 120  # option label
 MAX_OPTION_DESC_CHARS = 200
 MAX_HEADER_CHARS = 16
 MAX_QUESTION_CHARS = 800
-MAX_INTRO_CHARS = 400
+# The intro is where a gate card carries the material the user is asked to
+# read before deciding — for the Test-mode adoption card that is one full
+# write-disclosure per case (write_scope / cleanup / authorization). The old
+# 400-char ceiling silently cut those disclosures to "…" on the card the user
+# was told to read carefully (BB-715, 2026-09-05). The ceiling is a runaway
+# guard, not a layout budget: the card renders long intros as markdown and
+# the disclosure must never be shortened on the way to the user.
+MAX_INTRO_CHARS = 4000
 MAX_PLACEHOLDER_CHARS = 120
 
 # Labels the model sometimes adds as its own catch-all option. The card
@@ -186,8 +199,12 @@ def _build_question(raw: Any, idx: int, used_ids: set[str]) -> AskUserQuestion |
                 continue
             seen_labels.add(normalised.label)
             cleaned.append(normalised)
-            if len(cleaned) >= MAX_OPTIONS:
-                break
+        if len(cleaned) > MAX_OPTIONS:
+            return (
+                f"Question #{idx + 1}: {len(cleaned)} options exceed the limit of "
+                f"{MAX_OPTIONS}. Split the question or trim the options — options are "
+                "never dropped silently."
+            )
         options = tuple(cleaned)
 
     # ``multi_select`` is canonical; accept camelCase ``multiSelect``

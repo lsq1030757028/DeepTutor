@@ -53,6 +53,25 @@ class _FailingCapability(BaseCapability):
         raise RuntimeError("intentional failure")
 
 
+class _BlockingCapability(BaseCapability):
+    """Capability that exposes whether its background task was cancelled."""
+
+    manifest = CapabilityManifest(name="blocking", description="Blocks until cancelled.")
+
+    def __init__(self) -> None:
+        self.cancelled = asyncio.Event()
+        self.task: asyncio.Task[None] | None = None
+
+    async def run(self, context: UnifiedContext, stream: StreamBus) -> None:
+        self.task = asyncio.current_task()
+        await stream.content("started", source=self.name)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
+
+
 def _make_orchestrator(
     capabilities: dict[str, BaseCapability] | None = None,
 ) -> ChatOrchestrator:
@@ -158,6 +177,30 @@ class TestOrchestratorErrorHandling:
 
         done_events = [e for e in events if e.type == StreamEventType.DONE]
         assert len(done_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_closing_stream_cancels_and_awaits_capability_task(self) -> None:
+        capability = _BlockingCapability()
+        orch = _make_orchestrator({"blocking": capability})
+        ctx = UnifiedContext(user_message="stop early", active_capability="blocking")
+        stream = orch.handle(ctx)
+
+        assert (await anext(stream)).type == StreamEventType.SESSION
+        assert (await anext(stream)).content == "started"
+
+        await stream.aclose()
+        cancelled_in_time = capability.cancelled.is_set()
+        try:
+            if capability.task is not None and not capability.task.done():
+                capability.task.cancel()
+                await capability.task
+        except asyncio.CancelledError:
+            pass
+
+        assert cancelled_in_time, (
+            "closing the response stream left the capability task running; "
+            "its ContextVars may later be finalized from a different context"
+        )
 
 
 # ---------------------------------------------------------------------------

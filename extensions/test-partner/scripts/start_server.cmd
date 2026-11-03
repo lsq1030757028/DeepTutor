@@ -25,6 +25,13 @@ call "%REPO_ROOT%\.venv\Scripts\activate.bat"
 
 set "PYTHONIOENCODING=utf-8"
 
+if not defined DEEPTUTOR_ENV_FILE set "DEEPTUTOR_ENV_FILE=%REPO_ROOT%\..\..\.env"
+"%VENV_PY%" -m server.journey.bridge_runtime --deeptutor-env "%DEEPTUTOR_ENV_FILE%"
+if errorlevel 1 (
+    echo [ERROR] Journey bridge preflight failed. No listener was started.
+    exit /b 1
+)
+
 echo [test-partner] starting capability gateway  (Ctrl+C to stop)
 echo [test-partner]   config page : http://localhost:3789    ^<- open this to set tokens
 echo [test-partner]   MCP endpoint: http://0.0.0.0:3790/mcp

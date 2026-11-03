@@ -10,6 +10,7 @@ import pytest
 
 
 SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "verify_coding_source.py"
+JENKINSFILE = Path(__file__).resolve().parents[3] / "Jenkinsfile"
 RESOLVER_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "resolve_coding_source.py"
 SPEC = importlib.util.spec_from_file_location("verify_coding_source", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
@@ -170,3 +171,23 @@ def test_non_github_host_is_rejected(remote):
 def test_non_https_url_scheme_is_rejected(remote):
     with pytest.raises(SystemExit, match="origin must use https://github.com"):
         VERIFY_CODING_SOURCE.repo_from_remote(remote)
+
+
+def test_coding_pipeline_keeps_the_complete_no_deploy_uat_gate():
+    pipeline = JENKINSFILE.read_text(encoding="utf-8")
+    required = [
+        "git merge-base --is-ancestor",
+        "--junitxml=/workspace/ci-artifacts/test-partner.xml",
+        "pytest -q tests deeptutor/learning/tests",
+        "python -m playwright install --with-deps chromium",
+        "npm run test:node",
+        "npm run i18n:parity",
+        "npm run build",
+        "npm run perf:check",
+    ]
+    for command in required:
+        assert command in pipeline
+    assert "no-deploy" in pipeline
+    assert "python:3.11-slim" not in pipeline
+    assert "deeptutor start" not in pipeline
+    assert "--port 3785" not in pipeline

@@ -76,14 +76,17 @@ for (const manifestFile of manifestFiles) {
   const route = normalizePublicRoute(manifestKey);
   const entryFiles = manifest.entryJSFiles;
 
-  const rootLayoutFiles = entryFiles["[project]/app/layout"] || [];
+  // Next 16.2 includes the absolute project path after `[project]`, while
+  // newer builds shorten the same key to `[project]/app/layout`.
+  const rootLayoutKey = Object.keys(entryFiles).find((key) => key.endsWith("/app/layout"));
+  const rootLayoutFiles = rootLayoutKey ? entryFiles[rootLayoutKey] : [];
   if (!rootShellSize && rootLayoutFiles.length > 0) {
     rootShellSize = sumChunkSizes(rootLayoutFiles);
   }
   const rootLayoutChunks = new Set(rootLayoutFiles);
 
-  const routeEntryKey = Object.keys(entryFiles).find(
-    (key) => key.startsWith("[project]/app/") && key.endsWith("/page") && !key.includes("/layout"),
+  const routeEntryKey = Object.keys(entryFiles).find((key) =>
+    key.endsWith(`/app${manifestKey}`),
   );
   if (!routeEntryKey) {
     continue;
@@ -100,6 +103,14 @@ for (const manifestFile of manifestFiles) {
 }
 
 let hasFailure = false;
+
+if (manifestFiles.length === 0 || routeRows.length === 0 || rootShellSize === 0) {
+  console.error(
+    "Route budget inputs are incomplete: " +
+      `manifests=${manifestFiles.length} routes=${routeRows.length} rootShellBytes=${rootShellSize}`,
+  );
+  process.exit(2);
+}
 
 console.log("Route budgets (excluding root shell):");
 for (const row of routeRows) {

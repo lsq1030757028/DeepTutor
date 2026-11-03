@@ -69,6 +69,35 @@ TAPD_READONLY_TOOLS = ("get_stories_or_tasks", "get_stories_fields_info")
 #: 两条技能链路的剧本，对应仓库 `skills/` 下的目录名。
 REQUIRED_SKILLS = ("har-testing", "req-testing")
 
+#: ── BB-502 案甲：把 `ask_user` 从伙伴的内置工具面上摘掉 ─────────────────────
+#:
+#: 现场：伙伴默认 `builtin_tools=None` ⇒ 上游按"不设限"处理，`ask_user` 照常挂载
+#: （`deeptutor/agents/_shared/tool_composition.py:189-191` 的 always_on 列表）。
+#: 但 partner 通道**故意没有 waiter**（`services/partners/runtime.py:396-397` 显式
+#: 不注入 `wait_for_user_reply`，并被 `tests/services/partners/test_partner_runtime.py:348`
+#: 锁死）。于是模型一调 `ask_user` 就走
+#: `agents/chat/agentic_pipeline.py:872-881` 的降级分支：问题被拍平成本轮最终回复、
+#: **本轮结束**，结构化 answers 与同轮上下文全丢，而**用户毫无感知**。
+#:
+#: 取的是案甲（移除误导性挂载）而不是案乙（保留挂载 + 补一句降级提示）：
+#: 甲治的是"能力与载体不匹配"这个根因且全落 extensions 内 0 上游触点；
+#: 乙要改上游 `agentic_pipeline.py` 且属"加提示当修复"——工作区纪律点名的设计洞指标。
+#:
+#: 名单取上游的 `CONFIGURABLE_BUILTIN_TOOL_NAMES`（`deeptutor/tools/builtin/__init__.py`
+#: 那条元组自述是"partner config UI 的规范显示顺序"）**减去 `ask_user`**。
+#: 这里只能抄一份常量：网关跑在宿主机、伙伴经 HTTP API 创建，import 不到容器里的模块。
+#: 抄常量的代价是上游新增可配置工具时我们不会自动跟上——但白名单的失败方向是
+#: **少给**而不是多给，这个方向是安全的，比继续挂着一个必然静默降级的 ask_user 好。
+PARTNER_BUILTIN_TOOLS: tuple[str, ...] = (
+    "rag", "kb_files", "code_execution", "read_source", "read_memory",
+    "write_memory", "read_skill", "list_notebook", "write_note", "web_fetch",
+    "github", "exec", "load_tools", "cron",
+    # "ask_user" —— 刻意不在此列。改动前先读上面那段，别"顺手补全"。
+)
+
+#: 人闸工具名。挂载面自检（DoD#24）与本白名单都引它，避免两处写死同一个字符串。
+HUMAN_GATE_TOOL = "ask_user"
+
 
 class PartnerSetupError(RuntimeError):
     """带错误码的可读失败（形状对齐 `DeepTutorError`，页面同一套分支处理）。"""
@@ -301,6 +330,9 @@ def _create(client: Any, steps: _Steps, target_name: str, soul_body: str,
         "soul": {"source": "custom", "content": soul_body},
         "assets": {"knowledge_bases": [], "skills": list(REQUIRED_SKILLS),
                    "notebooks": []},
+        # BB-502 案甲：显式收窄内置面，把 ask_user 摘掉。
+        # 发 None（或不发）= 上游按"不设限"处理 = ask_user 照挂 = 静默降级重现。
+        "builtin_tools": list(PARTNER_BUILTIN_TOOLS),
         "start": True,
     }
     # 工具没清点到就不发这个键：发 `[]` 会把伙伴建成"MCP 全关"，
@@ -362,6 +394,12 @@ def _repair(client: Any, steps: _Steps, existing: dict[str, Any], soul_body: str
     language = str(existing.get("language") or "")
     if language != DEFAULT_LANGUAGE:
         patch["language"] = DEFAULT_LANGUAGE
+
+    # BB-502 案甲的修复也要覆盖**既有**伙伴：只新建路径收窄，等于把隐患留给
+    # 所有已经建出来的伙伴。这里的判据是"名单里还有 ask_user 或者根本没设限"。
+    current_builtin = existing.get("builtin_tools")
+    if current_builtin is None or HUMAN_GATE_TOOL in (current_builtin or []):
+        patch["builtin_tools"] = list(PARTNER_BUILTIN_TOOLS)
 
     if patch:
         try:

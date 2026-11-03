@@ -10,10 +10,12 @@ import os
 import socket
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from server.gateway.config import GatewayConfig
+from server.gateway import supervisor as supervisor_module
 from server.gateway.supervisor import (
     PINNED_API_BASE_URL,
     POLLUTED_ENV_KEYS,
@@ -145,6 +147,18 @@ def test_status_when_nothing_runs(cfg, tmp_path):
     assert status["managed"] is False
     assert status["token_configured"] is True
     assert status["port"] == supervisor.port
+
+
+def test_kill_stale_tolerates_empty_netstat_stdout(cfg, tmp_path, monkeypatch):
+    supervisor = make_supervisor(cfg, tmp_path)
+    monkeypatch.setattr(supervisor_module, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(
+        supervisor_module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout=None),
+    )
+
+    supervisor._kill_stale()
 
 
 def test_start_stop_restart_lifecycle(cfg, tmp_path):

@@ -494,3 +494,129 @@ def test_a_junk_login_request_is_dropped_with_a_note(out_root):
     assert result["ok"] is True
     assert "login_request" not in _cases_json(result)
     assert any("login_request" in n for n in result["normalized"])
+
+
+# ── 导出侧 PII 脱敏（BB-424）────────────────────────────────────────────────
+#
+# BB-424 的暴露面不是"本地留了 PII"，而是"**拿去分享的产物**里带着真人信息"。
+# 所以闸开在导出产物上，cases.json 不动——那份是本地执行用的边车，
+# 值被换成 <手机号> 会让执行真把这六个字符发出去。
+# 两份文件的分工是刻意的，下面两条测试正反面各钉一次。
+
+PII_CASE = [{
+    "编号": "TC-001",
+    "标题": "下单成功",
+    "前置条件": "已登录",
+    "操作步骤": ["调用 POST /api/order"],
+    "预期结果": "状态码 200",
+    "优先级": "高",
+    "所属模块": "订单",
+    "测试数据": "收件人张三，手机 13900139000，身份证 440305199001011234",
+    "request": {
+        "method": "POST",
+        "url": "https://api.shop.example.com/api/order",
+        "headers": [{"key": "Authorization", "value": "{{token}}"}],
+        "body": {"mode": "raw", "language": "json",
+                 "raw": '{"receiver": "张三", "mobile": "13900139000"}'},
+        "assertions": [{"type": "status", "expected": 200}],
+    },
+}]
+
+_PII_VALUES = ("13900139000", "440305199001011234", "张三")
+
+
+def _read(path):
+    return open(path, encoding="utf-8-sig", errors="ignore").read()
+
+
+def test_export_products_carry_no_raw_pii(tmp_path):
+    """有形态特征的几类（手机号/身份证/邮箱/卡号）必须从产物里消失。"""
+    result = delivery.save_delivery(PII_CASE, fmt="csv", title="pii",
+                                    out_root=str(tmp_path))
+    assert result["ok"] is True
+    csv_text = _read(os.path.join(result["delivery_dir"], "cases.csv"))
+    for real in ("13900139000", "440305199001011234"):
+        assert real not in csv_text, f"{real} 留在了要分享出去的 csv 里"
+    assert "<手机号>" in csv_text, "脱敏要保形，不能换成 *** 让用例失去含义"
+
+
+def test_a_name_in_free_text_is_a_known_gap_not_a_silent_one(tmp_path):
+    """**这条钉的是局限，不是能力。**
+
+    中文姓名没有形态特征（「张三」和「首页」都是两个汉字），只能靠键名缩小范围。
+    所以结构化字段 `{"receiver": "张三"}` 里的姓名抓得到，而
+    「收件人张三，手机…」这种自由文本里的抓不到。
+
+    把它写成测试而不是留在文档里，是因为：日后有人看到产物里还有名字，
+    要能一眼查到这是**已知边界**而非新 bug；反过来若哪天上了 NER 补上了这一类，
+    这条会转红，那时该改的是断言不是删闸。
+    收据里的 note 必须同步说明这一点——不许让用户以为产物已经干净了。
+    """
+    result = delivery.save_delivery(PII_CASE, fmt="csv", title="pii",
+                                    out_root=str(tmp_path))
+    csv_text = _read(os.path.join(result["delivery_dir"], "cases.csv"))
+    assert "张三" in csv_text, "自由文本姓名如果被抓到了，说明能力提升了，请更新本测试"
+    note = result["receipt"]["pii_redaction"]["note"]
+    assert "自由文本" in note, "局限必须写在留痕里，否则用户会以为产物已无个人信息"
+
+
+def test_the_name_in_a_structured_field_is_scrubbed(tmp_path):
+    """对照面：键名像姓名时（body 里的 receiver）就抓得到。"""
+    result = delivery.save_delivery(PII_CASE, fmt="postman", title="pii",
+                                    out_root=str(tmp_path))
+    blob = _read(result["postman_file"])
+    assert '"receiver": "张三"' not in blob and '"receiver":"张三"' not in blob
+    assert "<姓名>" in blob
+
+
+def test_postman_collection_is_scrubbed_too(tmp_path):
+    """collection 最容易被整份发给别人，它必须和表格一样干净。"""
+    result = delivery.save_delivery(PII_CASE, fmt="postman", title="pii",
+                                    out_root=str(tmp_path))
+    blob = _read(result["postman_file"])
+    for real in ("13900139000", "440305199001011234"):
+        assert real not in blob
+
+
+def test_cases_json_keeps_the_original_values_for_execution(tmp_path):
+    """反面：边车不脱敏。改动这条前先想清楚执行层要拿什么去发请求。"""
+    result = delivery.save_delivery(PII_CASE, fmt="csv", title="pii",
+                                    out_root=str(tmp_path))
+    payload = json.loads(_read(result["cases_file"]))
+    blob = json.dumps(payload, ensure_ascii=False)
+    assert "13900139000" in blob, "cases.json 被脱敏了，执行时会把占位符当真值发出去"
+
+
+def test_receipt_records_the_redaction_even_when_nothing_was_hit(tmp_path):
+    """留痕无条件写。
+
+    只在命中时才写，会让"没这段"同时意味着"没 PII"和"闸没开"——读的人分不清。
+    """
+    clean = [dict(PII_CASE[0], 测试数据="page=1",
+                  request=dict(PII_CASE[0]["request"], body={"mode": "none"}))]
+    result = delivery.save_delivery(clean, fmt="csv", title="clean",
+                                    out_root=str(tmp_path))
+    section = result["receipt"]["pii_redaction"]
+    assert section["applied"] is True
+    assert section["hits"] == {}
+
+
+def test_redaction_hits_are_reported_not_silent(tmp_path):
+    """替换了什么、几处，必须说得出。"""
+    result = delivery.save_delivery(PII_CASE, fmt="csv", title="pii",
+                                    out_root=str(tmp_path))
+    hits = result["pii_redaction"]["hits"]
+    assert hits.get("手机号", 0) >= 1 and hits.get("身份证", 0) >= 1
+    assert hits.get("姓名", 0) >= 1, "BB-465：序列化 body 里的姓名也要算进来"
+
+
+def test_redaction_can_be_turned_off_explicitly(tmp_path):
+    """留一个显式关闭口：有人确实需要带真实测试数据的产物。
+
+    默认是开——安全默认不该要求用户先知道有这么个开关。
+    """
+    result = delivery.save_delivery(PII_CASE, fmt="csv", title="pii",
+                                    out_root=str(tmp_path), redact_pii=False)
+    csv_text = _read(os.path.join(result["delivery_dir"], "cases.csv"))
+    assert "13900139000" in csv_text
+    assert result["receipt"]["pii_redaction"]["applied"] is False

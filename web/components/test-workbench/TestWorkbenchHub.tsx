@@ -9,19 +9,29 @@
 // 状态色用 tailwind 原生色 + 成对 dark:；四套主题 Cream/Dark/Default/Glass 都得成立。
 
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, ClipboardCheck, Plus, RefreshCw } from "lucide-react";
+import { AlertTriangle, ClipboardCheck, Plus, RefreshCw, Settings2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { apiFetch, apiUrl } from "@/lib/api";
 import SpaceSectionHeader from "@/components/space/SpaceSectionHeader";
+import ActiveJobBar from "@/components/test-workbench/ActiveJobBar";
+import DeliveryDetail from "@/components/test-workbench/DeliveryDetail";
+import EnvironmentsPanel from "@/components/test-workbench/EnvironmentsPanel";
+import NewBatchFlow from "@/components/test-workbench/NewBatchFlow";
 
 interface DeliverySummary {
   id: string;
   title?: string;
   case_count?: number;
   created_at?: string;
+  generated_at?: string;
   degraded?: boolean;
+  executed?: boolean;
+  last_execution?: { executed_at?: string; verdict?: string } | null;
 }
+
+//: 主区在看什么：批次列表 / 一个批次的详情 / 环境配置。
+type View = { kind: "list" } | { kind: "detail"; id: string } | { kind: "environments" };
 
 interface DeliveriesResponse {
   deliveries?: DeliverySummary[];
@@ -41,6 +51,10 @@ export default function TestWorkbenchHub() {
   const [deliveries, setDeliveries] = useState<DeliverySummary[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [view, setView] = useState<View>({ kind: "list" });
+  //: 从常驻任务条点「回到任务」时带进来的任务号——新建流程据它接管在跑/已跑完的任务
+  const [resumeJobId, setResumeJobId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -84,6 +98,15 @@ export default function TestWorkbenchHub() {
           <div className="flex items-center gap-2">
             <button
               type="button"
+              onClick={() => setView({ kind: "environments" })}
+              disabled={health ? !health.extension_loaded : false}
+              className="inline-flex items-center gap-1.5 rounded-[9px] border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-[13px] text-[var(--foreground)] hover:bg-[var(--accent)] disabled:opacity-45"
+            >
+              <Settings2 size={14} strokeWidth={1.6} />
+              {t("Environments")}
+            </button>
+            <button
+              type="button"
               onClick={() => void load()}
               className="inline-flex items-center gap-1.5 rounded-[9px] border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-[13px] text-[var(--foreground)] hover:bg-[var(--accent)]"
             >
@@ -92,8 +115,8 @@ export default function TestWorkbenchHub() {
             </button>
             <button
               type="button"
-              disabled
-              title={t("Coming soon")}
+              onClick={() => setCreating(true)}
+              disabled={creating || (health ? !health.extension_loaded : false)}
               className="inline-flex items-center gap-1.5 rounded-[9px] bg-[var(--primary)] px-3 py-1.5 text-[13px] font-medium text-[var(--primary-foreground)] disabled:opacity-45"
             >
               <Plus size={14} strokeWidth={1.8} />
@@ -102,6 +125,42 @@ export default function TestWorkbenchHub() {
           </div>
         }
       />
+
+      {/* 常驻任务条：在任意一屏之上，切页/刷新都还在（BB-489）。
+          放在视图分支之外就是它"常驻"的实现——不属于任何一屏。 */}
+      {health?.extension_loaded !== false && (
+        <ActiveJobBar
+          onOpen={(jobId) => {
+            // 回到任务 = 打开新建流程并接管那个任务号，而不是重新发起一次
+            setResumeJobId(jobId);
+            setCreating(true);
+            setView({ kind: "list" });
+          }}
+        />
+      )}
+
+      {/* 详情与环境配置各占整个主区，自带返回。列表状态的刷新在返回时顺手做。 */}
+      {view.kind === "environments" && (
+        <EnvironmentsPanel
+          onBack={() => setView({ kind: "list" })}
+          // 「回到那个批次」——B2 屏那条回程路，配完变量能直接看到效果
+          onOpenDelivery={(id) => setView({ kind: "detail", id })}
+        />
+      )}
+      {view.kind === "detail" && (
+        <DeliveryDetail
+          deliveryId={view.id}
+          onBack={() => {
+            setView({ kind: "list" });
+            void load();
+          }}
+          onOpenEnvironments={() => setView({ kind: "environments" })}
+        />
+      )}
+
+      {view.kind === "list" && (
+        <>
+
 
       {/* 扩展没装上——这是镜像漏 COPY extensions/ 时的样子，明说是哪条路径 */}
       {health && !health.extension_loaded && (
@@ -117,6 +176,25 @@ export default function TestWorkbenchHub() {
       {error && (
         <div className="mb-4 rounded-xl border border-red-500/40 bg-red-500/10 px-3.5 py-3 text-[13px] text-red-600 dark:text-red-400">
           {error}
+        </div>
+      )}
+
+      {creating && (
+        <div className="mb-4">
+          <NewBatchFlow
+            resumeJobId={resumeJobId}
+            onCancel={() => {
+              setCreating(false);
+              setResumeJobId(null);
+            }}
+            onDone={() => {
+              // 采纳后回到列表并刷新——新批次要立刻看得见，
+              // 否则用户不确定到底存进去没有。
+              setCreating(false);
+              setResumeJobId(null);
+              void load();
+            }}
+          />
         </div>
       )}
 
@@ -138,18 +216,32 @@ export default function TestWorkbenchHub() {
       {!loading && deliveries && deliveries.length > 0 && (
         <ul className="flex flex-col gap-2">
           {deliveries.map((d) => (
-            <li
-              key={d.id}
-              className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-3.5 py-3"
-            >
-              <div className="text-[13px] font-medium text-[var(--foreground)]">{d.title || d.id}</div>
-              <div className="mt-0.5 text-[11.5px] text-[var(--muted-foreground)]">
-                {typeof d.case_count === "number" ? `${d.case_count} ${t("cases")}` : t("No structured cases")}
-                {d.created_at ? ` · ${d.created_at}` : ""}
-              </div>
+            <li key={d.id}>
+              <button
+                type="button"
+                onClick={() => setView({ kind: "detail", id: d.id })}
+                className="w-full rounded-xl border border-[var(--border)] bg-[var(--card)] px-3.5 py-3 text-left hover:border-[var(--primary)]/40"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-[13px] font-medium text-[var(--foreground)]">{d.title || d.id}</span>
+                  <span className="flex-1" />
+                  {d.last_execution?.verdict && (
+                    <span className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[10.5px] text-[var(--muted-foreground)]">
+                      {d.last_execution.verdict}
+                    </span>
+                  )}
+                </div>
+                <div className="mt-0.5 text-[11.5px] text-[var(--muted-foreground)]">
+                  {typeof d.case_count === "number" ? `${d.case_count} ${t("cases")}` : t("No structured cases")}
+                  {(d.generated_at || d.created_at) ? ` · ${d.generated_at || d.created_at}` : ""}
+                  {d.last_execution?.executed_at ? ` · ${t("ran")} ${d.last_execution.executed_at}` : ` · ${t("never run")}`}
+                </div>
+              </button>
             </li>
           ))}
         </ul>
+      )}
+        </>
       )}
 
       {/* 只有自己看得见——决策 0009。这句要一直在，不是提示是承诺。 */}

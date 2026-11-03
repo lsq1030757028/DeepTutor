@@ -55,13 +55,25 @@ def test_legacy_options_strip_and_dedupe() -> None:
     assert _labels(payload.questions[0]) == ("A", "B", "C")
 
 
-def test_legacy_caps_option_count() -> None:
-    payload, _ = build_ask_user_payload(
+def test_too_many_options_are_refused_never_truncated() -> None:
+    """BB-715 (2026-09-05): the write-authorization card lost draft d8 because
+    the model put a "no authorization" row before 8 write cases and the 9th
+    option was cut silently. Over the cap is an error the model can act on."""
+    payload, err = build_ask_user_payload(
         question="Pick",
         options=[f"opt-{i}" for i in range(MAX_OPTIONS + 5)],
     )
-    assert payload is not None
-    assert len(payload.questions[0].options) == MAX_OPTIONS
+    assert payload is None
+    assert err is not None and "exceed" in err and str(MAX_OPTIONS) in err
+
+
+def test_a_gate_card_with_eight_drafts_plus_a_none_row_keeps_every_option() -> None:
+    options = ["全部不授权（推荐）"] + [f"d{i}" for i in range(1, 9)]
+    payload, err = build_ask_user_payload(
+        questions=[{"id": "write_authorization", "prompt": "授权哪些？", "options": options}]
+    )
+    assert err is None and payload is not None
+    assert _labels(payload.questions[0]) == tuple(options)
 
 
 def test_legacy_clips_oversized_question() -> None:
@@ -140,6 +152,29 @@ def test_v2_intro_included_and_clipped() -> None:
     )
     assert payload is not None
     assert payload.intro == "To tailor the research:"
+
+
+def test_a_full_write_disclosure_intro_is_never_truncated() -> None:
+    """BB-715（2026-09-05）：采纳卡的写用例披露走 intro，曾在 400 字处被截成「…」。
+
+    两条写用例、每条三行披露（写什么 / 怎么清理 / 凭什么授权）轻松过千字；
+    这张卡自称"必须仔细看的披露"，截断等于让用户在没看全的情况下授权。
+    """
+    disclosure = "\n".join(
+        f"- d{i} 取消支付弹框-不扣费且可重新发起：**会写数据**\n"
+        f"  - 写什么：在测试账号下创建一笔定制点歌订单并触发支付弹框\n"
+        f"  - 怎么清理：执行后删除该订单并回滚账户余额，清理由用例的 cleanup 步骤自动执行\n"
+        f"  - 凭什么授权：events#write_confirm（采纳卡派生的写授权，逐条绑用例内容摘要）"
+        for i in (6, 8)
+    ) * 2
+    assert len(disclosure) > 400
+    payload, err = build_ask_user_payload(
+        questions=[{"prompt": "采纳哪些用例？", "multi_select": True}],
+        intro=disclosure,
+    )
+    assert err is None and payload is not None
+    assert payload.intro == disclosure
+    assert not payload.intro.endswith("…")
 
 
 def test_v2_empty_intro_becomes_none() -> None:

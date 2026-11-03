@@ -361,6 +361,7 @@ from deeptutor.api.routers import (
     space_mcp,
     subagents,
     system,
+    test_journey,  # [fork] owner-bound Test Journey read surface
     test_workbench,  # [fork] 二开扩展，见 extensions/UPSTREAM-TOUCHPOINTS.md
     unified_ws,
     voice,
@@ -404,6 +405,12 @@ app.include_router(
     test_workbench.router,
     prefix="/api/v1/test-workbench",
     tags=["test-workbench"],
+    dependencies=_auth,
+)
+app.include_router(
+    test_journey.router,
+    prefix="/api/v1/test-journey",
+    tags=["test-journey"],
     dependencies=_auth,
 )
 app.include_router(
