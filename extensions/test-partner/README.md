@@ -238,6 +238,14 @@ set TEST_PARTNER_GATEWAY_PORT=3788
 
 `TEST_PARTNER_GATEWAY=0` 可以只起 MCP 面不起配置面。
 
+### 合并前必过检查
+
+合并进 `main` 之前，下面三项检查必须全部通过：
+
+1. **root pytest + web UAT gate**：仓库根目录的 pytest 全量测试，加上 web 端 UAT gate，确认主程序后端与前端验收路径没被改坏。
+2. **Test Partner main regression + real browser**：Test Partner 自身的主线回归，加上真实浏览器里的配置页 / 工作台走查，确认本扩展的 MCP 面与页面交互仍然可用。
+3. **agent-review**：由 Grok 做的只读代码审查，不改任何文件；同一个 PR 最多审 3 轮，只报会出错的问题（缺陷、回归、安全隐患），不提风格和偏好类建议。
+
 ## HAR 测试能力
 
 M2 里程碑的产物：录一段流量 → 体检 → 生成接口用例 → 校验 → 落盘 Excel。
