@@ -360,3 +360,5 @@ deliveries/
 依赖钉 `mcp[cli]==2.0.0`。官方 Python SDK 自 2.0.0 起把高层服务器类 **`FastMCP` 更名为 `MCPServer`**，`mcp.server.fastmcp` 模块已移除；客户端侧 `streamablehttp_client` 同步更名为 `streamable_http_client`，返回值也从三元组收敛为 `(read, write)` 两元组；结果模型字段改 snake_case（`server_info` / `protocol_version` / `structured_content` / `is_error`）。参照旧版 FastMCP 教程改代码时注意这几处。
 
 协议版本可向下协商（SDK 默认 `2025-03-26`），已实测 DeepTutor 容器内旧版客户端可正常 initialize。
+
+本文档由 AI 研究所项目管理流程维护。
