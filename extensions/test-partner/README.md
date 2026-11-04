@@ -246,6 +246,8 @@ set TEST_PARTNER_GATEWAY_PORT=3788
 2. **Test Partner main regression + real browser**：Test Partner 自身的主线回归，加上真实浏览器里的配置页 / 工作台走查，确认本扩展的 MCP 面与页面交互仍然可用。
 3. **agent-review**：由 Grok 做的只读代码审查，不改任何文件；同一个 PR 最多审 3 轮，只报会出错的问题（缺陷、回归、安全隐患），不提风格和偏好类建议。
 
+任一项没过，PR 就合不进 `main`。没过时不用去翻 GitHub 日志：agent-review 的结论和每一轮的发现，在 AI 研究所的「质量」页看；CI 失败的原因，在 PR 的检查详情（Checks）里看。
+
 ## HAR 测试能力
 
 M2 里程碑的产物：录一段流量 → 体检 → 生成接口用例 → 校验 → 落盘 Excel。
